@@ -49,7 +49,7 @@ steps are split into first-party composite actions:
 - `.github/workflows/rust-ci.yml` owns Rust CI event policy. This is the public
   workflow Rust repos call.
 - `.github/workflows/_rust-platforms.yml` is the internal Rust worker that runs
-  cargo tests across the shared OS matrix, plus Rust quality checks on Ubuntu.
+  cargo tests across the shared OS matrix.
 - `.github/actions/platform-matrix/` owns the shared OS matrix. Shell CI uses it
   today; Rust CI uses it too; future C++ or other language-specific reusable
   workflows should consume the same action instead of copying platform JSON.

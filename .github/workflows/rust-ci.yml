@@ -42,6 +42,42 @@ jobs:
       matrix-set: ${{ (github.event_name == 'push' || github.event_name == 'pull_request') && 'core' || 'full' }}
       rust-toolchain: ${{ inputs.rust-toolchain }}
       test-command: ${{ inputs.test-command }}
-      fmt-command: ${{ inputs.fmt-command }}
-      clippy-command: ${{ inputs.clippy-command }}
-      doc-command: ${{ inputs.doc-command }}
+
+  quality:
+    name: Quality / Ubuntu
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Mark workspace as safe for git
+        run: git config --global --add safe.directory "$(pwd)"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: ${{ inputs.rust-toolchain }}
+          components: clippy, rustfmt
+
+      - name: Check formatting
+        if: inputs.fmt-command != ''
+        shell: bash
+        env:
+          FMT_COMMAND: ${{ inputs.fmt-command }}
+        run: eval "$FMT_COMMAND"
+
+      - name: Lint
+        if: inputs.clippy-command != ''
+        shell: bash
+        env:
+          CLIPPY_COMMAND: ${{ inputs.clippy-command }}
+        run: eval "$CLIPPY_COMMAND"
+
+      - name: Check public docs
+        if: inputs.doc-command != ''
+        shell: bash
+        env:
+          DOC_COMMAND: ${{ inputs.doc-command }}
+        run: eval "$DOC_COMMAND"
