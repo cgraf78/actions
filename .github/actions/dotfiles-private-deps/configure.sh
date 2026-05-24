@@ -69,3 +69,4 @@ chmod 600 "$ssh_config"
   echo "SHDEPS_REPO=git@github.com-shdeps:cgraf78/shdeps.git"
   echo "SHDEPS_DS_REPO=git@github.com-ds:cgraf78/ds.git"
 } >>"$GITHUB_ENV"
+

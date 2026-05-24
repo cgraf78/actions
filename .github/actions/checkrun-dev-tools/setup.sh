@@ -53,3 +53,4 @@ curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --component rustf
   echo "$HOME/.venv/bin"
   echo "$HOME/.cargo/bin"
 } >>"$GITHUB_PATH"
+

@@ -22,14 +22,21 @@ on:
         required: false
         type: boolean
         default: false
+    secrets:
+      DS_DEPLOY_KEY:
+        description: Dotfiles-only deploy key for the private ds dependency.
+        required: false
+      SHDEPS_DEPLOY_KEY:
+        description: Dotfiles-only deploy key for the private shdeps dependency.
+        required: false
 
 permissions:
   contents: read
 
 jobs:
   rust:
-    # Rust checks stay separate so mixed shell/Rust repos do not multiply cargo
-    # fmt, clippy, test, build, and docs across every distro in the matrix.
+    # Keep Rust checks out of the distro matrix. They validate the Rust surface
+    # once, while the test job below validates shell portability across OSes.
     if: inputs.rust-checks
     runs-on: ubuntu-latest
     name: Rust
@@ -58,128 +65,29 @@ jobs:
         run: RUSTDOCFLAGS='-D missing-docs' cargo doc --no-deps
 
   test:
-    runs-on: ${{ matrix.runner }}
-    container: ${{ matrix.container || '' }}
-    strategy:
-      fail-fast: false
-      # Push/PR should stay cheap; scheduled/manual runs keep broader drift
-      # coverage for platforms that are lower priority or rarely changed.
-      matrix: ${{ fromJSON((github.event_name == 'push' || github.event_name == 'pull_request') && '{"include":[{"name":"macOS","runner":"macos-latest"},{"name":"CentOS Stream","runner":"ubuntu-latest","container":"quay.io/centos/centos:latest"},{"name":"Arch","runner":"ubuntu-latest","container":"archlinux:latest"},{"name":"Debian","runner":"ubuntu-latest","container":"debian:stable"}]}' || '{"include":[{"name":"macOS","runner":"macos-latest"},{"name":"CentOS Stream","runner":"ubuntu-latest","container":"quay.io/centos/centos:latest"},{"name":"Arch","runner":"ubuntu-latest","container":"archlinux:latest"},{"name":"Debian","runner":"ubuntu-latest","container":"debian:stable"},{"name":"Ubuntu","runner":"ubuntu-latest"},{"name":"WSL","runner":"ubuntu-latest"},{"name":"Fedora","runner":"ubuntu-latest","container":"fedora:latest"},{"name":"Alpine","runner":"ubuntu-latest","container":"alpine:latest"}]}') }}
+    # Push/PR runs cover the high-signal platform set. This keeps feedback
+    # cheap while still checking macOS plus representative container distros.
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    uses: cgraf78/actions/.github/workflows/portable-shell-test-job.yml@main # zizmor: ignore[unpinned-uses]
+    secrets:
+      DS_DEPLOY_KEY: ${{ secrets.DS_DEPLOY_KEY }}
+      SHDEPS_DEPLOY_KEY: ${{ secrets.SHDEPS_DEPLOY_KEY }}
+    with:
+      matrix-json: '{"include":[{"name":"macOS","runner":"macos-latest"},{"name":"CentOS Stream","runner":"ubuntu-latest","container":"quay.io/centos/centos:latest"},{"name":"Arch","runner":"ubuntu-latest","container":"archlinux:latest"},{"name":"Debian","runner":"ubuntu-latest","container":"debian:stable"}]}'
+      profiles: ${{ inputs.profiles }}
+      setup: ${{ inputs.setup }}
+      test-command: ${{ inputs.test-command }}
 
-    name: ${{ matrix.name }}
-    steps:
-      - name: Check out shared CI helpers
-        # The called workflow file is loaded from cgraf78/actions, but helper
-        # scripts are not automatically present on disk. Check this repository
-        # out explicitly before installing OS prerequisites so the following
-        # steps can run small, versioned scripts instead of inline shell walls.
-        #
-        # This checkout intentionally tracks main to match the repository's
-        # update model: one shared CI edit should roll out to all callers.
-        # actions/checkout v4.2.2
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          repository: cgraf78/actions
-          ref: main
-          path: .shared-actions
-          persist-credentials: false
-
-      - name: Install OS prerequisites
-        # Package mapping lives in a helper script so the workflow stays
-        # readable and the distro-specific details remain shared.
-        shell: sh
-        env:
-          MATRIX_NAME: ${{ matrix.name }}
-          PROFILES: ${{ inputs.profiles }}
-          SETUP: ${{ inputs.setup }}
-        run: .shared-actions/.github/actions/portable-shell-prereqs/install-prereqs.sh
-
-      # actions/checkout v4.2.2
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          # Callers often use read-only CI tokens. Avoid persisting credentials
-          # into .git/config so test code cannot accidentally reuse them.
-          persist-credentials: false
-
-      - name: Simulate WSL environment
-        if: matrix.name == 'WSL'
-        run: |
-          echo 'Linux version 5.15.0 (Microsoft@Microsoft.com)' > /tmp/wsl-proc-version
-          sudo mount --bind /tmp/wsl-proc-version /proc/version
-
-      - name: Set HOME to workspace
-        # Most of these repos install or discover tools under $HOME during
-        # tests. Pinning HOME to the checked-out workspace keeps caches and
-        # generated files local to the Actions workspace instead of leaking into
-        # the runner's ambient home directory.
-        run: echo "HOME=$(pwd)" >> "$GITHUB_ENV"
-
-      - name: Mark workspace as safe for git
-        # Container jobs can see ownership differences between the mounted
-        # workspace and the process user. Marking only this checkout as safe
-        # avoids broad global Git trust while keeping repo-aware tests working.
-        run: git config --global --add safe.directory "$(pwd)"
-
-      - name: Cache checkrun dev tools
-        if: inputs.setup == 'checkrun' && matrix.name != 'Alpine'
-        # actions/cache v4.2.4
-        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809
-        with:
-          path: |
-            .local/share/mise
-            .cache/mise
-            .cache/aqua
-            .cache/ubi
-          key: checkrun-dev-tools-${{ runner.os }}-${{ matrix.name }}-${{ hashFiles('.github/mise/checkrun-ci.toml') }}
-          restore-keys: |
-            checkrun-dev-tools-${{ runner.os }}-${{ matrix.name }}-
-
-      - name: Set up checkrun dev tools
-        if: inputs.setup == 'checkrun' && matrix.name != 'Alpine'
-        # Alpine deliberately skips this expensive dev-tool bootstrap because
-        # checkrun's historical workflow skipped it there too. Alpine still runs
-        # the shell test suite with the base packages installed above.
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: .shared-actions/.github/actions/checkrun-setup/setup.sh
-
-      - name: Cache dotfiles dependency installs
-        if: inputs.setup == 'dotfiles'
-        # actions/cache v4.2.4
-        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809
-        with:
-          path: |
-            .local/share/shdeps
-            .local/share/mise
-            .cache/mise
-            .cache/aqua
-            .cache/ubi
-          key: dot-deps-${{ runner.os }}-${{ matrix.name }}-${{ hashFiles('.config/mise/config.toml', '.config/mise/mise.lock', '.config/shdeps/**/*.conf', '.config/shdeps/hooks.d/**/*') }}
-          restore-keys: |
-            dot-deps-${{ runner.os }}-${{ matrix.name }}-
-
-      - name: Set up dotfiles dependencies
-        if: inputs.setup == 'dotfiles'
-        # Dotfiles is the only setup mode that needs caller secrets. Keep the
-        # secret-consuming logic in helper scripts so normal public repos can
-        # call this reusable workflow without defining unrelated secrets.
-        shell: bash
-        env:
-          DS_DEPLOY_KEY: ${{ secrets.DS_DEPLOY_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MATRIX_NAME: ${{ matrix.name }}
-          SHDEPS_DEPLOY_KEY: ${{ secrets.SHDEPS_DEPLOY_KEY }}
-        run: |
-          .shared-actions/.github/actions/dotfiles-setup/configure-private-deps.sh
-          .shared-actions/.github/actions/dotfiles-setup/install-deps.sh
-          .local/bin/dot doctor
-
-      - name: Run tests
-        shell: bash
-        env:
-          TEST_COMMAND: ${{ inputs.test-command }}
-        # Keep the caller-provided command out of the run template. Passing it
-        # through the environment avoids GitHub expression template injection
-        # while still letting each repo own its test entrypoint.
-        run: bash -lc "$TEST_COMMAND"
+  test-full:
+    # Scheduled/manual runs add the lower-priority drift coverage: hosted
+    # Ubuntu, simulated WSL, Fedora, and Alpine.
+    if: github.event_name != 'push' && github.event_name != 'pull_request'
+    uses: cgraf78/actions/.github/workflows/portable-shell-test-job.yml@main # zizmor: ignore[unpinned-uses]
+    secrets:
+      DS_DEPLOY_KEY: ${{ secrets.DS_DEPLOY_KEY }}
+      SHDEPS_DEPLOY_KEY: ${{ secrets.SHDEPS_DEPLOY_KEY }}
+    with:
+      matrix-json: '{"include":[{"name":"macOS","runner":"macos-latest"},{"name":"CentOS Stream","runner":"ubuntu-latest","container":"quay.io/centos/centos:latest"},{"name":"Arch","runner":"ubuntu-latest","container":"archlinux:latest"},{"name":"Debian","runner":"ubuntu-latest","container":"debian:stable"},{"name":"Ubuntu","runner":"ubuntu-latest"},{"name":"WSL","runner":"ubuntu-latest"},{"name":"Fedora","runner":"ubuntu-latest","container":"fedora:latest"},{"name":"Alpine","runner":"ubuntu-latest","container":"alpine:latest"}]}'
+      profiles: ${{ inputs.profiles }}
+      setup: ${{ inputs.setup }}
+      test-command: ${{ inputs.test-command }}

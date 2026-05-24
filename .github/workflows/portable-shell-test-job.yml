@@ -1,0 +1,136 @@
+name: Portable Shell Test Job
+
+on:
+  workflow_call:
+    inputs:
+      matrix-json:
+        description: JSON object containing the matrix include list for this run.
+        required: true
+        type: string
+      profiles:
+        description: Comma-separated dependency profiles for normal shell-tool repos.
+        required: false
+        type: string
+        default: ""
+      setup:
+        description: Named setup mode. Supported values are none, checkrun, and dotfiles.
+        required: false
+        type: string
+        default: none
+      test-command:
+        description: Command to run after checkout and setup.
+        required: true
+        type: string
+    secrets:
+      DS_DEPLOY_KEY:
+        description: Dotfiles-only deploy key for the private ds dependency.
+        required: false
+      SHDEPS_DEPLOY_KEY:
+        description: Dotfiles-only deploy key for the private shdeps dependency.
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container || '' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(inputs.matrix-json) }}
+
+    name: ${{ matrix.name }}
+    steps:
+      - name: Install OS prerequisites
+        # This is a first-party shared CI action and intentionally floats on
+        # main: changing cgraf78/actions should update every caller immediately.
+        uses: cgraf78/actions/.github/actions/portable-shell-prereqs@main # zizmor: ignore[unpinned-uses]
+        with:
+          matrix-name: ${{ matrix.name }}
+          profiles: ${{ inputs.profiles }}
+          setup: ${{ inputs.setup }}
+
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          # Avoid persisting read-only CI credentials into .git/config where
+          # repo tests or helper scripts could accidentally reuse them.
+          persist-credentials: false
+
+      - name: Simulate WSL environment
+        if: matrix.name == 'WSL'
+        run: |
+          echo 'Linux version 5.15.0 (Microsoft@Microsoft.com)' > /tmp/wsl-proc-version
+          sudo mount --bind /tmp/wsl-proc-version /proc/version
+
+      - name: Set HOME to workspace
+        # These repos install/discover tools under HOME during tests. Point HOME
+        # at the workspace so generated state stays inside the checked-out repo.
+        run: echo "HOME=$(pwd)" >> "$GITHUB_ENV"
+
+      - name: Mark workspace as safe for git
+        # Container ownership can differ from the checkout owner. Trust only the
+        # current workspace so repo-aware tests work without broad Git trust.
+        run: git config --global --add safe.directory "$(pwd)"
+
+      - name: Cache checkrun dev tools
+        if: inputs.setup == 'checkrun' && matrix.name != 'Alpine'
+        # actions/cache v4.2.4
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809
+        with:
+          path: |
+            .local/share/mise
+            .cache/mise
+            .cache/aqua
+            .cache/ubi
+          key: checkrun-dev-tools-${{ runner.os }}-${{ matrix.name }}-${{ hashFiles('.github/mise/checkrun-ci.toml') }}
+          restore-keys: |
+            checkrun-dev-tools-${{ runner.os }}-${{ matrix.name }}-
+
+      - name: Set up checkrun dev tools
+        if: inputs.setup == 'checkrun' && matrix.name != 'Alpine'
+        # Alpine deliberately skips this expensive dev-tool bootstrap because
+        # checkrun's historical workflow skipped it there too.
+        uses: cgraf78/actions/.github/actions/checkrun-dev-tools@main # zizmor: ignore[unpinned-uses]
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Cache dotfiles dependency installs
+        if: inputs.setup == 'dotfiles'
+        # actions/cache v4.2.4
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809
+        with:
+          path: |
+            .local/share/shdeps
+            .local/share/mise
+            .cache/mise
+            .cache/aqua
+            .cache/ubi
+          key: dot-deps-${{ runner.os }}-${{ matrix.name }}-${{ hashFiles('.config/mise/config.toml', '.config/mise/mise.lock', '.config/shdeps/**/*.conf', '.config/shdeps/hooks.d/**/*') }}
+          restore-keys: |
+            dot-deps-${{ runner.os }}-${{ matrix.name }}-
+
+      - name: Configure dotfiles private dependencies
+        if: inputs.setup == 'dotfiles'
+        # Dotfiles is the only setup mode that needs private dependency keys.
+        # Keep that secret-handling boundary out of the public repo callers.
+        uses: cgraf78/actions/.github/actions/dotfiles-private-deps@main # zizmor: ignore[unpinned-uses]
+        env:
+          DS_DEPLOY_KEY: ${{ secrets.DS_DEPLOY_KEY }}
+          SHDEPS_DEPLOY_KEY: ${{ secrets.SHDEPS_DEPLOY_KEY }}
+
+      - name: Bootstrap dotfiles dependencies
+        if: inputs.setup == 'dotfiles'
+        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@main # zizmor: ignore[unpinned-uses]
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MATRIX_NAME: ${{ matrix.name }}
+
+      - name: Run tests
+        shell: bash
+        env:
+          TEST_COMMAND: ${{ inputs.test-command }}
+        # Passing the caller-owned command through env avoids GitHub expression
+        # template injection while keeping each repo in charge of its test script.
+        run: bash -lc "$TEST_COMMAND"

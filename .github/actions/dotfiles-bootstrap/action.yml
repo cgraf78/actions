@@ -1,0 +1,14 @@
+name: Bootstrap dotfiles dependencies
+description: Run dot update, mise install, and dot doctor for dotfiles CI.
+
+runs:
+  using: composite
+  steps:
+    - name: Install dependencies
+      shell: bash
+      run: "$GITHUB_ACTION_PATH/install.sh"
+
+    - name: Run doctor smoke checks
+      shell: bash
+      run: .local/bin/dot doctor
+

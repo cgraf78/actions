@@ -57,3 +57,4 @@ fi
   echo "$HOME/.local/bin"
   echo "$HOME/.local/share/mise/shims"
 } >>"$GITHUB_PATH"
+

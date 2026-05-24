@@ -1,0 +1,27 @@
+name: Install portable shell prerequisites
+description: Install OS packages needed before the caller repository is checked out.
+
+inputs:
+  matrix-name:
+    description: Human-readable matrix name such as macOS, Debian, or Alpine.
+    required: true
+  profiles:
+    description: Comma-separated dependency profiles for normal shell-tool repos.
+    required: false
+    default: ""
+  setup:
+    description: Named setup mode. Supported values are none, checkrun, and dotfiles.
+    required: false
+    default: none
+
+runs:
+  using: composite
+  steps:
+    - name: Install prerequisites
+      shell: sh
+      env:
+        MATRIX_NAME: ${{ inputs.matrix-name }}
+        PROFILES: ${{ inputs.profiles }}
+        SETUP: ${{ inputs.setup }}
+      run: "$GITHUB_ACTION_PATH/install.sh"
+

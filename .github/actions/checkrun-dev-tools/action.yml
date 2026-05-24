@@ -1,0 +1,10 @@
+name: Set up checkrun dev tools
+description: Install checkrun's mise, Python, and Rust test toolchain.
+
+runs:
+  using: composite
+  steps:
+    - name: Install checkrun dev tools
+      shell: bash
+      run: "$GITHUB_ACTION_PATH/setup.sh"
+

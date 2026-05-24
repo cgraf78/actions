@@ -1,0 +1,10 @@
+name: Configure dotfiles private dependencies
+description: Configure deploy-key backed SSH aliases for private dotfiles dependencies.
+
+runs:
+  using: composite
+  steps:
+    - name: Configure private dependency deploy keys
+      shell: bash
+      run: "$GITHUB_ACTION_PATH/configure.sh"
+
