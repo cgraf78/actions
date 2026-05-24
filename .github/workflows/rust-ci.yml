@@ -1,0 +1,47 @@
+name: Rust CI
+
+on:
+  workflow_call:
+    inputs:
+      rust-toolchain:
+        description: Rust toolchain to install for all checks.
+        required: false
+        type: string
+        default: stable
+      test-command:
+        description: Rust test command to run on every selected platform.
+        required: false
+        type: string
+        default: cargo test
+      fmt-command:
+        description: Formatting command for the Ubuntu quality gate. Empty disables it.
+        required: false
+        type: string
+        default: cargo fmt --check
+      clippy-command:
+        description: Clippy command for the Ubuntu quality gate. Empty disables it.
+        required: false
+        type: string
+        default: cargo clippy --all-targets --all-features -- -D warnings
+      doc-command:
+        description: Documentation command for the Ubuntu quality gate. Empty disables it.
+        required: false
+        type: string
+        default: RUSTDOCFLAGS='-D missing-docs' cargo doc --no-deps
+
+permissions:
+  contents: read
+
+jobs:
+  platforms:
+    name: Platforms
+    # Push/PR runs use the shared high-signal platform subset. Scheduled/manual
+    # runs expand to the full matrix, matching shell CI's event policy.
+    uses: cgraf78/actions/.github/workflows/_rust-platforms.yml@main # zizmor: ignore[unpinned-uses]
+    with:
+      matrix-set: ${{ (github.event_name == 'push' || github.event_name == 'pull_request') && 'core' || 'full' }}
+      rust-toolchain: ${{ inputs.rust-toolchain }}
+      test-command: ${{ inputs.test-command }}
+      fmt-command: ${{ inputs.fmt-command }}
+      clippy-command: ${{ inputs.clippy-command }}
+      doc-command: ${{ inputs.doc-command }}

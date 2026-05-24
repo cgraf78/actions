@@ -1,0 +1,144 @@
+# Internal reusable workflow for Rust repos.
+#
+# Public callers should use `rust-ci.yml`. This worker exists because GitHub
+# reusable workflows must live under `.github/workflows`; the smaller
+# single-purpose actions it composes live under `.github/actions`.
+
+name: Rust Platforms
+
+on:
+  workflow_call:
+    inputs:
+      matrix-set:
+        description: Platform matrix to run. Supported values are core and full.
+        required: true
+        type: string
+      rust-toolchain:
+        description: Rust toolchain to install for all checks.
+        required: false
+        type: string
+        default: stable
+      test-command:
+        description: Rust test command to run on every selected platform.
+        required: false
+        type: string
+        default: cargo test
+      fmt-command:
+        description: Formatting command for the Ubuntu quality gate. Empty disables it.
+        required: false
+        type: string
+        default: cargo fmt --check
+      clippy-command:
+        description: Clippy command for the Ubuntu quality gate. Empty disables it.
+        required: false
+        type: string
+        default: cargo clippy --all-targets --all-features -- -D warnings
+      doc-command:
+        description: Documentation command for the Ubuntu quality gate. Empty disables it.
+        required: false
+        type: string
+        default: RUSTDOCFLAGS='-D missing-docs' cargo doc --no-deps
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  select-platforms:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.platforms.outputs.matrix }}
+    steps:
+      - name: Select platform matrix
+        id: platforms
+        # This action is the shared OS policy used by shell, Rust, and future
+        # language-specific CI workflows. Rust owns only the language setup and
+        # commands below.
+        uses: cgraf78/actions/.github/actions/platform-matrix@main # zizmor: ignore[unpinned-uses]
+        with:
+          matrix-set: ${{ inputs.matrix-set }}
+
+  platform:
+    needs: select-platforms
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container || '' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.select-platforms.outputs.matrix) }}
+
+    name: ${{ matrix.name }}
+    steps:
+      - name: Install OS prerequisites
+        uses: cgraf78/actions/.github/actions/rust-ci-prereqs@main # zizmor: ignore[unpinned-uses]
+        with:
+          matrix-name: ${{ matrix.name }}
+
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Simulate WSL environment
+        if: matrix.name == 'WSL'
+        run: |
+          echo 'Linux version 5.15.0 (Microsoft@Microsoft.com)' > /tmp/wsl-proc-version
+          sudo mount --bind /tmp/wsl-proc-version /proc/version
+
+      - name: Mark workspace as safe for git
+        # Container ownership can differ from the checkout owner. Trust only the
+        # current workspace so repo-aware build scripts/tests can use git.
+        run: git config --global --add safe.directory "$(pwd)"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: ${{ inputs.rust-toolchain }}
+
+      - name: Run Rust tests
+        shell: bash
+        env:
+          TEST_COMMAND: ${{ inputs.test-command }}
+        # Keep the caller in charge of the exact cargo invocation while avoiding
+        # GitHub expression interpolation in the shell script body.
+        run: eval "$TEST_COMMAND"
+
+  quality:
+    name: Ubuntu
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Mark workspace as safe for git
+        run: git config --global --add safe.directory "$(pwd)"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: ${{ inputs.rust-toolchain }}
+          components: clippy, rustfmt
+
+      - name: Check formatting
+        if: inputs.fmt-command != ''
+        shell: bash
+        env:
+          FMT_COMMAND: ${{ inputs.fmt-command }}
+        run: eval "$FMT_COMMAND"
+
+      - name: Lint
+        if: inputs.clippy-command != ''
+        shell: bash
+        env:
+          CLIPPY_COMMAND: ${{ inputs.clippy-command }}
+        run: eval "$CLIPPY_COMMAND"
+
+      - name: Check public docs
+        if: inputs.doc-command != ''
+        shell: bash
+        env:
+          DOC_COMMAND: ${{ inputs.doc-command }}
+        run: eval "$DOC_COMMAND"

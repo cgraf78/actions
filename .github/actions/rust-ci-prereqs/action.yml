@@ -1,0 +1,16 @@
+name: Install portable Rust prerequisites
+description: Install OS packages needed before Rust CI checks out the caller repository.
+
+inputs:
+  matrix-name:
+    description: Human-readable matrix name such as macOS, Debian, or Alpine.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install prerequisites
+      shell: sh
+      env:
+        MATRIX_NAME: ${{ inputs.matrix-name }}
+      run: "$GITHUB_ACTION_PATH/install.sh"
