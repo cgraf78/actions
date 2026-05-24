@@ -34,7 +34,7 @@ jobs:
     # Push/PR runs cover the high-signal platform set. Scheduled/manual runs
     # use the full matrix for broader drift coverage. Keeping this as one job
     # avoids GitHub showing a skipped "full matrix" job on every normal push.
-    uses: cgraf78/actions/.github/workflows/portable-shell-test-job.yml@main # zizmor: ignore[unpinned-uses]
+    uses: cgraf78/actions/.github/workflows/_portable-shell-platforms.yml@main # zizmor: ignore[unpinned-uses]
     secrets:
       DS_DEPLOY_KEY: ${{ secrets.DS_DEPLOY_KEY }}
       SHDEPS_DEPLOY_KEY: ${{ secrets.SHDEPS_DEPLOY_KEY }}

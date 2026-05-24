@@ -1,4 +1,12 @@
-name: Portable Shell Test Job
+# Internal reusable workflow for portable shell repos.
+#
+# GitHub only allows `workflow_call` reusable workflows to live under
+# `.github/workflows`, so this cannot move under `.github/actions` like the
+# composite actions it uses. Public callers should use `portable-shell-ci.yml`;
+# this file is the shell-specific worker that expands the shared OS matrix and
+# runs the caller's shell test command on each platform.
+
+name: Portable Shell Platforms
 
 on:
   workflow_call:
