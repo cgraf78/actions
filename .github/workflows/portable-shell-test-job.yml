@@ -133,4 +133,11 @@ jobs:
           TEST_COMMAND: ${{ inputs.test-command }}
         # Passing the caller-owned command through env avoids GitHub expression
         # template injection while keeping each repo in charge of its test script.
-        run: bash -lc "$TEST_COMMAND"
+        #
+        # Run the command in this step's Bash process instead of spawning a
+        # nested `bash -lc`. GitHub Actions has already selected the best bash
+        # on PATH for this step and has already applied GITHUB_PATH additions
+        # from setup actions. A nested login shell can rebuild PATH on macOS and
+        # in containers, which made tests accidentally pick system Bash or
+        # system formatter binaries instead of the versions installed earlier.
+        run: eval "$TEST_COMMAND"

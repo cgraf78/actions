@@ -57,6 +57,12 @@ install_package_lists() {
       ;;
     CentOS* | Fedora)
       if [ -n "$dnf_pkgs" ]; then
+        if [ "$MATRIX_NAME" != "Fedora" ] && has_profile shellcheck; then
+          # ShellCheck is not in the base CentOS Stream repos. Enabling EPEL
+          # only when the caller asks for the shellcheck profile keeps the base
+          # profile small while making ds's CI expansion portable to CentOS.
+          dnf install -y --allowerasing epel-release
+        fi
         # Package lists are assembled by trusted profile names.
         # shellcheck disable=SC2086
         dnf install -y --allowerasing $dnf_pkgs
