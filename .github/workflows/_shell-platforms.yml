@@ -68,7 +68,7 @@ jobs:
       - name: Install OS prerequisites
         # This is a first-party shared CI action and intentionally floats on
         # main: changing cgraf78/actions should update every caller immediately.
-        uses: cgraf78/actions/.github/actions/portable-shell-prereqs@main # zizmor: ignore[unpinned-uses]
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@main # zizmor: ignore[unpinned-uses]
         with:
           matrix-name: ${{ matrix.name }}
           profiles: ${{ inputs.profiles }}

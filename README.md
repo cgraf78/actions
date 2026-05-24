@@ -34,7 +34,7 @@ steps are split into first-party composite actions:
 - `.github/actions/platform-matrix/` owns the shared OS matrix. Shell CI uses it
   today; future Rust, C++, or other language-specific reusable workflows should
   consume the same action instead of copying platform JSON.
-- `.github/actions/portable-shell-prereqs/` owns pre-checkout OS package
+- `.github/actions/shell-ci-prereqs/` owns shell-CI pre-checkout OS package
   installation. It is split into profile packages, checkrun prereqs, and the
   exact dotfiles bootstrap package list.
 - `.github/actions/checkrun-dev-tools/` owns checkrun's mise, Python, and Rust
