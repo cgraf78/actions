@@ -41,6 +41,24 @@ empty string to disable a command. Repos that need generated files, extra
 tooling, or a nested crate path can use `setup-command` and
 `working-directory` without forking the shared workflow.
 
+### `rust-release.yml`
+
+Builds and publishes Rust binary archives for the standard release platform
+set: Linux x86_64 musl, Linux aarch64 musl, macOS x86_64, and macOS aarch64.
+The workflow owns draft creation, tag/version validation, asset upload, and
+publishing. The caller owns packaging and smoke-test behavior through scripts,
+and can opt out of publishing to leave a draft release.
+
+```yaml
+jobs:
+  release:
+    uses: cgraf78/actions/.github/workflows/rust-release.yml@main
+    with:
+      version-command: scripts/cargo-version.sh
+      package-command: scripts/package-release.sh "$RUST_TARGET" "$ASSET_PLATFORM"
+      smoke-command: scripts/smoke-release.sh "$ASSET_PLATFORM"
+```
+
 ## Layout
 
 The reusable workflow is intentionally small orchestration glue. The reusable
@@ -55,6 +73,8 @@ steps are split into first-party composite actions:
   workflow Rust repos call.
 - `.github/workflows/_rust-platforms.yml` is the internal Rust worker that runs
   cargo tests across the shared OS matrix.
+- `.github/workflows/rust-release.yml` owns standard Rust binary release
+  mechanics: draft creation, the release asset matrix, uploads, and publishing.
 - `.github/actions/platform-matrix/` owns the shared OS matrix. Shell CI uses it
   today; Rust CI uses it too; future C++ or other language-specific reusable
   workflows should consume the same action instead of copying platform JSON.

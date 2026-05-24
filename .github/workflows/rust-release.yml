@@ -1,0 +1,254 @@
+name: Rust Release
+
+on:
+  workflow_call:
+    inputs:
+      rust-toolchain:
+        description: Rust toolchain to install for release validation and builds.
+        required: false
+        type: string
+        default: stable
+      working-directory:
+        description: Directory where release commands should run.
+        required: false
+        type: string
+        default: .
+      setup-command:
+        description: Optional setup command to run after checkout and before release commands.
+        required: false
+        type: string
+        default: ""
+      version-command:
+        description: Command that prints the crate/package version without a leading tag prefix.
+        required: false
+        type: string
+        default: cargo pkgid | sed 's/.*@//'
+      tag-prefix:
+        description: Prefix used before the package version in Git tags.
+        required: false
+        type: string
+        default: v
+      package-command:
+        description: Command that builds release assets for RUST_TARGET and ASSET_PLATFORM.
+        required: false
+        type: string
+        default: scripts/package-release.sh "$RUST_TARGET" "$ASSET_PLATFORM"
+      smoke-command:
+        description: Optional command that validates the built archive for ASSET_PLATFORM.
+        required: false
+        type: string
+        default: ""
+      asset-glob:
+        description: Space-separated shell globs to upload after packaging.
+        required: false
+        type: string
+        default: dist/*.tar.gz dist/*.sha256
+      release-title:
+        description: Release title. Defaults to the Git tag when empty.
+        required: false
+        type: string
+        default: ""
+      generate-notes:
+        description: Ask GitHub to generate release notes when creating the draft.
+        required: false
+        type: boolean
+        default: true
+      prerelease:
+        description: Mark the release as a prerelease.
+        required: false
+        type: boolean
+        default: false
+      publish:
+        description: Publish the draft release after all assets upload.
+        required: false
+        type: boolean
+        default: true
+      latest:
+        description: Mark the published release as latest when publish is true.
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  create-release:
+    name: Create release draft
+    runs-on: ubuntu-24.04
+    # Release creation is the first write boundary. Checkout and validation keep
+    # persisted credentials off even though this job can create the draft.
+    permissions:
+      contents: write
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: ${{ inputs.rust-toolchain }}
+
+      - name: Run repo setup
+        if: inputs.setup-command != ''
+        shell: bash
+        env:
+          SETUP_COMMAND: ${{ inputs.setup-command }}
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        run: |
+          cd "$WORKING_DIRECTORY"
+          eval "$SETUP_COMMAND"
+
+      - name: Validate tag version
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          TAG_PREFIX: ${{ inputs.tag-prefix }}
+          VERSION_COMMAND: ${{ inputs.version-command }}
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        run: |
+          cd "$WORKING_DIRECTORY"
+          release_version=$(eval "$VERSION_COMMAND")
+          expected_tag="${TAG_PREFIX}${release_version}"
+          if [[ "$TAG" != "$expected_tag" ]]; then
+            echo "release tag ${TAG} does not match package version ${expected_tag}" >&2
+            exit 1
+          fi
+
+      - name: Create draft release
+        shell: bash
+        env:
+          GENERATE_NOTES: ${{ inputs.generate-notes }}
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          RELEASE_TITLE: ${{ inputs.release-title }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if is_draft=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [[ "$is_draft" == "true" ]]; then
+              echo "release ${TAG} draft already exists; reusing it"
+              exit 0
+            fi
+            echo "release ${TAG} already exists and is published; bump the crate version before releasing" >&2
+            exit 1
+          fi
+          title=${RELEASE_TITLE:-$TAG}
+          args=(--repo "$GITHUB_REPOSITORY" --draft --title "$title")
+          if [[ "$GENERATE_NOTES" == "true" ]]; then
+            args+=(--generate-notes)
+          fi
+          if [[ "$PRERELEASE" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$TAG" "${args[@]}"
+
+  build:
+    name: Build ${{ matrix.asset-platform }}
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    # Asset upload is the only write operation in this job.
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            rust-target: x86_64-unknown-linux-musl
+            asset-platform: linux-x86_64-musl
+          - os: ubuntu-24.04-arm
+            rust-target: aarch64-unknown-linux-musl
+            asset-platform: linux-aarch64-musl
+          - os: macos-15-intel
+            rust-target: x86_64-apple-darwin
+            asset-platform: macos-x86_64
+          - os: macos-latest
+            rust-target: aarch64-apple-darwin
+            asset-platform: macos-aarch64
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: ${{ inputs.rust-toolchain }}
+          targets: ${{ matrix.rust-target }}
+
+      - name: Run repo setup
+        if: inputs.setup-command != ''
+        shell: bash
+        env:
+          ASSET_PLATFORM: ${{ matrix.asset-platform }}
+          RUST_TARGET: ${{ matrix.rust-target }}
+          SETUP_COMMAND: ${{ inputs.setup-command }}
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        run: |
+          cd "$WORKING_DIRECTORY"
+          eval "$SETUP_COMMAND"
+
+      - name: Package archive
+        shell: bash
+        env:
+          ASSET_PLATFORM: ${{ matrix.asset-platform }}
+          PACKAGE_COMMAND: ${{ inputs.package-command }}
+          RUST_TARGET: ${{ matrix.rust-target }}
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        # Packaging remains repo-owned because binary names, metadata files, and
+        # archive layout are release contract decisions.
+        run: |
+          cd "$WORKING_DIRECTORY"
+          eval "$PACKAGE_COMMAND"
+
+      - name: Smoke install
+        if: inputs.smoke-command != ''
+        shell: bash
+        env:
+          ASSET_PLATFORM: ${{ matrix.asset-platform }}
+          RUST_TARGET: ${{ matrix.rust-target }}
+          SMOKE_COMMAND: ${{ inputs.smoke-command }}
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        run: |
+          cd "$WORKING_DIRECTORY"
+          eval "$SMOKE_COMMAND"
+
+      - name: Upload release assets
+        shell: bash
+        env:
+          ASSET_GLOB: ${{ inputs.asset-glob }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        run: |
+          cd "$WORKING_DIRECTORY"
+          # Asset globs are caller-owned shell patterns.
+          # shellcheck disable=SC2086
+          gh release upload "$TAG" $ASSET_GLOB --repo "$GITHUB_REPOSITORY" --clobber
+
+  publish-release:
+    name: Publish release
+    if: inputs.publish
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Publish draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LATEST: ${{ inputs.latest }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          args=(--repo "$GITHUB_REPOSITORY" --draft=false)
+          if [[ "$LATEST" == "true" ]]; then
+            args+=(--latest)
+          fi
+          gh release edit "$TAG" "${args[@]}"
