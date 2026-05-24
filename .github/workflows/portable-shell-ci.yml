@@ -28,9 +28,8 @@ permissions:
 
 jobs:
   rust:
-    # Rust checks stay as a separate job so repos with mixed shell/Rust surfaces
-    # can fail fast on language-level issues without multiplying those checks
-    # across every distro in the portability matrix.
+    # Rust checks stay separate so mixed shell/Rust repos do not multiply cargo
+    # fmt, clippy, test, build, and docs across every distro in the matrix.
     if: inputs.rust-checks
     runs-on: ubuntu-latest
     name: Rust
@@ -69,300 +68,37 @@ jobs:
 
     name: ${{ matrix.name }}
     steps:
-      - name: Install profile prereqs
-        if: inputs.setup == 'none'
+      - name: Check out shared CI helpers
+        # The called workflow file is loaded from cgraf78/actions, but helper
+        # scripts are not automatically present on disk. Check this repository
+        # out explicitly before installing OS prerequisites so the following
+        # steps can run small, versioned scripts instead of inline shell walls.
+        #
+        # This checkout intentionally tracks main to match the repository's
+        # update model: one shared CI edit should roll out to all callers.
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: cgraf78/actions
+          ref: main
+          path: .shared-actions
+          persist-credentials: false
+
+      - name: Install OS prerequisites
+        # Package mapping lives in a helper script so the workflow stays
+        # readable and the distro-specific details remain shared.
         shell: sh
         env:
           MATRIX_NAME: ${{ matrix.name }}
           PROFILES: ${{ inputs.profiles }}
-        run: |
-          set -eu
-
-          sudo_if_available() {
-            if command -v sudo >/dev/null 2>&1; then
-              sudo "$@"
-            else
-              "$@"
-            fi
-          }
-
-          has_profile() {
-            case ",$PROFILES," in
-              *",$1,"*) return 0 ;;
-              *) return 1 ;;
-            esac
-          }
-
-          add_pkg() {
-            eval "$1=\"\${$1:+\${$1} }$2\""
-          }
-
-          install_yq() {
-            if command -v yq >/dev/null 2>&1 &&
-              yq --version 2>/dev/null | grep -q 'version v4'; then
-              return
-            fi
-
-            case "$(uname -s)" in
-              Linux) os=linux ;;
-              Darwin) os=darwin ;;
-              *)
-                echo "unsupported yq OS: $(uname -s)" >&2
-                exit 1
-                ;;
-            esac
-            case "$(uname -m)" in
-              x86_64 | amd64) arch=amd64 ;;
-              arm64 | aarch64) arch=arm64 ;;
-              *)
-                echo "unsupported yq arch: $(uname -m)" >&2
-                exit 1
-                ;;
-            esac
-
-            tmp="${RUNNER_TEMP:-/tmp}/yq"
-            curl -fsSL "https://github.com/mikefarah/yq/releases/download/v4.45.1/yq_${os}_${arch}" -o "$tmp"
-            chmod +x "$tmp"
-            sudo_if_available mv "$tmp" /usr/local/bin/yq
-          }
-
-          ensure_lua() {
-            if command -v lua >/dev/null 2>&1; then
-              return
-            fi
-            if command -v lua5.4 >/dev/null 2>&1; then
-              sudo_if_available ln -sf "$(command -v lua5.4)" /usr/local/bin/lua
-            fi
-          }
-
-          brew_pkgs=
-          apt_pkgs=
-          arch_pkgs=
-          dnf_pkgs=
-          apk_pkgs=
-
-          # Profiles are the shared contract for normal repos. Callers describe
-          # capabilities they need; this workflow owns the distro-specific
-          # package names so every repo does not grow its own copy of them.
-          if has_profile base; then
-            add_pkg brew_pkgs "bash"
-            add_pkg apt_pkgs "bash git curl ca-certificates"
-            add_pkg arch_pkgs "bash git curl ca-certificates"
-            add_pkg dnf_pkgs "bash git curl ca-certificates"
-            add_pkg apk_pkgs "bash git curl ca-certificates"
-          fi
-          if has_profile jq; then
-            add_pkg brew_pkgs "jq"
-            add_pkg apt_pkgs "jq"
-            add_pkg arch_pkgs "jq"
-            add_pkg dnf_pkgs "jq"
-            add_pkg apk_pkgs "jq"
-          fi
-          if has_profile python; then
-            add_pkg brew_pkgs "python"
-            add_pkg apt_pkgs "python3"
-            add_pkg arch_pkgs "python"
-            add_pkg dnf_pkgs "python3"
-            add_pkg apk_pkgs "python3"
-          fi
-          if has_profile zsh; then
-            add_pkg brew_pkgs "zsh"
-            add_pkg apt_pkgs "zsh"
-            add_pkg arch_pkgs "zsh"
-            add_pkg dnf_pkgs "zsh"
-            add_pkg apk_pkgs "zsh"
-          fi
-          if has_profile lua; then
-            add_pkg brew_pkgs "lua"
-            add_pkg apt_pkgs "lua5.4"
-            add_pkg arch_pkgs "lua"
-            add_pkg dnf_pkgs "lua"
-            add_pkg apk_pkgs "lua5.4"
-          fi
-          if has_profile neovim; then
-            add_pkg brew_pkgs "neovim"
-            add_pkg apt_pkgs "neovim"
-            add_pkg arch_pkgs "neovim"
-            # CentOS Stream/Fedora intentionally skip Neovim to match the
-            # existing termnav workflow's lower-friction dnf dependency set.
-            add_pkg apk_pkgs "neovim"
-          fi
-          if has_profile tmux; then
-            add_pkg brew_pkgs "tmux"
-            add_pkg apt_pkgs "tmux"
-            add_pkg arch_pkgs "tmux"
-            add_pkg dnf_pkgs "tmux"
-            add_pkg apk_pkgs "tmux"
-          fi
-          if has_profile openssh-netcat-lsof; then
-            add_pkg apt_pkgs "lsof openssh-client netcat-openbsd"
-            add_pkg arch_pkgs "lsof openssh openbsd-netcat"
-            add_pkg dnf_pkgs "lsof openssh-clients nmap-ncat"
-            add_pkg apk_pkgs "lsof openssh-client netcat-openbsd"
-          fi
-          if has_profile shellcheck; then
-            add_pkg brew_pkgs "shellcheck"
-            add_pkg apt_pkgs "shellcheck"
-            add_pkg arch_pkgs "shellcheck"
-            add_pkg dnf_pkgs "ShellCheck"
-            add_pkg apk_pkgs "shellcheck"
-          fi
-
-          case "$MATRIX_NAME" in
-            macOS)
-              if [ -n "$brew_pkgs" ]; then
-                # Package lists are assembled by trusted profile names above.
-                # shellcheck disable=SC2086
-                brew install $brew_pkgs
-              fi
-              ;;
-            Debian | Ubuntu | WSL)
-              if [ -n "$apt_pkgs" ]; then
-                sudo_if_available apt-get update
-                # Package lists are assembled by trusted profile names above.
-                # shellcheck disable=SC2086
-                sudo_if_available apt-get install -y $apt_pkgs
-              fi
-              ;;
-            Arch)
-              pacman-key --init
-              pacman-key --populate
-              if [ -n "$arch_pkgs" ]; then
-                # Package lists are assembled by trusted profile names above.
-                # shellcheck disable=SC2086
-                pacman -Syu --noconfirm $arch_pkgs
-              fi
-              ;;
-            CentOS* | Fedora)
-              if [ -n "$dnf_pkgs" ]; then
-                # Package lists are assembled by trusted profile names above.
-                # shellcheck disable=SC2086
-                dnf install -y --allowerasing $dnf_pkgs
-              fi
-              ;;
-            Alpine)
-              if [ -n "$apk_pkgs" ]; then
-                # Package lists are assembled by trusted profile names above.
-                # shellcheck disable=SC2086
-                apk add --no-cache $apk_pkgs
-              fi
-              ;;
-          esac
-
-          if has_profile lua; then
-            ensure_lua
-          fi
-          if has_profile yq && [ "$MATRIX_NAME" != "Alpine" ]; then
-            install_yq
-          fi
-
-      - name: Install checkrun prereqs
-        if: inputs.setup == 'checkrun'
-        shell: sh
-        env:
-          MATRIX_NAME: ${{ matrix.name }}
-        run: |
-          set -eu
-
-          # checkrun has a broader formatting/toolchain surface than the small
-          # shell tools. Keep that bootstrap centralized here so checkrun's
-          # caller workflow stays declarative, but do not make every repo pay
-          # for these packages.
-          sudo_if_available() {
-            if command -v sudo >/dev/null 2>&1; then
-              sudo "$@"
-            else
-              "$@"
-            fi
-          }
-
-          install_yq() {
-            if command -v yq >/dev/null 2>&1 &&
-              yq --version 2>/dev/null | grep -q 'version v4'; then
-              return
-            fi
-
-            case "$(uname -s)" in
-              Linux) os=linux ;;
-              Darwin) os=darwin ;;
-              *)
-                echo "unsupported yq OS: $(uname -s)" >&2
-                exit 1
-                ;;
-            esac
-            case "$(uname -m)" in
-              x86_64 | amd64) arch=amd64 ;;
-              arm64 | aarch64) arch=arm64 ;;
-              *)
-                echo "unsupported yq arch: $(uname -m)" >&2
-                exit 1
-                ;;
-            esac
-
-            tmp="${RUNNER_TEMP:-/tmp}/yq"
-            curl -fsSL "https://github.com/mikefarah/yq/releases/download/v4.45.1/yq_${os}_${arch}" -o "$tmp"
-            chmod +x "$tmp"
-            sudo_if_available mv "$tmp" /usr/local/bin/yq
-          }
-
-          case "$MATRIX_NAME" in
-            macOS)
-              brew install bash jq yq python zsh
-              ;;
-            Debian | Ubuntu | WSL)
-              sudo_if_available apt-get update
-              sudo_if_available apt-get install -y bash git curl ca-certificates jq python3 python3-pip python3-venv zsh tar gzip unzip xz-utils
-              install_yq
-              ;;
-            Arch)
-              pacman-key --init
-              pacman-key --populate
-              pacman -Syu --noconfirm bash git curl ca-certificates jq python python-pip zsh tar gzip unzip xz
-              install_yq
-              ;;
-            CentOS* | Fedora)
-              dnf install -y --allowerasing bash git curl ca-certificates jq python3 python3-pip zsh tar gzip unzip xz
-              install_yq
-              ;;
-            Alpine)
-              apk add --no-cache bash git curl ca-certificates jq python3 tar gzip unzip xz
-              ;;
-          esac
-
-      - name: Install dotfiles bootstrap prereqs
-        if: inputs.setup == 'dotfiles' && (matrix.container || matrix.name == 'macOS')
-        shell: sh
-        env:
-          MATRIX_NAME: ${{ matrix.name }}
-        run: |
-          set -eu
-
-          # Dotfiles CI intentionally installs only this small package set from
-          # the workflow. The behavior under test is that dot update/shdeps can
-          # install the real toolchain itself, so do not replace this with the
-          # broader generic profiles.
-          case "$MATRIX_NAME" in
-            macOS)
-              brew install bash
-              ;;
-            Debian)
-              apt-get update && apt-get install -y git curl sudo openssh-client lsof netcat-openbsd
-              ;;
-            Arch)
-              pacman-key --init && pacman-key --populate
-              pacman -Syu --noconfirm git curl sudo openssh lsof openbsd-netcat
-              ;;
-            CentOS* | Fedora)
-              dnf install -y --allowerasing git curl sudo openssh-clients lsof nmap-ncat
-              ;;
-            Alpine)
-              apk add --no-cache git curl sudo bash coreutils shellcheck openssh-client lsof netcat-openbsd
-              ;;
-          esac
+          SETUP: ${{ inputs.setup }}
+        run: .shared-actions/.github/actions/portable-shell-prereqs/install-prereqs.sh
 
       # actions/checkout v4.2.2
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
+          # Callers often use read-only CI tokens. Avoid persisting credentials
+          # into .git/config so test code cannot accidentally reuse them.
           persist-credentials: false
 
       - name: Simulate WSL environment
@@ -372,9 +108,16 @@ jobs:
           sudo mount --bind /tmp/wsl-proc-version /proc/version
 
       - name: Set HOME to workspace
+        # Most of these repos install or discover tools under $HOME during
+        # tests. Pinning HOME to the checked-out workspace keeps caches and
+        # generated files local to the Actions workspace instead of leaking into
+        # the runner's ambient home directory.
         run: echo "HOME=$(pwd)" >> "$GITHUB_ENV"
 
       - name: Mark workspace as safe for git
+        # Container jobs can see ownership differences between the mounted
+        # workspace and the process user. Marking only this checkout as safe
+        # avoids broad global Git trust while keeping repo-aware tests working.
         run: git config --global --add safe.directory "$(pwd)"
 
       - name: Cache checkrun dev tools
@@ -391,58 +134,17 @@ jobs:
           restore-keys: |
             checkrun-dev-tools-${{ runner.os }}-${{ matrix.name }}-
 
-      - name: Install checkrun dev tools
+      - name: Set up checkrun dev tools
         if: inputs.setup == 'checkrun' && matrix.name != 'Alpine'
+        # Alpine deliberately skips this expensive dev-tool bootstrap because
+        # checkrun's historical workflow skipped it there too. Alpine still runs
+        # the shell test suite with the base packages installed above.
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
+        run: .shared-actions/.github/actions/checkrun-setup/setup.sh
 
-          retry() {
-            local attempt rc delay
-            for attempt in 1 2 3; do
-              if "$@"; then
-                return 0
-              fi
-
-              rc=$?
-              if [ "$attempt" -eq 3 ]; then
-                return "$rc"
-              fi
-
-              delay=$((attempt * 15))
-              echo "$* failed (attempt $attempt/3, exit $rc); retrying in ${delay}s..." >&2
-              sleep "$delay"
-            done
-          }
-
-          curl https://mise.run | sh
-          export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
-
-          if [ -n "${GITHUB_TOKEN:-}" ]; then
-            export MISE_GITHUB_TOKEN="$GITHUB_TOKEN"
-          fi
-
-          export MISE_GLOBAL_CONFIG_FILE="$PWD/.github/mise/checkrun-ci.toml"
-          echo "MISE_GLOBAL_CONFIG_FILE=$MISE_GLOBAL_CONFIG_FILE" >> "$GITHUB_ENV"
-          mise trust "$MISE_GLOBAL_CONFIG_FILE" >/dev/null || true
-          retry mise install
-
-          python3 -m venv "$HOME/.venv"
-          "$HOME/.venv/bin/python" -m pip install --upgrade pip
-          "$HOME/.venv/bin/python" -m pip install clang-format jsonschema PyYAML tomli
-
-          curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --component rustfmt
-
-          {
-            echo "$HOME/.local/bin"
-            echo "$HOME/.local/share/mise/shims"
-            echo "$HOME/.venv/bin"
-            echo "$HOME/.cargo/bin"
-          } >> "$GITHUB_PATH"
-
-      - name: Cache dependency installs
+      - name: Cache dotfiles dependency installs
         if: inputs.setup == 'dotfiles'
         # actions/cache v4.2.4
         uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809
@@ -457,130 +159,21 @@ jobs:
           restore-keys: |
             dot-deps-${{ runner.os }}-${{ matrix.name }}-
 
-      - name: Configure private dependency deploy keys
+      - name: Set up dotfiles dependencies
         if: inputs.setup == 'dotfiles'
+        # Dotfiles is the only setup mode that needs caller secrets. Keep the
+        # secret-consuming logic in helper scripts so normal public repos can
+        # call this reusable workflow without defining unrelated secrets.
         shell: bash
-        run: |
-          # Dotfiles bootstraps private shdeps and ds checkouts during CI. Use
-          # host aliases so each dependency can use a separate deploy key while
-          # preserving normal git@github.com-style clone URLs in the config.
-          missing=()
-          [[ -n "${SHDEPS_DEPLOY_KEY:-}" ]] || missing+=(SHDEPS_DEPLOY_KEY)
-          [[ -n "${DS_DEPLOY_KEY:-}" ]] || missing+=(DS_DEPLOY_KEY)
-          if [[ "${#missing[@]}" -gt 0 ]]; then
-            printf '::error::Missing Actions secret(s): %s\n' "${missing[*]}"
-            exit 1
-          fi
-
-          ssh_dir="${RUNNER_TEMP:-/tmp}/dotfiles-private-deps-ssh"
-          rm -rf "$ssh_dir"
-          mkdir -p "$ssh_dir"
-          chmod 700 "$ssh_dir"
-
-          printf '%s\n' "$SHDEPS_DEPLOY_KEY" >"$ssh_dir/shdeps"
-          printf '%s\n' "$DS_DEPLOY_KEY" >"$ssh_dir/ds"
-          chmod 600 "$ssh_dir/shdeps" "$ssh_dir/ds"
-
-          known_hosts="$ssh_dir/known_hosts"
-          if [[ -f "$GITHUB_WORKSPACE/.ssh/known_hosts" ]]; then
-            grep -E '^github\.com[[:space:]]' \
-              "$GITHUB_WORKSPACE/.ssh/known_hosts" >"$known_hosts" || true
-          fi
-          if [[ ! -s "$known_hosts" ]] && command -v ssh-keyscan >/dev/null 2>&1; then
-            ssh-keyscan github.com >"$known_hosts"
-          fi
-          if [[ ! -s "$known_hosts" ]]; then
-            echo "::error::Unable to configure GitHub SSH known_hosts" >&2
-            exit 1
-          fi
-          chmod 600 "$known_hosts"
-
-          ssh_config="$ssh_dir/config"
-          cat >"$ssh_config" <<EOF
-          Host github.com-shdeps
-            HostName github.com
-            User git
-            IdentityFile $ssh_dir/shdeps
-            IdentitiesOnly yes
-            UserKnownHostsFile $known_hosts
-            StrictHostKeyChecking yes
-
-          Host github.com-ds
-            HostName github.com
-            User git
-            IdentityFile $ssh_dir/ds
-            IdentitiesOnly yes
-            UserKnownHostsFile $known_hosts
-            StrictHostKeyChecking yes
-          EOF
-          chmod 600 "$ssh_config"
-
-          {
-            echo "GIT_SSH_COMMAND=ssh -F $ssh_config"
-            echo "SHDEPS_REPO=git@github.com-shdeps:cgraf78/shdeps.git"
-            echo "SHDEPS_DS_REPO=git@github.com-ds:cgraf78/ds.git"
-          } >>"$GITHUB_ENV"
         env:
-          SHDEPS_DEPLOY_KEY: ${{ secrets.SHDEPS_DEPLOY_KEY }}
           DS_DEPLOY_KEY: ${{ secrets.DS_DEPLOY_KEY }}
-
-      - name: Install dependencies via dot update
-        if: inputs.setup == 'dotfiles'
-        shell: bash
-        env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MATRIX_NAME: ${{ matrix.name }}
+          SHDEPS_DEPLOY_KEY: ${{ secrets.SHDEPS_DEPLOY_KEY }}
         run: |
-          # Retry the network-heavy bootstrap path. Once dot update installs
-          # mise, explicitly verify the tools that later dotfiles checks rely on
-          # so a partial bootstrap failure is reported at the source.
-          retry() {
-            local attempt rc delay
-            for attempt in 1 2 3; do
-              if "$@"; then
-                return 0
-              fi
-
-              rc=$?
-              if [ "$attempt" -eq 3 ]; then
-                return "$rc"
-              fi
-
-              delay=$((attempt * 15))
-              echo "$* failed (attempt $attempt/3, exit $rc); retrying in ${delay}s..." >&2
-              sleep "$delay"
-            done
-          }
-
-          retry .local/bin/dot update --skip-pull --quiet
-
-          export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
-          if command -v mise >/dev/null 2>&1 && mise --version >/dev/null 2>&1; then
-            mise trust "$HOME/.config/mise/config.toml" >/dev/null || true
-            if [ -z "${MISE_GITHUB_TOKEN:-}" ] && [ -n "${GITHUB_TOKEN:-}" ]; then
-              export MISE_GITHUB_TOKEN="$GITHUB_TOKEN"
-            fi
-            retry mise install
-
-            for tool in actionlint ruff shellcheck shfmt zizmor; do
-              if ! command -v "$tool" >/dev/null 2>&1; then
-                echo "$tool missing after mise install" >&2
-                exit 1
-              fi
-            done
-          elif [ "Alpine" = "$MATRIX_NAME" ]; then
-            echo "mise is unavailable on Alpine; skipping explicit mise install verification" >&2
-          else
-            echo "mise missing or unusable after dot update" >&2
-            exit 1
-          fi
-
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.local/share/mise/shims" >> "$GITHUB_PATH"
-
-      - name: Run doctor smoke checks
-        if: inputs.setup == 'dotfiles'
-        run: .local/bin/dot doctor
+          .shared-actions/.github/actions/dotfiles-setup/configure-private-deps.sh
+          .shared-actions/.github/actions/dotfiles-setup/install-deps.sh
+          .local/bin/dot doctor
 
       - name: Run tests
         shell: bash
