@@ -8,6 +8,16 @@ on:
         required: false
         type: string
         default: stable
+      working-directory:
+        description: Directory where cargo commands should run.
+        required: false
+        type: string
+        default: .
+      setup-command:
+        description: Optional setup command to run after Rust installation and before cargo commands.
+        required: false
+        type: string
+        default: ""
       test-command:
         description: Rust test command to run on every selected platform.
         required: false
@@ -32,6 +42,9 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   platforms:
     name: Platforms
@@ -41,6 +54,8 @@ jobs:
     with:
       matrix-set: ${{ (github.event_name == 'push' || github.event_name == 'pull_request') && 'core' || 'full' }}
       rust-toolchain: ${{ inputs.rust-toolchain }}
+      working-directory: ${{ inputs.working-directory }}
+      setup-command: ${{ inputs.setup-command }}
       test-command: ${{ inputs.test-command }}
 
   quality:
@@ -61,23 +76,45 @@ jobs:
           toolchain: ${{ inputs.rust-toolchain }}
           components: clippy, rustfmt
 
+      - name: Run repo setup
+        if: inputs.setup-command != ''
+        shell: bash
+        env:
+          MATRIX_NAME: Ubuntu
+          SETUP_COMMAND: ${{ inputs.setup-command }}
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        # Run the same optional caller setup before quality commands so repos
+        # with generated code or system prerequisites do not need a custom fork.
+        run: |
+          cd "$WORKING_DIRECTORY"
+          eval "$SETUP_COMMAND"
+
       - name: Check formatting
         if: inputs.fmt-command != ''
         shell: bash
         env:
           FMT_COMMAND: ${{ inputs.fmt-command }}
-        run: eval "$FMT_COMMAND"
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        run: |
+          cd "$WORKING_DIRECTORY"
+          eval "$FMT_COMMAND"
 
       - name: Lint
         if: inputs.clippy-command != ''
         shell: bash
         env:
           CLIPPY_COMMAND: ${{ inputs.clippy-command }}
-        run: eval "$CLIPPY_COMMAND"
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        run: |
+          cd "$WORKING_DIRECTORY"
+          eval "$CLIPPY_COMMAND"
 
       - name: Check public docs
         if: inputs.doc-command != ''
         shell: bash
         env:
           DOC_COMMAND: ${{ inputs.doc-command }}
-        run: eval "$DOC_COMMAND"
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        run: |
+          cd "$WORKING_DIRECTORY"
+          eval "$DOC_COMMAND"

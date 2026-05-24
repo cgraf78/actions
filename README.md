@@ -37,7 +37,9 @@ jobs:
 ```
 
 Repos with stricter policies can override the quality-gate commands, or pass an
-empty string to disable a command.
+empty string to disable a command. Repos that need generated files, extra
+tooling, or a nested crate path can use `setup-command` and
+`working-directory` without forking the shared workflow.
 
 ## Layout
 

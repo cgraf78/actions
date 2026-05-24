@@ -18,6 +18,16 @@ on:
         required: false
         type: string
         default: stable
+      working-directory:
+        description: Directory where cargo commands should run.
+        required: false
+        type: string
+        default: .
+      setup-command:
+        description: Optional setup command to run after Rust installation and before tests.
+        required: false
+        type: string
+        default: ""
       test-command:
         description: Rust test command to run on every selected platform.
         required: false
@@ -81,10 +91,27 @@ jobs:
         with:
           toolchain: ${{ inputs.rust-toolchain }}
 
+      - name: Run repo setup
+        if: inputs.setup-command != ''
+        shell: bash
+        env:
+          MATRIX_NAME: ${{ matrix.name }}
+          SETUP_COMMAND: ${{ inputs.setup-command }}
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        # A generic hook keeps repo-specific package/bootstrap logic out of the
+        # shared workflow. Callers can branch on MATRIX_NAME when needed.
+        run: |
+          cd "$WORKING_DIRECTORY"
+          eval "$SETUP_COMMAND"
+
       - name: Run Rust tests
         shell: bash
         env:
+          MATRIX_NAME: ${{ matrix.name }}
           TEST_COMMAND: ${{ inputs.test-command }}
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
         # Keep the caller in charge of the exact cargo invocation while avoiding
         # GitHub expression interpolation in the shell script body.
-        run: eval "$TEST_COMMAND"
+        run: |
+          cd "$WORKING_DIRECTORY"
+          eval "$TEST_COMMAND"
