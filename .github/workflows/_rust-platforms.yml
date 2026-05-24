@@ -122,6 +122,15 @@ jobs:
           toolchain: ${{ inputs.rust-toolchain }}
           components: clippy, rustfmt
 
+      - name: Run Rust tests
+        shell: bash
+        env:
+          TEST_COMMAND: ${{ inputs.test-command }}
+        # The shared core matrix intentionally focuses on non-Ubuntu portability
+        # coverage. Keep Ubuntu's normal cargo test here so Rust repos preserve
+        # the conventional Linux baseline on every push and pull request.
+        run: eval "$TEST_COMMAND"
+
       - name: Check formatting
         if: inputs.fmt-command != ''
         shell: bash
