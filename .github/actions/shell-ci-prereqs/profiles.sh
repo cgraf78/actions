@@ -38,6 +38,13 @@ install_profile_prereqs() {
     add_pkg dnf_pkgs "python3"
     add_pkg apk_pkgs "python3"
   fi
+  if has_profile perl; then
+    add_pkg brew_pkgs "perl"
+    add_pkg apt_pkgs "perl"
+    add_pkg arch_pkgs "perl"
+    add_pkg dnf_pkgs "perl"
+    add_pkg apk_pkgs "perl"
+  fi
   if has_profile zsh; then
     add_pkg brew_pkgs "zsh"
     add_pkg apt_pkgs "zsh"
