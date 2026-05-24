@@ -36,6 +36,9 @@ jobs:
       test-command: cargo test
 ```
 
+Repos with stricter policies can override the quality-gate commands, or pass an
+empty string to disable a command.
+
 ## Layout
 
 The reusable workflow is intentionally small orchestration glue. The reusable

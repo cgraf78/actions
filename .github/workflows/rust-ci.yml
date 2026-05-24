@@ -27,7 +27,7 @@ on:
         description: Documentation command for the Ubuntu quality gate. Empty disables it.
         required: false
         type: string
-        default: RUSTDOCFLAGS='-D missing-docs' cargo doc --no-deps
+        default: cargo doc --no-deps
 
 permissions:
   contents: read
