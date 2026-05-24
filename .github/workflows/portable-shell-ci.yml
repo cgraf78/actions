@@ -28,6 +28,9 @@ permissions:
 
 jobs:
   rust:
+    # Rust checks stay as a separate job so repos with mixed shell/Rust surfaces
+    # can fail fast on language-level issues without multiplying those checks
+    # across every distro in the portability matrix.
     if: inputs.rust-checks
     runs-on: ubuntu-latest
     name: Rust
@@ -138,6 +141,9 @@ jobs:
           dnf_pkgs=
           apk_pkgs=
 
+          # Profiles are the shared contract for normal repos. Callers describe
+          # capabilities they need; this workflow owns the distro-specific
+          # package names so every repo does not grow its own copy of them.
           if has_profile base; then
             add_pkg brew_pkgs "bash"
             add_pkg apt_pkgs "bash git curl ca-certificates"
@@ -258,6 +264,10 @@ jobs:
         run: |
           set -eu
 
+          # checkrun has a broader formatting/toolchain surface than the small
+          # shell tools. Keep that bootstrap centralized here so checkrun's
+          # caller workflow stays declarative, but do not make every repo pay
+          # for these packages.
           sudo_if_available() {
             if command -v sudo >/dev/null 2>&1; then
               sudo "$@"
@@ -327,6 +337,10 @@ jobs:
         run: |
           set -eu
 
+          # Dotfiles CI intentionally installs only this small package set from
+          # the workflow. The behavior under test is that dot update/shdeps can
+          # install the real toolchain itself, so do not replace this with the
+          # broader generic profiles.
           case "$MATRIX_NAME" in
             macOS)
               brew install bash
@@ -447,6 +461,9 @@ jobs:
         if: inputs.setup == 'dotfiles'
         shell: bash
         run: |
+          # Dotfiles bootstraps private shdeps and ds checkouts during CI. Use
+          # host aliases so each dependency can use a separate deploy key while
+          # preserving normal git@github.com-style clone URLs in the config.
           missing=()
           [[ -n "${SHDEPS_DEPLOY_KEY:-}" ]] || missing+=(SHDEPS_DEPLOY_KEY)
           [[ -n "${DS_DEPLOY_KEY:-}" ]] || missing+=(DS_DEPLOY_KEY)
@@ -514,6 +531,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MATRIX_NAME: ${{ matrix.name }}
         run: |
+          # Retry the network-heavy bootstrap path. Once dot update installs
+          # mise, explicitly verify the tools that later dotfiles checks rely on
+          # so a partial bootstrap failure is reported at the source.
           retry() {
             local attempt rc delay
             for attempt in 1 2 3; do
@@ -566,4 +586,7 @@ jobs:
         shell: bash
         env:
           TEST_COMMAND: ${{ inputs.test-command }}
+        # Keep the caller-provided command out of the run template. Passing it
+        # through the environment avoids GitHub expression template injection
+        # while still letting each repo own its test entrypoint.
         run: bash -lc "$TEST_COMMAND"
