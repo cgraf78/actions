@@ -1,0 +1,41 @@
+name: Select platform matrix
+description: Return the shared portable OS matrix used by shell, Rust, C++, and other CI workflows.
+
+inputs:
+  matrix-set:
+    description: Platform matrix to return. Supported values are core and full.
+    required: true
+
+outputs:
+  matrix:
+    description: JSON matrix object for GitHub Actions strategy.matrix.
+    value: ${{ steps.select.outputs.matrix }}
+
+runs:
+  using: composite
+  steps:
+    - name: Select matrix
+      id: select
+      shell: bash
+      env:
+        MATRIX_SET: ${{ inputs.matrix-set }}
+      run: |
+        set -euo pipefail
+
+        # This is the shared OS policy for portable repos. Shell CI uses it
+        # today, and Rust or other future repo families should consume this
+        # same action instead of copying platform JSON into another workflow.
+        case "$MATRIX_SET" in
+          core)
+            matrix='{"include":[{"name":"macOS","runner":"macos-latest"},{"name":"CentOS Stream","runner":"ubuntu-latest","container":"quay.io/centos/centos:latest"},{"name":"Arch","runner":"ubuntu-latest","container":"archlinux:latest"},{"name":"Debian","runner":"ubuntu-latest","container":"debian:stable"}]}'
+            ;;
+          full)
+            matrix='{"include":[{"name":"macOS","runner":"macos-latest"},{"name":"CentOS Stream","runner":"ubuntu-latest","container":"quay.io/centos/centos:latest"},{"name":"Arch","runner":"ubuntu-latest","container":"archlinux:latest"},{"name":"Debian","runner":"ubuntu-latest","container":"debian:stable"},{"name":"Ubuntu","runner":"ubuntu-latest"},{"name":"WSL","runner":"ubuntu-latest"},{"name":"Fedora","runner":"ubuntu-latest","container":"fedora:latest"},{"name":"Alpine","runner":"ubuntu-latest","container":"alpine:latest"}]}'
+            ;;
+          *)
+            echo "unsupported matrix set: $MATRIX_SET" >&2
+            exit 2
+            ;;
+        esac
+
+        echo "matrix=$matrix" >> "$GITHUB_OUTPUT"

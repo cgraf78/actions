@@ -3,8 +3,8 @@ name: Portable Shell Test Job
 on:
   workflow_call:
     inputs:
-      matrix-json:
-        description: JSON object containing the matrix include list for this run.
+      matrix-set:
+        description: Platform matrix to run. Supported values are core and full.
         required: true
         type: string
       profiles:
@@ -33,12 +33,27 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  select-platforms:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.platforms.outputs.matrix }}
+    steps:
+      - name: Select platform matrix
+        id: platforms
+        # This neutral action is the OS-matrix source of truth. Future Rust,
+        # C++, or other reusable workflows should call the same action, then
+        # run language-specific setup/tests against the returned matrix.
+        uses: cgraf78/actions/.github/actions/platform-matrix@main # zizmor: ignore[unpinned-uses]
+        with:
+          matrix-set: ${{ inputs.matrix-set }}
+
+  platform:
+    needs: select-platforms
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container || '' }}
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(inputs.matrix-json) }}
+      matrix: ${{ fromJSON(needs.select-platforms.outputs.matrix) }}
 
     name: ${{ matrix.name }}
     steps:

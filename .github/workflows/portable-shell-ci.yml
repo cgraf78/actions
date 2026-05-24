@@ -17,11 +17,6 @@ on:
         description: Command to run after checkout and setup.
         required: true
         type: string
-      rust-checks:
-        description: Run the standard Rust formatting, linting, test, build, and docs job.
-        required: false
-        type: boolean
-        default: false
     secrets:
       DS_DEPLOY_KEY:
         description: Dotfiles-only deploy key for the private ds dependency.
@@ -34,60 +29,17 @@ permissions:
   contents: read
 
 jobs:
-  rust:
-    # Keep Rust checks out of the distro matrix. They validate the Rust surface
-    # once, while the test job below validates shell portability across OSes.
-    if: inputs.rust-checks
-    runs-on: ubuntu-latest
-    name: Rust
-    steps:
-      # actions/checkout v4.2.2
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          persist-credentials: false
-
-      - name: Install Rust components
-        run: rustup component add rustfmt clippy
-
-      - name: Check formatting
-        run: cargo fmt --check
-
-      - name: Run Clippy
-        run: cargo clippy --all-targets -- -D warnings
-
-      - name: Run Rust tests
-        run: cargo test
-
-      - name: Build release binary
-        run: cargo build --release
-
-      - name: Check Rust docs
-        run: RUSTDOCFLAGS='-D missing-docs' cargo doc --no-deps
-
-  test:
-    # Push/PR runs cover the high-signal platform set. This keeps feedback
-    # cheap while still checking macOS plus representative container distros.
-    if: github.event_name == 'push' || github.event_name == 'pull_request'
+  platforms:
+    name: Platforms
+    # Push/PR runs cover the high-signal platform set. Scheduled/manual runs
+    # use the full matrix for broader drift coverage. Keeping this as one job
+    # avoids GitHub showing a skipped "full matrix" job on every normal push.
     uses: cgraf78/actions/.github/workflows/portable-shell-test-job.yml@main # zizmor: ignore[unpinned-uses]
     secrets:
       DS_DEPLOY_KEY: ${{ secrets.DS_DEPLOY_KEY }}
       SHDEPS_DEPLOY_KEY: ${{ secrets.SHDEPS_DEPLOY_KEY }}
     with:
-      matrix-json: '{"include":[{"name":"macOS","runner":"macos-latest"},{"name":"CentOS Stream","runner":"ubuntu-latest","container":"quay.io/centos/centos:latest"},{"name":"Arch","runner":"ubuntu-latest","container":"archlinux:latest"},{"name":"Debian","runner":"ubuntu-latest","container":"debian:stable"}]}'
-      profiles: ${{ inputs.profiles }}
-      setup: ${{ inputs.setup }}
-      test-command: ${{ inputs.test-command }}
-
-  test-full:
-    # Scheduled/manual runs add the lower-priority drift coverage: hosted
-    # Ubuntu, simulated WSL, Fedora, and Alpine.
-    if: github.event_name != 'push' && github.event_name != 'pull_request'
-    uses: cgraf78/actions/.github/workflows/portable-shell-test-job.yml@main # zizmor: ignore[unpinned-uses]
-    secrets:
-      DS_DEPLOY_KEY: ${{ secrets.DS_DEPLOY_KEY }}
-      SHDEPS_DEPLOY_KEY: ${{ secrets.SHDEPS_DEPLOY_KEY }}
-    with:
-      matrix-json: '{"include":[{"name":"macOS","runner":"macos-latest"},{"name":"CentOS Stream","runner":"ubuntu-latest","container":"quay.io/centos/centos:latest"},{"name":"Arch","runner":"ubuntu-latest","container":"archlinux:latest"},{"name":"Debian","runner":"ubuntu-latest","container":"debian:stable"},{"name":"Ubuntu","runner":"ubuntu-latest"},{"name":"WSL","runner":"ubuntu-latest"},{"name":"Fedora","runner":"ubuntu-latest","container":"fedora:latest"},{"name":"Alpine","runner":"ubuntu-latest","container":"alpine:latest"}]}'
+      matrix-set: ${{ (github.event_name == 'push' || github.event_name == 'pull_request') && 'core' || 'full' }}
       profiles: ${{ inputs.profiles }}
       setup: ${{ inputs.setup }}
       test-command: ${{ inputs.test-command }}
