@@ -1,0 +1,39 @@
+name: Bash 3.2 CI
+
+on:
+  workflow_call:
+    inputs:
+      command:
+        description: Command to run under stock macOS Bash 3.2 after checkout.
+        required: true
+        type: string
+    secrets:
+      DEPENDENCY_GH_TOKEN:
+        description: Optional GitHub token exposed to caller commands as GH_TOKEN and GITHUB_TOKEN for private dependency downloads or rate-limit avoidance.
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: macOS
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Run Bash 3.2 smoke
+        shell: /bin/bash {0}
+        env:
+          BASH32_COMMAND: ${{ inputs.command }}
+          GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+        # Keep this as a separate reusable workflow instead of an optional job in
+        # shell-ci. GitHub shows skipped reusable-workflow jobs in every caller,
+        # so splitting the contract keeps normal shell repos visually clean while
+        # preserving an explicit opt-in for installer/bootstrap compatibility.
+        run: |
+          /bin/bash --version
+          eval "$BASH32_COMMAND"

@@ -22,11 +22,6 @@ on:
         description: Command to run after checkout and setup.
         required: true
         type: string
-      bash32-command:
-        description: Optional command to run under stock macOS Bash 3.2 after checkout.
-        required: false
-        type: string
-        default: ""
     secrets:
       DEPENDENCY_GH_TOKEN:
         description: Optional GitHub token exposed to caller commands as GH_TOKEN and GITHUB_TOKEN for private dependency downloads or rate-limit avoidance.
@@ -57,25 +52,3 @@ jobs:
       profiles: ${{ inputs.profiles }}
       setup: ${{ inputs.setup }}
       test-command: ${{ inputs.test-command }}
-
-  bash32:
-    if: inputs.bash32-command != ''
-    name: Bash 3.2 / macOS
-    runs-on: macos-15-intel
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      - name: Run Bash 3.2 smoke
-        shell: /bin/bash {0}
-        env:
-          BASH32_COMMAND: ${{ inputs.bash32-command }}
-          GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
-        # This opt-in job is for installer/bootstrap compatibility checks that
-        # specifically need Apple's system Bash. Normal shell tests should stay
-        # in the platform matrix, which uses each runner's preferred Bash.
-        run: |
-          /bin/bash --version
-          eval "$BASH32_COMMAND"

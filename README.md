@@ -27,9 +27,21 @@ jobs:
 ```
 
 Optional `matrix-set` can force `core` or `full`; the default `auto` keeps
-push/PR runs on `core` and scheduled/manual runs on `full`. Optional
-`bash32-command` adds a macOS system Bash 3.2 smoke job for installer/bootstrap
-compatibility checks.
+push/PR runs on `core` and scheduled/manual runs on `full`.
+
+### `bash32-ci.yml`
+
+Runs one explicit macOS job under Apple's stock `/bin/bash` for repos that need
+installer or bootstrap compatibility coverage. Keep this separate from
+`shell-ci.yml` so ordinary shell repos do not show a skipped Bash 3.2 job.
+
+```yaml
+jobs:
+  bash32:
+    uses: cgraf78/actions/.github/workflows/bash32-ci.yml@main
+    with:
+      command: /bin/bash scripts/smoke-install-bash32.sh
+```
 
 ### `rust-ci.yml`
 
@@ -84,6 +96,8 @@ steps are split into first-party composite actions:
 
 - `.github/workflows/shell-ci.yml` owns shell CI event policy. This is the
   public workflow shell-tool repos call.
+- `.github/workflows/bash32-ci.yml` owns the opt-in macOS system Bash smoke
+  contract for installer/bootstrap scripts that still support Bash 3.2.
 - `.github/workflows/_shell-platforms.yml` is the internal shell worker. GitHub
   requires reusable workflows to live under `.github/workflows`, so this cannot
   live beside the composite actions under `.github/actions`.
