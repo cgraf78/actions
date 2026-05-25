@@ -4,6 +4,11 @@ Reusable GitHub Actions workflows and action helpers for `cgraf78` repos.
 
 ## Workflows
 
+For the full caller-facing API, see
+[`docs/workflow-api.md`](docs/workflow-api.md). The README gives quick-start
+examples; the docs file is the source of truth for inputs, secrets, matrix
+policy, and command-hook contracts.
+
 ### `shell-ci.yml`
 
 Runs shell-tool test suites across the shared platform matrix. Push and pull
@@ -21,6 +26,11 @@ jobs:
       test-command: test/example-test
 ```
 
+Optional `matrix-set` can force `core` or `full`; the default `auto` keeps
+push/PR runs on `core` and scheduled/manual runs on `full`. Optional
+`bash32-command` adds a macOS system Bash 3.2 smoke job for installer/bootstrap
+compatibility checks.
+
 ### `rust-ci.yml`
 
 Runs Rust test suites across the same shared platform matrix. Push and pull
@@ -33,13 +43,16 @@ jobs:
   test:
     uses: cgraf78/actions/.github/workflows/rust-ci.yml@main
     with:
-      test-command: cargo test
+      test-command: cargo test --locked
 ```
 
 Repos with stricter policies can override the quality-gate commands, or pass an
 empty string to disable a command. Repos that need generated files, extra
 tooling, or a nested crate path can use `setup-command` and
-`working-directory` without forking the shared workflow.
+`working-directory` without forking the shared workflow. Binary repos can use
+`build-command`, `package-smoke-setup-command`, and `package-smoke-command` to
+validate release artifacts while keeping package layout and smoke assertions in
+the product repository.
 
 ### `rust-release.yml`
 
@@ -58,6 +71,11 @@ jobs:
       package-command: scripts/package-release.sh "$RUST_TARGET" "$ASSET_PLATFORM"
       smoke-command: scripts/smoke-release.sh "$ASSET_PLATFORM"
 ```
+
+Callers with non-Cargo release identity can provide `tag-command` to print the
+exact expected Git tag. The release matrix exposes Rust compiler triples through
+`RUST_TARGET` and installer-facing archive labels through `ASSET_PLATFORM`; use
+the latter for public asset names.
 
 ## Layout
 

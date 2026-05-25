@@ -30,6 +30,9 @@ on:
         required: true
         type: string
     secrets:
+      DEPENDENCY_GH_TOKEN:
+        description: Optional GitHub token exposed to caller commands as GH_TOKEN and GITHUB_TOKEN for private dependency downloads or rate-limit avoidance.
+        required: false
       DS_DEPLOY_KEY:
         description: Dotfiles-only deploy key for the private ds dependency.
         required: false
@@ -116,6 +119,7 @@ jobs:
         # checkrun's historical workflow skipped it there too.
         uses: cgraf78/actions/.github/actions/checkrun-dev-tools@main # zizmor: ignore[unpinned-uses]
         env:
+          GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
 
       - name: Cache dotfiles dependency installs
@@ -146,12 +150,15 @@ jobs:
         if: inputs.setup == 'dotfiles'
         uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@main # zizmor: ignore[unpinned-uses]
         env:
+          GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
           MATRIX_NAME: ${{ matrix.name }}
 
       - name: Run tests
         shell: bash
         env:
+          GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
           TEST_COMMAND: ${{ inputs.test-command }}
         # Passing the caller-owned command through env avoids GitHub expression
         # template injection while keeping each repo in charge of its test script.

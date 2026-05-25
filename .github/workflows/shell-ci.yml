@@ -8,6 +8,11 @@ on:
         required: false
         type: string
         default: ""
+      matrix-set:
+        description: Platform matrix to run. Supported values are auto, core, and full.
+        required: false
+        type: string
+        default: auto
       setup:
         description: Named setup mode. Supported values are none, checkrun, and dotfiles.
         required: false
@@ -17,7 +22,15 @@ on:
         description: Command to run after checkout and setup.
         required: true
         type: string
+      bash32-command:
+        description: Optional command to run under stock macOS Bash 3.2 after checkout.
+        required: false
+        type: string
+        default: ""
     secrets:
+      DEPENDENCY_GH_TOKEN:
+        description: Optional GitHub token exposed to caller commands as GH_TOKEN and GITHUB_TOKEN for private dependency downloads or rate-limit avoidance.
+        required: false
       DS_DEPLOY_KEY:
         description: Dotfiles-only deploy key for the private ds dependency.
         required: false
@@ -36,10 +49,33 @@ jobs:
     # avoids GitHub showing a skipped "full matrix" job on every normal push.
     uses: cgraf78/actions/.github/workflows/_shell-platforms.yml@main # zizmor: ignore[unpinned-uses]
     secrets:
+      DEPENDENCY_GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
       DS_DEPLOY_KEY: ${{ secrets.DS_DEPLOY_KEY }}
       SHDEPS_DEPLOY_KEY: ${{ secrets.SHDEPS_DEPLOY_KEY }}
     with:
-      matrix-set: ${{ (github.event_name == 'push' || github.event_name == 'pull_request') && 'core' || 'full' }}
+      matrix-set: ${{ inputs.matrix-set != 'auto' && inputs.matrix-set || ((github.event_name == 'push' || github.event_name == 'pull_request') && 'core' || 'full') }}
       profiles: ${{ inputs.profiles }}
       setup: ${{ inputs.setup }}
       test-command: ${{ inputs.test-command }}
+
+  bash32:
+    if: inputs.bash32-command != ''
+    name: Bash 3.2 / macOS
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Run Bash 3.2 smoke
+        shell: /bin/bash {0}
+        env:
+          BASH32_COMMAND: ${{ inputs.bash32-command }}
+          GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+        # This opt-in job is for installer/bootstrap compatibility checks that
+        # specifically need Apple's system Bash. Normal shell tests should stay
+        # in the platform matrix, which uses each runner's preferred Bash.
+        run: |
+          /bin/bash --version
+          eval "$BASH32_COMMAND"
