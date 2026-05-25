@@ -60,13 +60,12 @@ Do not use it for release upload permissions; `rust-release.yml` uses
 
 ### Inputs
 
-| Input            | Default  | Contract                                                                                         |
-| ---------------- | -------- | ------------------------------------------------------------------------------------------------ |
-| `profiles`       | `""`     | Comma-separated OS prerequisite profiles consumed by `shell-ci-prereqs`.                         |
-| `matrix-set`     | `auto`   | Platform matrix policy. See [Matrix Sets](#matrix-sets).                                         |
-| `setup`          | `none`   | Named setup mode. Supported values are `none`, `checkrun`, and `dotfiles`.                       |
-| `test-command`   | required | Caller-owned Bash command run on every selected platform.                                        |
-| `bash32-command` | `""`     | Optional caller-owned command run on `macos-15-intel` under `/bin/bash`. Empty disables the job. |
+| Input          | Default  | Contract                                                                   |
+| -------------- | -------- | -------------------------------------------------------------------------- |
+| `profiles`     | `""`     | Comma-separated OS prerequisite profiles consumed by `shell-ci-prereqs`.   |
+| `matrix-set`   | `auto`   | Platform matrix policy. See [Matrix Sets](#matrix-sets).                   |
+| `setup`        | `none`   | Named setup mode. Supported values are `none`, `checkrun`, and `dotfiles`. |
+| `test-command` | required | Caller-owned Bash command run on every selected platform.                  |
 
 ### Secrets
 
@@ -76,12 +75,37 @@ Do not use it for release upload permissions; `rust-release.yml` uses
 | `DS_DEPLOY_KEY`       | Dotfiles-only deploy key. Preserved for the `dotfiles` setup mode.          |
 | `SHDEPS_DEPLOY_KEY`   | Dotfiles-only deploy key. Preserved for the `dotfiles` setup mode.          |
 
-### Bash 3.2 Smoke
+## `bash32-ci.yml`
 
-`bash32-command` is an opt-in compatibility check for bootstrap or installer
-scripts that claim support for Apple's stock Bash. It is not a replacement for
-the platform matrix. Normal test suites should stay in `test-command` so they run
-on every selected OS.
+`bash32-ci.yml` runs a single macOS job under Apple's stock `/bin/bash`. Use it
+for installer or bootstrap scripts that intentionally support Bash 3.2. Do not
+use it for normal shell test suites; those belong in `shell-ci.yml` so they run
+across the shared platform matrix.
+
+This workflow is intentionally separate from `shell-ci.yml`. GitHub displays
+job-level skips from reusable workflows in every caller, so an optional Bash 3.2
+job inside `shell-ci.yml` makes normal repos show irrelevant skipped macOS
+checks. Separate opt-in keeps the UI and status surface aligned with what each
+repo actually tests.
+
+### Inputs
+
+| Input     | Default  | Contract                                                             |
+| --------- | -------- | -------------------------------------------------------------------- |
+| `command` | required | Caller-owned command run after checkout with `shell: /bin/bash {0}`. |
+
+### Secrets
+
+| Secret                | Contract                                                                    |
+| --------------------- | --------------------------------------------------------------------------- |
+| `DEPENDENCY_GH_TOKEN` | Optional token exposed to caller commands as `GH_TOKEN` and `GITHUB_TOKEN`. |
+
+### Bash 3.2 Contract
+
+The workflow prints `/bin/bash --version` before evaluating `command`. Callers
+should invoke their script with `/bin/bash` explicitly when the script is not
+directly executable or when the test is meant to verify the script under the
+stock shell regardless of its shebang.
 
 ## `rust-ci.yml`
 
