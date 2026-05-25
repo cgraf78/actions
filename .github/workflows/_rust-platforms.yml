@@ -32,7 +32,11 @@ on:
         description: Rust test command to run on every selected platform.
         required: false
         type: string
-        default: cargo test
+        default: cargo test --locked
+    secrets:
+      DEPENDENCY_GH_TOKEN:
+        description: Optional GitHub token exposed to caller commands as GH_TOKEN and GITHUB_TOKEN for private dependency downloads or rate-limit avoidance.
+        required: false
 
 permissions:
   contents: read
@@ -94,6 +98,8 @@ jobs:
         if: inputs.setup-command != ''
         shell: bash
         env:
+          GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
           MATRIX_NAME: ${{ matrix.name }}
           SETUP_COMMAND: ${{ inputs.setup-command }}
           WORKING_DIRECTORY: ${{ inputs.working-directory }}
@@ -106,6 +112,8 @@ jobs:
       - name: Run Rust tests
         shell: bash
         env:
+          GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
           MATRIX_NAME: ${{ matrix.name }}
           TEST_COMMAND: ${{ inputs.test-command }}
           WORKING_DIRECTORY: ${{ inputs.working-directory }}

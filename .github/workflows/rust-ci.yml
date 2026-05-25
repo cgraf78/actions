@@ -8,6 +8,11 @@ on:
         required: false
         type: string
         default: stable
+      matrix-set:
+        description: Platform matrix to run. Supported values are auto, core, and full.
+        required: false
+        type: string
+        default: auto
       working-directory:
         description: Directory where cargo commands should run.
         required: false
@@ -22,7 +27,7 @@ on:
         description: Rust test command to run on every selected platform.
         required: false
         type: string
-        default: cargo test
+        default: cargo test --locked
       fmt-command:
         description: Formatting command for the Ubuntu quality gate. Empty disables it.
         required: false
@@ -32,12 +37,31 @@ on:
         description: Clippy command for the Ubuntu quality gate. Empty disables it.
         required: false
         type: string
-        default: cargo clippy --all-targets --all-features -- -D warnings
+        default: cargo clippy --locked --all-targets --all-features -- -D warnings
+      build-command:
+        description: Build command for the Ubuntu quality gate. Empty disables it.
+        required: false
+        type: string
+        default: cargo build --release --locked
       doc-command:
         description: Documentation command for the Ubuntu quality gate. Empty disables it.
         required: false
         type: string
-        default: cargo doc --no-deps
+        default: cargo doc --locked --no-deps
+      package-smoke-setup-command:
+        description: Optional setup command to run before package-smoke-command on the Ubuntu quality gate.
+        required: false
+        type: string
+        default: ""
+      package-smoke-command:
+        description: Optional command that builds and validates a representative release artifact on the Ubuntu quality gate.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      DEPENDENCY_GH_TOKEN:
+        description: Optional GitHub token exposed to caller commands as GH_TOKEN and GITHUB_TOKEN for private dependency downloads or rate-limit avoidance.
+        required: false
 
 permissions:
   contents: read
@@ -51,8 +75,10 @@ jobs:
     # Push/PR runs use the shared high-signal platform subset. Scheduled/manual
     # runs expand to the full matrix, matching shell CI's event policy.
     uses: cgraf78/actions/.github/workflows/_rust-platforms.yml@main # zizmor: ignore[unpinned-uses]
+    secrets:
+      DEPENDENCY_GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
     with:
-      matrix-set: ${{ (github.event_name == 'push' || github.event_name == 'pull_request') && 'core' || 'full' }}
+      matrix-set: ${{ inputs.matrix-set != 'auto' && inputs.matrix-set || ((github.event_name == 'push' || github.event_name == 'pull_request') && 'core' || 'full') }}
       rust-toolchain: ${{ inputs.rust-toolchain }}
       working-directory: ${{ inputs.working-directory }}
       setup-command: ${{ inputs.setup-command }}
@@ -79,6 +105,8 @@ jobs:
         if: inputs.setup-command != ''
         shell: bash
         env:
+          GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
           MATRIX_NAME: Ubuntu
           SETUP_COMMAND: ${{ inputs.setup-command }}
           WORKING_DIRECTORY: ${{ inputs.working-directory }}
@@ -93,6 +121,8 @@ jobs:
         shell: bash
         env:
           FMT_COMMAND: ${{ inputs.fmt-command }}
+          GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
           WORKING_DIRECTORY: ${{ inputs.working-directory }}
         run: |
           cd "$WORKING_DIRECTORY"
@@ -103,16 +133,65 @@ jobs:
         shell: bash
         env:
           CLIPPY_COMMAND: ${{ inputs.clippy-command }}
+          GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
           WORKING_DIRECTORY: ${{ inputs.working-directory }}
         run: |
           cd "$WORKING_DIRECTORY"
           eval "$CLIPPY_COMMAND"
+
+      - name: Build release binary
+        if: inputs.build-command != ''
+        shell: bash
+        env:
+          BUILD_COMMAND: ${{ inputs.build-command }}
+          GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        # Build is a separate quality gate from tests because binary repos need
+        # to prove the optimized artifact compiles even when unit tests use the
+        # debug profile. Callers still own the exact cargo invocation.
+        run: |
+          cd "$WORKING_DIRECTORY"
+          eval "$BUILD_COMMAND"
+
+      - name: Prepare package smoke
+        if: inputs.package-smoke-command != '' && inputs.package-smoke-setup-command != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          PACKAGE_SMOKE_SETUP_COMMAND: ${{ inputs.package-smoke-setup-command }}
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        # Keep package-specific prerequisites caller-owned. The shared workflow
+        # provides a stable execution point but does not know whether a repo
+        # needs musl tools, signing tools, fixture data, or nothing at all.
+        run: |
+          cd "$WORKING_DIRECTORY"
+          eval "$PACKAGE_SMOKE_SETUP_COMMAND"
+
+      - name: Smoke release package
+        if: inputs.package-smoke-command != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          PACKAGE_SMOKE_COMMAND: ${{ inputs.package-smoke-command }}
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        # This is deliberately a command hook rather than a shared packager.
+        # Archive layout, binary names, metadata, signatures, and install smoke
+        # behavior are product contracts owned by the caller repository.
+        run: |
+          cd "$WORKING_DIRECTORY"
+          eval "$PACKAGE_SMOKE_COMMAND"
 
       - name: Check public docs
         if: inputs.doc-command != ''
         shell: bash
         env:
           DOC_COMMAND: ${{ inputs.doc-command }}
+          GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
           WORKING_DIRECTORY: ${{ inputs.working-directory }}
         run: |-
           cd "$WORKING_DIRECTORY"
