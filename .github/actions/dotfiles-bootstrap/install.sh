@@ -24,8 +24,9 @@ retry() {
 
 # Retry the network-heavy bootstrap path. Once dot update installs mise,
 # explicitly verify the tools that later dotfiles checks rely on so a partial
-# bootstrap failure is reported at the source.
-retry .local/bin/dot update --skip-pull --quiet
+# bootstrap failure is reported at the source. Keep CI setup non-quiet: the
+# dependency logs are the evidence we need when bootstrap behavior regresses.
+retry .local/bin/dot update --skip-pull
 
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
 if command -v mise >/dev/null 2>&1 && mise --version >/dev/null 2>&1; then
