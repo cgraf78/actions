@@ -8,9 +8,10 @@ retry() {
   for attempt in 1 2 3; do
     if "$@"; then
       return 0
+    else
+      rc=$?
     fi
 
-    rc=$?
     if [ "$attempt" -eq 3 ]; then
       return "$rc"
     fi
@@ -57,4 +58,3 @@ fi
   echo "$HOME/.local/bin"
   echo "$HOME/.local/share/mise/shims"
 } >>"$GITHUB_PATH"
-
