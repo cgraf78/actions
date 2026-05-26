@@ -29,7 +29,12 @@ retry() {
 retry .local/bin/dot update --skip-pull
 
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
-if command -v mise >/dev/null 2>&1 && mise --version >/dev/null 2>&1; then
+if [ "Alpine" = "${MATRIX_NAME:-}" ]; then
+  # Alpine is a musl smoke target for dotfiles shell behavior. Some global mise
+  # tools, such as zizmor, only publish glibc Linux artifacts, so the full
+  # editor/linter toolset is intentionally not enforced there.
+  echo "full mise tool verification is skipped on Alpine" >&2
+elif command -v mise >/dev/null 2>&1 && mise --version >/dev/null 2>&1; then
   mise trust "$HOME/.config/mise/config.toml" >/dev/null || true
   if [ -z "${MISE_GITHUB_TOKEN:-}" ] && [ -n "${GITHUB_TOKEN:-}" ]; then
     # Dotfiles' mise config installs several GitHub-hosted tools. The token
@@ -46,10 +51,6 @@ if command -v mise >/dev/null 2>&1 && mise --version >/dev/null 2>&1; then
       exit 1
     fi
   done
-elif [ "Alpine" = "${MATRIX_NAME:-}" ]; then
-  # The current dotfiles bootstrap cannot provide mise on Alpine, but Alpine is
-  # still useful for the shell portions of the test suite.
-  echo "mise is unavailable on Alpine; skipping explicit mise install verification" >&2
 else
   echo "mise missing or unusable after dot update" >&2
   exit 1
