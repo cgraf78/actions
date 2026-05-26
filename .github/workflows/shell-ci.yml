@@ -29,9 +29,6 @@ on:
       DS_DEPLOY_KEY:
         description: Dotfiles-only deploy key for the private ds dependency.
         required: false
-      SHDEPS_DEPLOY_KEY:
-        description: Dotfiles-only deploy key for the private shdeps dependency.
-        required: false
 
 permissions:
   contents: read
@@ -46,7 +43,6 @@ jobs:
     secrets:
       DEPENDENCY_GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
       DS_DEPLOY_KEY: ${{ secrets.DS_DEPLOY_KEY }}
-      SHDEPS_DEPLOY_KEY: ${{ secrets.SHDEPS_DEPLOY_KEY }}
     with:
       matrix-set: ${{ inputs.matrix-set != 'auto' && inputs.matrix-set || ((github.event_name == 'push' || github.event_name == 'pull_request') && 'core' || 'full') }}
       profiles: ${{ inputs.profiles }}

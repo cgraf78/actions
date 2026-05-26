@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Dotfiles bootstraps private shdeps and ds checkouts during CI. Host aliases
-# let each dependency use a separate deploy key while preserving normal
-# git@github.com-style clone URLs in dotfiles config.
+# Dotfiles still bootstraps some private dependency checkouts during CI. Keep
+# those deploy keys isolated from the public shdeps bootstrap path so shdeps
+# installs exercise the same release/HTTPS flow that fleet machines use.
 missing=()
-[[ -n "${SHDEPS_DEPLOY_KEY:-}" ]] || missing+=(SHDEPS_DEPLOY_KEY)
 [[ -n "${DS_DEPLOY_KEY:-}" ]] || missing+=(DS_DEPLOY_KEY)
 if [[ "${#missing[@]}" -gt 0 ]]; then
   printf '::error::Missing Actions secret(s): %s\n' "${missing[*]}"
@@ -19,9 +18,8 @@ rm -rf "$ssh_dir"
 mkdir -p "$ssh_dir"
 chmod 700 "$ssh_dir"
 
-printf '%s\n' "$SHDEPS_DEPLOY_KEY" >"$ssh_dir/shdeps"
 printf '%s\n' "$DS_DEPLOY_KEY" >"$ssh_dir/ds"
-chmod 600 "$ssh_dir/shdeps" "$ssh_dir/ds"
+chmod 600 "$ssh_dir/ds"
 
 known_hosts="$ssh_dir/known_hosts"
 # Prefer dotfiles' checked-in GitHub host key if present. Falling back to
@@ -40,18 +38,10 @@ fi
 chmod 600 "$known_hosts"
 
 ssh_config="$ssh_dir/config"
-# shdeps uses normal SSH clone URLs. These host aliases let Git route two
-# private dependencies through two different deploy keys without changing the
+# Private dependencies use normal SSH clone URLs. The host alias lets Git route
+# the private ds checkout through its deploy key without changing the
 # higher-level dotfiles/shdeps config format.
 cat >"$ssh_config" <<EOF
-Host github.com-shdeps
-  HostName github.com
-  User git
-  IdentityFile $ssh_dir/shdeps
-  IdentitiesOnly yes
-  UserKnownHostsFile $known_hosts
-  StrictHostKeyChecking yes
-
 Host github.com-ds
   HostName github.com
   User git
@@ -64,9 +54,7 @@ chmod 600 "$ssh_config"
 
 {
   # These environment variables are part of dotfiles' bootstrap contract:
-  # dot update/shdeps will use them to clone private dependencies during CI.
+  # dot update exposes the ds override to shdeps during CI dependency install.
   echo "GIT_SSH_COMMAND=ssh -F $ssh_config"
-  echo "SHDEPS_REPO=git@github.com-shdeps:cgraf78/shdeps.git"
   echo "SHDEPS_DS_REPO=git@github.com-ds:cgraf78/ds.git"
 } >>"$GITHUB_ENV"
-

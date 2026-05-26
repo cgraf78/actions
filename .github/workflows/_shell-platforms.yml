@@ -36,9 +36,6 @@ on:
       DS_DEPLOY_KEY:
         description: Dotfiles-only deploy key for the private ds dependency.
         required: false
-      SHDEPS_DEPLOY_KEY:
-        description: Dotfiles-only deploy key for the private shdeps dependency.
-        required: false
 
 permissions:
   contents: read
@@ -144,7 +141,6 @@ jobs:
         uses: cgraf78/actions/.github/actions/dotfiles-private-deps@main # zizmor: ignore[unpinned-uses]
         env:
           DS_DEPLOY_KEY: ${{ secrets.DS_DEPLOY_KEY }}
-          SHDEPS_DEPLOY_KEY: ${{ secrets.SHDEPS_DEPLOY_KEY }}
 
       - name: Bootstrap dotfiles dependencies
         if: inputs.setup == 'dotfiles'
