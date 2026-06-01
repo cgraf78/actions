@@ -20,6 +20,10 @@ has_profile() {
   esac
 }
 
+needs_centos_epel() {
+  has_profile shellcheck || has_profile neovim
+}
+
 add_pkg() {
   # Package lists are built from trusted profile metadata in profiles.sh, not
   # from caller-provided package names.
@@ -57,10 +61,9 @@ install_package_lists() {
       ;;
     CentOS* | Fedora)
       if [ -n "$dnf_pkgs" ]; then
-        if [ "$MATRIX_NAME" != "Fedora" ] && has_profile shellcheck; then
-          # ShellCheck is not in the base CentOS Stream repos. Enabling EPEL
-          # only when the caller asks for the shellcheck profile keeps the base
-          # profile small while making ds's CI expansion portable to CentOS.
+        if [ "$MATRIX_NAME" != "Fedora" ] && needs_centos_epel; then
+          # Keep the base image small, but enable EPEL for profiles whose dnf
+          # packages are not shipped in the base CentOS Stream repos.
           dnf install -y --allowerasing epel-release
         fi
         # Package lists are assembled by trusted profile names.
