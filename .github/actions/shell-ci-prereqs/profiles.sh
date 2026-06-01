@@ -56,8 +56,7 @@ install_profile_prereqs() {
     add_pkg brew_pkgs "neovim"
     add_pkg apt_pkgs "neovim"
     add_pkg arch_pkgs "neovim"
-    # CentOS Stream/Fedora intentionally skip Neovim to match the existing
-    # termnav workflow's lower-friction dnf dependency set.
+    add_pkg dnf_pkgs "neovim"
     add_pkg apk_pkgs "neovim"
   fi
   if has_profile tmux; then
