@@ -19,7 +19,10 @@ install_dotfiles_bootstrap_prereqs() {
       dnf install -y --allowerasing git curl sudo openssh-clients lsof nmap-ncat
       ;;
     Alpine)
-      apk add --no-cache git curl sudo bash coreutils shellcheck openssh-client lsof netcat-openbsd
+      apk add --no-cache git curl sudo bash coreutils shellcheck lua5.4 openssh-client lsof netcat-openbsd
+      # Dotfiles' Lua suite is a direct test contract. Alpine cannot run the
+      # bootstrapped glibc Neovim fallback, so provide the plain lua command.
+      ensure_lua_command
       ;;
     Ubuntu | WSL)
       # Hosted Ubuntu/WSL runners keep their default image packages. This
