@@ -131,7 +131,10 @@ steps are split into first-party composite actions:
   live beside the composite actions under `.github/actions`.
 - `.github/workflows/rust-ci.yml` owns Rust CI event policy. This is the public
   workflow Rust repos call.
-- `.github/workflows/termux-ci.yml` owns real Android/Termux runtime execution.
+- `.github/workflows/termux-ci.yml` owns the public real Android/Termux caller
+  contract.
+- `.github/workflows/_termux-ci.yml` is the internal worker that owns emulator
+  provisioning, sandbox transport, and runtime execution.
 - `.github/workflows/_rust-platforms.yml` is the internal Rust worker that runs
   cargo tests across the shared OS matrix.
 - `.github/workflows/rust-release.yml` owns standard Rust binary release

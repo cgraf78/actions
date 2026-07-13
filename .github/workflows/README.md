@@ -9,14 +9,16 @@ local organization.
 - `shell-ci.yml` runs shell project tests across the shared platform matrix.
 - `bash32-ci.yml` runs Bash 3.2 compatibility checks.
 - `rust-ci.yml` runs Rust checks, tests, docs, clippy, and builds.
-- `termux-ci.yml` runs caller commands inside the official Termux app on an
-  Android emulator.
+- `termux-ci.yml` is the stable caller contract for running commands inside the
+  official Termux app on an Android emulator.
 - `rust-release.yml` builds and publishes Rust release artifacts.
 
 ## Internal Workflows
 
 - `_shell-platforms.yml` and `_rust-platforms.yml` are shared implementation
-  workflows for the public CI entrypoints.
+  workflows for the public platform CI entrypoints.
+- `_termux-ci.yml` owns emulator provisioning, sandbox transport, and runtime
+  execution for the public Termux entrypoint.
 - `ci.yml` validates this repository's workflow and action definitions.
 
 Keep input names and behavior backward compatible for public reusable

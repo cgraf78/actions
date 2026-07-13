@@ -29,6 +29,7 @@ jobs:
         test "$PREFIX" = /data/data/com.termux/files/usr
         test -x "$PREFIX/bin/bash"
         test -f workflows/termux-ci.yml
+        test -f workflows/_termux-ci.yml
         test "$(.termux-ci/android-termux-smoke)" = 'Hello, world!'
         printf 'Termux %s on %s\n' "${TERMUX_VERSION:-unknown}" "$(uname -m)"
 
