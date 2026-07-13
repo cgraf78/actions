@@ -48,7 +48,8 @@ public workflow owns event-policy decisions.
 ### Dependency Token
 
 Public CI workflows accept optional secret `DEPENDENCY_GH_TOKEN`. When supplied,
-caller-owned commands receive it as both `GH_TOKEN` and `GITHUB_TOKEN`.
+caller-owned host commands receive it as both `GH_TOKEN` and `GITHUB_TOKEN`.
+Commands executed inside the Termux app sandbox do not receive this token.
 
 Use this for private dependency downloads or GitHub API rate-limit avoidance.
 Do not use it for release upload permissions; `rust-release.yml` uses
@@ -128,6 +129,7 @@ Ubuntu quality gate.
 | `package-smoke-command`       | `""`                                                                | Optional caller-owned command that builds and validates a representative release artifact. Empty disables the step. |
 | `android-package-smoke-command` | `""`                                                              | Optional caller-owned command that cross-builds and validates the Android aarch64 release artifact. Empty disables the job. |
 | `termux-command`              | `""`                                                                | Optional command run inside the official Termux app on an Android x86_64 emulator. Empty disables the job.           |
+| `termux-host-command`         | `""`                                                                | Optional host command that cross-builds artifacts copied into the Termux sandbox.                                    |
 
 ### Locked Defaults
 
@@ -168,8 +170,11 @@ with:
 ```
 
 Use `termux-command` for an independent runtime proof in a real Android app
-sandbox. It runs on x86_64 for hardware acceleration; keep the AArch64 package
-smoke enabled to validate the exact release architecture.
+sandbox. Pair it with `termux-host-command` to build an x86_64 Android artifact
+on the Ubuntu host; the shared workflow exports `RUST_TARGET=x86_64-linux-android`
+and `ASSET_PLATFORM=android-x86_64`, then copies the resulting checkout files
+into Termux. Keep the AArch64 package smoke enabled to validate the exact release
+architecture.
 
 ## `termux-ci.yml`
 
@@ -177,10 +182,18 @@ smoke enabled to validate the exact release architecture.
 emulator, copies the caller checkout to `$HOME/project`, and runs the caller's
 command under Termux Bash.
 
-| Input               | Default  | Contract                                                      |
-| ------------------- | -------- | ------------------------------------------------------------- |
-| `command`           | required | Bash command executed inside Termux.                          |
-| `working-directory` | `.`      | Checkout-relative directory used as the command's working dir. |
+| Input               | Default  | Contract                                                              |
+| ------------------- | -------- | --------------------------------------------------------------------- |
+| `command`           | required | Bash command executed inside Termux.                                  |
+| `host-command`      | `""`     | Optional command that prepares checkout artifacts on the Ubuntu host. |
+| `rust-toolchain`    | `""`     | Optional toolchain enabling the fixed x86_64 Android NDK host build.   |
+| `working-directory` | `.`      | Checkout-relative directory used by the host and Termux commands.     |
+
+### Secrets
+
+| Secret                | Contract                                                                       |
+| --------------------- | ------------------------------------------------------------------------------ |
+| `DEPENDENCY_GH_TOKEN` | Optional token exposed only to `host-command` as `GH_TOKEN` and `GITHUB_TOKEN`. |
 
 ## `rust-release.yml`
 

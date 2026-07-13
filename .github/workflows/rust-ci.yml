@@ -68,6 +68,11 @@ on:
         required: false
         type: string
         default: ""
+      termux-host-command:
+        description: Optional command that cross-builds artifacts for the Termux emulator.
+        required: false
+        type: string
+        default: ""
     secrets:
       DEPENDENCY_GH_TOKEN:
         description: Optional GitHub token exposed to caller commands as GH_TOKEN and GITHUB_TOKEN for private dependency downloads or rate-limit avoidance.
@@ -244,6 +249,10 @@ jobs:
     name: Termux runtime
     if: inputs.termux-command != ''
     uses: ./.github/workflows/termux-ci.yml
+    secrets:
+      DEPENDENCY_GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
     with:
       command: ${{ inputs.termux-command }}
+      host-command: ${{ inputs.termux-host-command }}
+      rust-toolchain: ${{ inputs.rust-toolchain }}
       working-directory: ${{ inputs.working-directory }}

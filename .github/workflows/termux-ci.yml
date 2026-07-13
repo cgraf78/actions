@@ -7,11 +7,25 @@ on:
         description: Bash command to execute inside the Termux app sandbox.
         required: true
         type: string
+      host-command:
+        description: Optional command that prepares checkout artifacts on the Ubuntu host.
+        required: false
+        type: string
+        default: ""
+      rust-toolchain:
+        description: Optional Rust toolchain for an x86_64 Android host build.
+        required: false
+        type: string
+        default: ""
       working-directory:
         description: Checkout-relative directory where the command should run.
         required: false
         type: string
         default: .
+    secrets:
+      DEPENDENCY_GH_TOKEN:
+        description: Optional GitHub token exposed to the host command.
+        required: false
 
 permissions:
   contents: read
@@ -25,6 +39,33 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+
+      - name: Install host Rust toolchain
+        if: inputs.host-command != '' && inputs.rust-toolchain != ''
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: ${{ inputs.rust-toolchain }}
+          targets: x86_64-linux-android
+
+      - name: Configure host Android NDK toolchain
+        if: inputs.host-command != '' && inputs.rust-toolchain != ''
+        uses: cgraf78/actions/.github/actions/android-rust-toolchain@438864f7da4781edb0d5e5468835169e52fd4b32
+        with:
+          rust-target: x86_64-linux-android
+
+      - name: Prepare host artifacts
+        if: inputs.host-command != ''
+        shell: bash
+        env:
+          ASSET_PLATFORM: android-x86_64
+          GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          HOST_COMMAND: ${{ inputs.host-command }}
+          RUST_TARGET: x86_64-linux-android
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        run: |
+          cd "$WORKING_DIRECTORY"
+          eval "$HOST_COMMAND"
 
       - name: Download official Termux APK
         shell: bash

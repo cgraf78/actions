@@ -15,11 +15,21 @@ jobs:
     uses: ./.github/workflows/termux-ci.yml
     with:
       working-directory: .github
+      rust-toolchain: stable
+      host-command: |
+        crate="$RUNNER_TEMP/android-termux-smoke"
+        cargo new --quiet --bin --vcs none "$crate"
+        cargo build --manifest-path "$crate/Cargo.toml" --target "$RUST_TARGET"
+        mkdir -p .termux-ci
+        install -m 0755 \
+          "$crate/target/$RUST_TARGET/debug/android-termux-smoke" \
+          .termux-ci/android-termux-smoke
       command: |
         test "$(uname -o)" = Android
         test "$PREFIX" = /data/data/com.termux/files/usr
         test -x "$PREFIX/bin/bash"
         test -f workflows/termux-ci.yml
+        test "$(.termux-ci/android-termux-smoke)" = 'Hello, world!'
         printf 'Termux %s on %s\n' "${TERMUX_VERSION:-unknown}" "$(uname -m)"
 
   android-rust-toolchain:
