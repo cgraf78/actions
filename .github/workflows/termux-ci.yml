@@ -58,7 +58,7 @@ jobs:
             printf "workdir_b64='%s'\n" "$workdir_b64"
             cat <<'SCRIPT'
           apk="$RUNNER_TEMP/termux.apk"
-          adb install --replace "$apk"
+          adb install -r "$apk"
           adb shell am start -W -n com.termux/.app.TermuxActivity
 
           ready=0
