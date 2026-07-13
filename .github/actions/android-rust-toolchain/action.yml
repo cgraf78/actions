@@ -1,18 +1,42 @@
 name: Configure Android Rust toolchain
-description: Configure the GitHub runner's LTS Android NDK for Rust aarch64 builds.
+description: Configure the GitHub runner's LTS Android NDK for a supported Rust target.
+
+inputs:
+  rust-target:
+    description: Rust Android target triple to configure.
+    required: false
+    default: aarch64-linux-android
 
 runs:
   using: composite
   steps:
     - name: Export Android NDK compiler paths
       shell: bash
+      env:
+        RUST_TARGET: ${{ inputs.rust-target }}
       run: |-
-        # Android aarch64 has existed since API 21. Selecting the API in the
-        # NDK driver name keeps release binaries compatible with every 64-bit
-        # Android version that Rust supports.
+        # Both supported 64-bit Android targets have existed since API 21.
+        # Selecting the API in the NDK driver name keeps release binaries
+        # compatible with every 64-bit Android version that Rust supports.
+        case "$RUST_TARGET" in
+          aarch64-linux-android)
+            driver=aarch64-linux-android21
+            cargo_suffix=AARCH64_LINUX_ANDROID
+            tool_suffix=aarch64_linux_android
+            ;;
+          x86_64-linux-android)
+            driver=x86_64-linux-android21
+            cargo_suffix=X86_64_LINUX_ANDROID
+            tool_suffix=x86_64_linux_android
+            ;;
+          *)
+            echo "unsupported Android Rust target: $RUST_TARGET" >&2
+            exit 2
+            ;;
+        esac
         toolchain="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
-        linker="$toolchain/aarch64-linux-android21-clang"
-        cxx="$toolchain/aarch64-linux-android21-clang++"
+        linker="$toolchain/${driver}-clang"
+        cxx="$toolchain/${driver}-clang++"
         ar="$toolchain/llvm-ar"
         for executable in "$linker" "$cxx" "$ar"; do
           if [[ ! -x "$executable" ]]; then
@@ -21,8 +45,8 @@ runs:
           fi
         done
         {
-          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$linker"
-          echo "CC_aarch64_linux_android=$linker"
-          echo "CXX_aarch64_linux_android=$cxx"
-          echo "AR_aarch64_linux_android=$ar"
+          echo "CARGO_TARGET_${cargo_suffix}_LINKER=$linker"
+          echo "CC_${tool_suffix}=$linker"
+          echo "CXX_${tool_suffix}=$cxx"
+          echo "AR_${tool_suffix}=$ar"
         } >> "$GITHUB_ENV"
