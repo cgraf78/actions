@@ -126,6 +126,7 @@ Ubuntu quality gate.
 | `doc-command`                 | `cargo doc --locked --no-deps`                                      | Ubuntu quality docs command. Empty disables the step.                                                               |
 | `package-smoke-setup-command` | `""`                                                                | Optional setup command run immediately before package smoke.                                                        |
 | `package-smoke-command`       | `""`                                                                | Optional caller-owned command that builds and validates a representative release artifact. Empty disables the step. |
+| `android-package-smoke-command` | `""`                                                              | Optional caller-owned command that cross-builds and validates the Android aarch64 release artifact. Empty disables the job. |
 
 ### Locked Defaults
 
@@ -153,10 +154,23 @@ with:
     scripts/smoke-release.sh linux-x86_64-musl
 ```
 
+Use `android-package-smoke-command` to continuously validate the Android/Bionic
+archive. The shared workflow installs `aarch64-linux-android`, configures the
+runner-provided NDK, and exports `RUST_TARGET=aarch64-linux-android` plus
+`ASSET_PLATFORM=android-aarch64`:
+
+```yaml
+with:
+  android-package-smoke-command: |
+    scripts/package-release.sh "$RUST_TARGET" "$ASSET_PLATFORM"
+    scripts/smoke-release.sh "$ASSET_PLATFORM"
+```
+
 ## `rust-release.yml`
 
 `rust-release.yml` builds and publishes Rust binary release archives for the
-standard platform set.
+standard platform set. Android aarch64 is available through the explicit
+`android-aarch64` opt-in so existing callers retain their current matrix.
 
 ### Release Platform Matrix
 
@@ -166,6 +180,7 @@ The workflow exposes both Rust target triples and public asset labels:
 | ---------------------------- | -------------------- |
 | `x86_64-unknown-linux-musl`  | `linux-x86_64-musl`  |
 | `aarch64-unknown-linux-musl` | `linux-aarch64-musl` |
+| `aarch64-linux-android`      | `android-aarch64`    |
 | `x86_64-apple-darwin`        | `macos-x86_64`       |
 | `aarch64-apple-darwin`       | `macos-aarch64`      |
 
@@ -191,6 +206,7 @@ inherit Rust target triples unless a caller deliberately chooses that contract.
 | `prerelease`        | `false`                                                       | Whether to mark the release as a prerelease.                                                                                       |
 | `publish`           | `true`                                                        | Whether to publish the draft release after all matrix builds upload assets.                                                        |
 | `latest`            | `true`                                                        | Whether a published release should be marked latest.                                                                               |
+| `android-aarch64`   | `false`                                                       | Whether to build and publish the Android aarch64 artifact.                                                                          |
 
 ### Tag Validation
 

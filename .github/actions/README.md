@@ -6,6 +6,8 @@ this repo and by other `cgraf78` repositories.
 ## Actions
 
 - `platform-matrix` emits the shared OS/container matrix.
+- `android-rust-toolchain` configures the runner-provided Android NDK for Rust
+  aarch64 cross-builds.
 - `shell-ci-prereqs` installs shell test dependencies by profile and setup mode.
 - `rust-ci-prereqs` installs Rust CI prerequisites that are not handled by
   `actions-rust-lang/setup-rust-toolchain`.

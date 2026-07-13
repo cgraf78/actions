@@ -73,6 +73,11 @@ on:
         required: false
         type: boolean
         default: true
+      android-aarch64:
+        description: Build and publish the Android aarch64 release artifact.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -174,28 +179,42 @@ jobs:
           - os: ubuntu-24.04
             rust-target: x86_64-unknown-linux-musl
             asset-platform: linux-x86_64-musl
+            enabled: true
           - os: ubuntu-24.04-arm
             rust-target: aarch64-unknown-linux-musl
             asset-platform: linux-aarch64-musl
+            enabled: true
+          - os: ubuntu-24.04
+            rust-target: aarch64-linux-android
+            asset-platform: android-aarch64
+            enabled: ${{ inputs.android-aarch64 }}
           - os: macos-15-intel
             rust-target: x86_64-apple-darwin
             asset-platform: macos-x86_64
+            enabled: true
           - os: macos-latest
             rust-target: aarch64-apple-darwin
             asset-platform: macos-aarch64
+            enabled: true
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: matrix.enabled
         with:
           persist-credentials: false
 
       - name: Install Rust
+        if: matrix.enabled
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           toolchain: ${{ inputs.rust-toolchain }}
           targets: ${{ matrix.rust-target }}
 
+      - name: Configure Android NDK toolchain
+        if: matrix.enabled && matrix.rust-target == 'aarch64-linux-android'
+        uses: cgraf78/actions/.github/actions/android-rust-toolchain@main # zizmor: ignore[unpinned-uses]
+
       - name: Run repo setup
-        if: inputs.setup-command != ''
+        if: matrix.enabled && inputs.setup-command != ''
         shell: bash
         env:
           ASSET_PLATFORM: ${{ matrix.asset-platform }}
@@ -207,6 +226,7 @@ jobs:
           eval "$SETUP_COMMAND"
 
       - name: Package archive
+        if: matrix.enabled
         shell: bash
         env:
           ASSET_PLATFORM: ${{ matrix.asset-platform }}
@@ -220,7 +240,7 @@ jobs:
           eval "$PACKAGE_COMMAND"
 
       - name: Smoke install
-        if: inputs.smoke-command != ''
+        if: matrix.enabled && inputs.smoke-command != ''
         shell: bash
         env:
           ASSET_PLATFORM: ${{ matrix.asset-platform }}
@@ -232,6 +252,7 @@ jobs:
           eval "$SMOKE_COMMAND"
 
       - name: Upload release assets
+        if: matrix.enabled
         shell: bash
         env:
           ASSET_GLOB: ${{ inputs.asset-glob }}
