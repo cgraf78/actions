@@ -51,7 +51,7 @@ jobs:
         # This neutral action is the OS-matrix source of truth. Future Rust,
         # C++, or other reusable workflows should call the same action, then
         # run language-specific setup/tests against the returned matrix.
-        uses: cgraf78/actions/.github/actions/platform-matrix@main # zizmor: ignore[unpinned-uses]
+        uses: cgraf78/actions/.github/actions/platform-matrix@57eaad1f86fb8581e370ac64cdbc060bc82a5906
         with:
           matrix-set: ${{ inputs.matrix-set }}
 
@@ -66,9 +66,9 @@ jobs:
     name: ${{ matrix.name }}
     steps:
       - name: Install OS prerequisites
-        # This is a first-party shared CI action and intentionally floats on
-        # main: changing cgraf78/actions should update every caller immediately.
-        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@main # zizmor: ignore[unpinned-uses]
+        # Keep first-party prerequisites pinned so an outer reusable-workflow
+        # SHA controls every executable action in the call graph.
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@57eaad1f86fb8581e370ac64cdbc060bc82a5906
         with:
           matrix-name: ${{ matrix.name }}
           profiles: ${{ inputs.profiles }}
@@ -114,7 +114,7 @@ jobs:
         if: inputs.setup == 'checkrun' && matrix.name != 'Alpine'
         # Alpine deliberately skips this expensive dev-tool bootstrap because
         # checkrun's historical workflow skipped it there too.
-        uses: cgraf78/actions/.github/actions/checkrun-dev-tools@main # zizmor: ignore[unpinned-uses]
+        uses: cgraf78/actions/.github/actions/checkrun-dev-tools@57eaad1f86fb8581e370ac64cdbc060bc82a5906
         env:
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -138,13 +138,13 @@ jobs:
         if: inputs.setup == 'dotfiles'
         # Dotfiles is the only setup mode that needs private dependency keys.
         # Keep that secret-handling boundary out of the public repo callers.
-        uses: cgraf78/actions/.github/actions/dotfiles-private-deps@main # zizmor: ignore[unpinned-uses]
+        uses: cgraf78/actions/.github/actions/dotfiles-private-deps@57eaad1f86fb8581e370ac64cdbc060bc82a5906
         env:
           DS_DEPLOY_KEY: ${{ secrets.DS_DEPLOY_KEY }}
 
       - name: Bootstrap dotfiles dependencies
         if: inputs.setup == 'dotfiles'
-        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@main # zizmor: ignore[unpinned-uses]
+        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@57eaad1f86fb8581e370ac64cdbc060bc82a5906
         env:
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}

@@ -211,7 +211,7 @@ jobs:
 
       - name: Configure Android NDK toolchain
         if: matrix.enabled && matrix.rust-target == 'aarch64-linux-android'
-        uses: cgraf78/actions/.github/actions/android-rust-toolchain@main # zizmor: ignore[unpinned-uses]
+        uses: cgraf78/actions/.github/actions/android-rust-toolchain@57eaad1f86fb8581e370ac64cdbc060bc82a5906
 
       - name: Run repo setup
         if: matrix.enabled && inputs.setup-command != ''
