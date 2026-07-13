@@ -1,0 +1,174 @@
+# Internal worker for the public `termux-ci.yml` reusable workflow.
+#
+# GitHub requires reusable workflows to live under `.github/workflows`. Keep
+# emulator provisioning, sandbox transport, and runtime execution here so the
+# public file remains a stable caller contract.
+
+name: Termux Runtime
+
+on:
+  workflow_call:
+    inputs:
+      command:
+        description: Bash command to execute inside the Termux app sandbox.
+        required: true
+        type: string
+      host-command:
+        description: Optional command that prepares checkout artifacts on the Ubuntu host.
+        required: false
+        type: string
+        default: ""
+      rust-toolchain:
+        description: Optional Rust toolchain for an x86_64 Android host build.
+        required: false
+        type: string
+        default: ""
+      working-directory:
+        description: Checkout-relative directory where the command should run.
+        required: false
+        type: string
+        default: .
+    secrets:
+      DEPENDENCY_GH_TOKEN:
+        description: Optional GitHub token exposed to the host command.
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  termux:
+    name: Android / Termux x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install host Rust toolchain
+        if: inputs.host-command != '' && inputs.rust-toolchain != ''
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: ${{ inputs.rust-toolchain }}
+          targets: x86_64-linux-android
+
+      - name: Configure host Android NDK toolchain
+        if: inputs.host-command != '' && inputs.rust-toolchain != ''
+        uses: cgraf78/actions/.github/actions/android-rust-toolchain@438864f7da4781edb0d5e5468835169e52fd4b32
+        with:
+          rust-target: x86_64-linux-android
+
+      - name: Prepare host artifacts
+        if: inputs.host-command != ''
+        shell: bash
+        env:
+          ASSET_PLATFORM: android-x86_64
+          GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          HOST_COMMAND: ${{ inputs.host-command }}
+          RUST_TARGET: x86_64-linux-android
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        run: |
+          cd "$WORKING_DIRECTORY"
+          eval "$HOST_COMMAND"
+
+      - name: Download official Termux APK
+        shell: bash
+        env:
+          TERMUX_APK_SHA256: 3550e61f4d9eb49b712fd1bd9519dc37085a4d8eb597c57a340f0a64859b7144
+          TERMUX_APK_URL: https://github.com/termux/termux-app/releases/download/v0.118.3/termux-app_v0.118.3%2Bgithub-debug_x86_64.apk
+        run: |
+          apk="$RUNNER_TEMP/termux.apk"
+          curl --fail --location --show-error --silent "$TERMUX_APK_URL" --output "$apk"
+          printf '%s  %s\n' "$TERMUX_APK_SHA256" "$apk" | sha256sum --check --strict
+
+      - name: Enable KVM acceleration
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Prepare Termux host runner
+        shell: bash
+        env:
+          TERMUX_CI_COMMAND: ${{ inputs.command }}
+          TERMUX_CI_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        run: |
+          workdir_b64=$(printf '%s' "$TERMUX_CI_WORKING_DIRECTORY" | base64 --wrap=0)
+          printf '%s' "$TERMUX_CI_COMMAND" >"$RUNNER_TEMP/termux-ci-command"
+          {
+            printf '%s\n' '#!/data/data/com.termux/files/usr/bin/bash' 'set -euo pipefail'
+            printf "workdir_b64='%s'\n" "$workdir_b64"
+            cat <<'RUNNER'
+          export HOME=/data/data/com.termux/files/home
+          export PREFIX=/data/data/com.termux/files/usr
+          export TMPDIR=$PREFIX/tmp
+          export PATH=$PREFIX/bin
+          export TERMUX_PKG_NO_MIRROR_SELECT=1
+          # The bootstrap APK otherwise probes mirrors and may select one with
+          # stale indexes. Keep CI reproducible on Termux's primary repository.
+          printf '%s\n' \
+            'deb https://packages.termux.dev/apt/termux-main stable main' \
+            >"$PREFIX/etc/apt/sources.list"
+          workdir=$(printf %s "$workdir_b64" | base64 -d)
+          project_root=$(cd "$HOME/project" && pwd -P)
+          workdir_path=$(cd "$project_root/$workdir" && pwd -P)
+          case "$workdir_path" in
+            "$project_root"|"$project_root"/*) ;;
+            *) echo "working-directory escapes checkout" >&2; exit 1 ;;
+          esac
+          cd "$workdir_path"
+          bash "$TMPDIR/termux-ci-command"
+          RUNNER
+          } >"$RUNNER_TEMP/termux-ci-runner"
+          {
+            printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail'
+            cat <<'SCRIPT'
+          apk="$RUNNER_TEMP/termux.apk"
+          echo "Installing Termux APK"
+          adb install -r "$apk"
+          echo "Launching Termux"
+          timeout 30 adb shell am start -n com.termux/.app.TermuxActivity
+
+          echo "Waiting for Termux bootstrap"
+          ready=0
+          for _ in $(seq 1 60); do
+            if adb shell run-as com.termux test -x files/usr/bin/bash; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$ready" -ne 1 ]]; then
+            echo "Termux bootstrap did not become ready" >&2
+            exit 1
+          fi
+
+          echo "Copying caller checkout"
+          adb shell run-as com.termux mkdir -p files/home/project files/usr/tmp
+          tar -C "$GITHUB_WORKSPACE" -cf - . |
+            timeout 120 adb shell run-as com.termux tar -C files/home/project -xf -
+
+          echo "Copying Termux runner"
+          tar -C "$RUNNER_TEMP" -cf - termux-ci-command termux-ci-runner |
+            timeout 30 adb shell run-as com.termux tar -C files/usr/tmp -xf -
+
+          echo "Running caller command inside Termux"
+          timeout 1200 adb shell run-as com.termux \
+            files/usr/bin/bash files/usr/tmp/termux-ci-runner
+          SCRIPT
+          } >"$RUNNER_TEMP/termux-ci-host.sh"
+          chmod 0700 "$RUNNER_TEMP/termux-ci-host.sh"
+
+      - name: Run caller tests in Termux
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 30
+          arch: x86_64
+          target: default
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          script: bash "$RUNNER_TEMP/termux-ci-host.sh"
