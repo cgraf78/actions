@@ -44,57 +44,67 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Run caller tests in Termux
-        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+      - name: Prepare Termux host runner
+        shell: bash
         env:
           TERMUX_CI_COMMAND: ${{ inputs.command }}
           TERMUX_CI_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        run: |
+          command_b64=$(printf '%s' "$TERMUX_CI_COMMAND" | base64 --wrap=0)
+          workdir_b64=$(printf '%s' "$TERMUX_CI_WORKING_DIRECTORY" | base64 --wrap=0)
+          {
+            printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail'
+            printf "command_b64='%s'\n" "$command_b64"
+            printf "workdir_b64='%s'\n" "$workdir_b64"
+            cat <<'SCRIPT'
+          apk="$RUNNER_TEMP/termux.apk"
+          adb install --replace "$apk"
+          adb shell am start -W -n com.termux/.app.TermuxActivity
+
+          ready=0
+          for _ in $(seq 1 60); do
+            if adb shell run-as com.termux test -x files/usr/bin/bash; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$ready" -ne 1 ]]; then
+            echo "Termux bootstrap did not become ready" >&2
+            exit 1
+          fi
+
+          adb shell run-as com.termux mkdir -p files/home/project files/usr/tmp
+          tar -C "$GITHUB_WORKSPACE" -cf - . |
+            adb shell run-as com.termux tar -C files/home/project -xf -
+
+          {
+            printf '%s\n' 'set -euo pipefail'
+            printf "command_b64='%s'\n" "$command_b64"
+            printf "workdir_b64='%s'\n" "$workdir_b64"
+            printf '%s\n' \
+              'export HOME=/data/data/com.termux/files/home' \
+              'export PREFIX=/data/data/com.termux/files/usr' \
+              'export TMPDIR=$PREFIX/tmp' \
+              'export PATH=$PREFIX/bin' \
+              'workdir=$(printf %s "$workdir_b64" | base64 -d)' \
+              'printf %s "$command_b64" | base64 -d >"$TMPDIR/termux-ci-command"' \
+              'project_root=$(cd "$HOME/project" && pwd -P)' \
+              'workdir_path=$(cd "$project_root/$workdir" && pwd -P)' \
+              'case "$workdir_path" in "$project_root"|"$project_root"/*) ;; *) echo "working-directory escapes checkout" >&2; exit 1 ;; esac' \
+              'cd "$workdir_path"' \
+              'bash "$TMPDIR/termux-ci-command"'
+          } | adb exec-out run-as com.termux files/usr/bin/bash -s
+          SCRIPT
+          } >"$RUNNER_TEMP/termux-ci-host.sh"
+          chmod 0700 "$RUNNER_TEMP/termux-ci-host.sh"
+
+      - name: Run caller tests in Termux
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 30
           arch: x86_64
           target: default
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
-          script: |-
-            set -eu
-
-            apk="$RUNNER_TEMP/termux.apk"
-            adb install --replace "$apk"
-            adb shell am start -W -n com.termux/.app.TermuxActivity
-
-            ready=0
-            for _ in $(seq 1 60); do
-              if adb shell run-as com.termux test -x files/usr/bin/bash; then
-                ready=1
-                break
-              fi
-              sleep 1
-            done
-            if [ "$ready" -ne 1 ]; then
-              echo "Termux bootstrap did not become ready" >&2
-              exit 1
-            fi
-
-            adb shell run-as com.termux mkdir -p files/home/project files/usr/tmp
-            tar -C "$GITHUB_WORKSPACE" -cf - . |
-              adb shell run-as com.termux tar -C files/home/project -xf -
-
-            command_b64=$(printf '%s' "$TERMUX_CI_COMMAND" | base64 --wrap=0)
-            workdir_b64=$(printf '%s' "$TERMUX_CI_WORKING_DIRECTORY" | base64 --wrap=0)
-            {
-              printf '%s\n' 'set -euo pipefail'
-              printf "command_b64='%s'\n" "$command_b64"
-              printf "workdir_b64='%s'\n" "$workdir_b64"
-              printf '%s\n' \
-                'export HOME=/data/data/com.termux/files/home' \
-                'export PREFIX=/data/data/com.termux/files/usr' \
-                'export TMPDIR=$PREFIX/tmp' \
-                'export PATH=$PREFIX/bin' \
-                'workdir=$(printf %s "$workdir_b64" | base64 -d)' \
-                'printf %s "$command_b64" | base64 -d >"$TMPDIR/termux-ci-command"' \
-                'project_root=$(cd "$HOME/project" && pwd -P)' \
-                'workdir_path=$(cd "$project_root/$workdir" && pwd -P)' \
-                'case "$workdir_path" in "$project_root"|"$project_root"/*) ;; *) echo "working-directory escapes checkout" >&2; exit 1 ;; esac' \
-                'cd "$workdir_path"' \
-                'bash "$TMPDIR/termux-ci-command"'
-            } | adb exec-out run-as com.termux files/usr/bin/bash -s
+          script: bash "$RUNNER_TEMP/termux-ci-host.sh"
