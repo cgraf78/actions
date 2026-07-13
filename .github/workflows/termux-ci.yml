@@ -58,9 +58,12 @@ jobs:
             printf "workdir_b64='%s'\n" "$workdir_b64"
             cat <<'SCRIPT'
           apk="$RUNNER_TEMP/termux.apk"
+          echo "Installing Termux APK"
           adb install -r "$apk"
-          adb shell am start -W -n com.termux/.app.TermuxActivity
+          echo "Launching Termux"
+          timeout 30 adb shell am start -n com.termux/.app.TermuxActivity
 
+          echo "Waiting for Termux bootstrap"
           ready=0
           for _ in $(seq 1 60); do
             if adb shell run-as com.termux test -x files/usr/bin/bash; then
@@ -74,10 +77,12 @@ jobs:
             exit 1
           fi
 
+          echo "Copying caller checkout"
           adb shell run-as com.termux mkdir -p files/home/project files/usr/tmp
           tar -C "$GITHUB_WORKSPACE" -cf - . |
-            adb shell run-as com.termux tar -C files/home/project -xf -
+            timeout 120 adb shell run-as com.termux tar -C files/home/project -xf -
 
+          echo "Running caller command inside Termux"
           {
             printf '%s\n' 'set -euo pipefail'
             printf "command_b64='%s'\n" "$command_b64"
