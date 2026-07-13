@@ -64,7 +64,28 @@ tooling, or a nested crate path can use `setup-command` and
 `working-directory` without forking the shared workflow. Binary repos can use
 `build-command`, `package-smoke-setup-command`, and `package-smoke-command` to
 validate release artifacts while keeping package layout and smoke assertions in
-the product repository.
+the product repository. `termux-command` opts into a real Android emulator
+running the official Termux app; it complements the exact-architecture Android
+cross-build rather than replacing it.
+
+### `termux-ci.yml`
+
+Runs a caller-owned Bash command inside the official Termux application sandbox
+on a hardware-accelerated Android x86_64 emulator. The caller checkout is copied
+into `$HOME/project`, with Termux's real `HOME`, `PREFIX`, `TMPDIR`, and `PATH`.
+
+```yaml
+jobs:
+  termux:
+    uses: cgraf78/actions/.github/workflows/termux-ci.yml@main
+    with:
+      command: |
+        pkg install -y rust
+        cargo test --locked
+```
+
+Use the AArch64 Android cross-build/release jobs to validate the shipped target.
+Use this workflow to validate runtime behavior under Android/Bionic and Termux.
 
 ### `rust-release.yml`
 
@@ -105,6 +126,7 @@ steps are split into first-party composite actions:
   live beside the composite actions under `.github/actions`.
 - `.github/workflows/rust-ci.yml` owns Rust CI event policy. This is the public
   workflow Rust repos call.
+- `.github/workflows/termux-ci.yml` owns real Android/Termux runtime execution.
 - `.github/workflows/_rust-platforms.yml` is the internal Rust worker that runs
   cargo tests across the shared OS matrix.
 - `.github/workflows/rust-release.yml` owns standard Rust binary release

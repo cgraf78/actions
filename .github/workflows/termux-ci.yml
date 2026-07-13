@@ -1,0 +1,89 @@
+name: Termux CI
+
+on:
+  workflow_call:
+    inputs:
+      command:
+        description: Bash command to execute inside the Termux app sandbox.
+        required: true
+        type: string
+      working-directory:
+        description: Checkout-relative directory where the command should run.
+        required: false
+        type: string
+        default: .
+
+permissions:
+  contents: read
+
+jobs:
+  termux:
+    name: Android / Termux x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download official Termux APK
+        shell: bash
+        env:
+          TERMUX_APK_SHA256: 3550e61f4d9eb49b712fd1bd9519dc37085a4d8eb597c57a340f0a64859b7144
+          TERMUX_APK_URL: https://github.com/termux/termux-app/releases/download/v0.118.3/termux-app_v0.118.3%2Bgithub-debug_x86_64.apk
+        run: |
+          apk="$RUNNER_TEMP/termux.apk"
+          curl --fail --location --show-error --silent "$TERMUX_APK_URL" --output "$apk"
+          printf '%s  %s\n' "$TERMUX_APK_SHA256" "$apk" | sha256sum --check --strict
+
+      - name: Run caller tests in Termux
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        env:
+          TERMUX_CI_COMMAND: ${{ inputs.command }}
+          TERMUX_CI_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        with:
+          api-level: 30
+          arch: x86_64
+          target: default
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          script: |-
+            set -euo pipefail
+
+            apk="$RUNNER_TEMP/termux.apk"
+            adb install --replace "$apk"
+            adb shell am start -W -n com.termux/.app.TermuxActivity
+
+            ready=0
+            for _ in $(seq 1 60); do
+              if adb shell run-as com.termux test -x files/usr/bin/bash; then
+                ready=1
+                break
+              fi
+              sleep 1
+            done
+            if [[ "$ready" != 1 ]]; then
+              echo "Termux bootstrap did not become ready" >&2
+              exit 1
+            fi
+
+            adb shell run-as com.termux mkdir -p files/home/project files/usr/tmp
+            tar -C "$GITHUB_WORKSPACE" -cf - . |
+              adb shell run-as com.termux tar -C files/home/project -xf -
+
+            command_b64=$(printf '%s' "$TERMUX_CI_COMMAND" | base64 --wrap=0)
+            workdir_b64=$(printf '%s' "$TERMUX_CI_WORKING_DIRECTORY" | base64 --wrap=0)
+            {
+              printf '%s\n' 'set -euo pipefail'
+              printf "command_b64='%s'\n" "$command_b64"
+              printf "workdir_b64='%s'\n" "$workdir_b64"
+              printf '%s\n' \
+                'export HOME=/data/data/com.termux/files/home' \
+                'export PREFIX=/data/data/com.termux/files/usr' \
+                'export TMPDIR=$PREFIX/tmp' \
+                'export PATH=$PREFIX/bin' \
+                'workdir=$(printf %s "$workdir_b64" | base64 -d)' \
+                'printf %s "$command_b64" | base64 -d >"$TMPDIR/termux-ci-command"' \
+                'cd "$HOME/project/$workdir"' \
+                'bash "$TMPDIR/termux-ci-command"'
+            } | adb exec-out run-as com.termux files/usr/bin/bash -s

@@ -10,6 +10,16 @@ permissions:
   contents: read
 
 jobs:
+  termux-runtime:
+    name: Termux runtime
+    uses: ./.github/workflows/termux-ci.yml
+    with:
+      command: |
+        test "$(uname -o)" = Android
+        test "$PREFIX" = /data/data/com.termux/files/usr
+        test -x "$PREFIX/bin/bash"
+        printf 'Termux %s on %s\n' "${TERMUX_VERSION:-unknown}" "$(uname -m)"
+
   android-rust-toolchain:
     name: Android Rust toolchain
     runs-on: ubuntu-24.04

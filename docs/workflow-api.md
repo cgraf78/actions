@@ -127,6 +127,7 @@ Ubuntu quality gate.
 | `package-smoke-setup-command` | `""`                                                                | Optional setup command run immediately before package smoke.                                                        |
 | `package-smoke-command`       | `""`                                                                | Optional caller-owned command that builds and validates a representative release artifact. Empty disables the step. |
 | `android-package-smoke-command` | `""`                                                              | Optional caller-owned command that cross-builds and validates the Android aarch64 release artifact. Empty disables the job. |
+| `termux-command`              | `""`                                                                | Optional command run inside the official Termux app on an Android x86_64 emulator. Empty disables the job.           |
 
 ### Locked Defaults
 
@@ -165,6 +166,21 @@ with:
     scripts/package-release.sh "$RUST_TARGET" "$ASSET_PLATFORM"
     scripts/smoke-release.sh "$ASSET_PLATFORM"
 ```
+
+Use `termux-command` for an independent runtime proof in a real Android app
+sandbox. It runs on x86_64 for hardware acceleration; keep the AArch64 package
+smoke enabled to validate the exact release architecture.
+
+## `termux-ci.yml`
+
+`termux-ci.yml` installs a checksum-pinned official Termux APK in an Android
+emulator, copies the caller checkout to `$HOME/project`, and runs the caller's
+command under Termux Bash.
+
+| Input               | Default  | Contract                                                      |
+| ------------------- | -------- | ------------------------------------------------------------- |
+| `command`           | required | Bash command executed inside Termux.                          |
+| `working-directory` | `.`      | Checkout-relative directory used as the command's working dir. |
 
 ## `rust-release.yml`
 
