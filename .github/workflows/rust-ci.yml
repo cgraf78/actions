@@ -58,6 +58,11 @@ on:
         required: false
         type: string
         default: ""
+      android-package-smoke-command:
+        description: Optional command that builds and validates the Android aarch64 release artifact.
+        required: false
+        type: string
+        default: ""
     secrets:
       DEPENDENCY_GH_TOKEN:
         description: Optional GitHub token exposed to caller commands as GH_TOKEN and GITHUB_TOKEN for private dependency downloads or rate-limit avoidance.
@@ -196,3 +201,34 @@ jobs:
         run: |-
           cd "$WORKING_DIRECTORY"
           eval "$DOC_COMMAND"
+
+  android-package:
+    name: Package / Android aarch64
+    if: inputs.android-package-smoke-command != ''
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: ${{ inputs.rust-toolchain }}
+          targets: aarch64-linux-android
+
+      - name: Configure Android NDK toolchain
+        uses: cgraf78/actions/.github/actions/android-rust-toolchain@main # zizmor: ignore[unpinned-uses]
+
+      - name: Build and smoke Android package
+        shell: bash
+        env:
+          ANDROID_PACKAGE_SMOKE_COMMAND: ${{ inputs.android-package-smoke-command }}
+          ASSET_PLATFORM: android-aarch64
+          GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          RUST_TARGET: aarch64-linux-android
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        run: |-
+          cd "$WORKING_DIRECTORY"
+          eval "$ANDROID_PACKAGE_SMOKE_COMMAND"

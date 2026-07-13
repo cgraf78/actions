@@ -1,0 +1,28 @@
+name: Configure Android Rust toolchain
+description: Configure the GitHub runner's LTS Android NDK for Rust aarch64 builds.
+
+runs:
+  using: composite
+  steps:
+    - name: Export Android NDK compiler paths
+      shell: bash
+      run: |-
+        # Android aarch64 has existed since API 21. Selecting the API in the
+        # NDK driver name keeps release binaries compatible with every 64-bit
+        # Android version that Rust supports.
+        toolchain="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+        linker="$toolchain/aarch64-linux-android21-clang"
+        cxx="$toolchain/aarch64-linux-android21-clang++"
+        ar="$toolchain/llvm-ar"
+        for executable in "$linker" "$cxx" "$ar"; do
+          if [[ ! -x "$executable" ]]; then
+            echo "required Android NDK tool is unavailable: $executable" >&2
+            exit 1
+          fi
+        done
+        {
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$linker"
+          echo "CC_aarch64_linux_android=$linker"
+          echo "CXX_aarch64_linux_android=$cxx"
+          echo "AR_aarch64_linux_android=$ar"
+        } >> "$GITHUB_ENV"

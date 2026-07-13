@@ -70,6 +70,7 @@ the product repository.
 
 Builds and publishes Rust binary archives for the standard release platform
 set: Linux x86_64 musl, Linux aarch64 musl, macOS x86_64, and macOS aarch64.
+Callers can opt into Android aarch64 without changing their packaging command.
 The workflow owns draft creation, tag/version validation, asset upload, and
 publishing. The caller owns packaging and smoke-test behavior through scripts,
 and can opt out of publishing to leave a draft release.
@@ -79,6 +80,7 @@ jobs:
   release:
     uses: cgraf78/actions/.github/workflows/rust-release.yml@main
     with:
+      android-aarch64: true
       version-command: scripts/cargo-version.sh
       package-command: scripts/package-release.sh "$RUST_TARGET" "$ASSET_PLATFORM"
       smoke-command: scripts/smoke-release.sh "$ASSET_PLATFORM"
