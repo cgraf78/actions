@@ -56,7 +56,7 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
           script: |-
-            set -euo pipefail
+            set -eu
 
             apk="$RUNNER_TEMP/termux.apk"
             adb install --replace "$apk"
@@ -70,7 +70,7 @@ jobs:
               fi
               sleep 1
             done
-            if [[ "$ready" != 1 ]]; then
+            if [ "$ready" -ne 1 ]; then
               echo "Termux bootstrap did not become ready" >&2
               exit 1
             fi
