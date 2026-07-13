@@ -65,8 +65,10 @@ tooling, or a nested crate path can use `setup-command` and
 `build-command`, `package-smoke-setup-command`, and `package-smoke-command` to
 validate release artifacts while keeping package layout and smoke assertions in
 the product repository. `termux-command` opts into a real Android emulator
-running the official Termux app; it complements the exact-architecture Android
-cross-build rather than replacing it.
+running the official Termux app. Rust callers can pair it with
+`termux-host-command` to cross-build an x86_64 Android artifact on Ubuntu and
+then execute that artifact under Android/Bionic in Termux. This complements the
+release's exact-architecture AArch64 cross-build rather than replacing it.
 
 ### `termux-ci.yml`
 
@@ -79,13 +81,16 @@ jobs:
   termux:
     uses: cgraf78/actions/.github/workflows/termux-ci.yml@main
     with:
+      rust-toolchain: stable
+      host-command: |
+        cargo build --release --target "$RUST_TARGET"
       command: |
-        pkg install -y rust
-        cargo test --locked
+        target/x86_64-linux-android/release/my-tool --version
 ```
 
 Use the AArch64 Android cross-build/release jobs to validate the shipped target.
-Use this workflow to validate runtime behavior under Android/Bionic and Termux.
+Use this workflow to validate runtime behavior under Android/Bionic and Termux;
+cross-building on the host avoids depending on emulator-hosted compiler behavior.
 
 ### `rust-release.yml`
 
