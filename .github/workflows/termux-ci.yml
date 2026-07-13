@@ -60,6 +60,7 @@ jobs:
           export PREFIX=/data/data/com.termux/files/usr
           export TMPDIR=$PREFIX/tmp
           export PATH=$PREFIX/bin
+          export TERMUX_PKG_NO_MIRROR_SELECT=1
           # The bootstrap APK otherwise probes mirrors and may select one with
           # stale indexes. Keep CI reproducible on Termux's primary repository.
           printf '%s\n' \
