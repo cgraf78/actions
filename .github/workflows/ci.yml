@@ -63,7 +63,7 @@ jobs:
           cargo new --quiet --bin --vcs none "$crate"
           cargo build --manifest-path "$crate/Cargo.toml" --target "$RUST_TARGET"
           binary="$crate/target/$RUST_TARGET/debug/android-rust-smoke"
-          readelf -h "$binary" | grep -Eq "Machine:[[:space:]]+$EXPECTED_MACHINE"
+          readelf -h "$binary" | grep -Fq "$EXPECTED_MACHINE"
           readelf -l "$binary" | grep -Fq '/system/bin/linker64'
 
   quality:
