@@ -50,12 +50,29 @@ jobs:
           TERMUX_CI_COMMAND: ${{ inputs.command }}
           TERMUX_CI_WORKING_DIRECTORY: ${{ inputs.working-directory }}
         run: |
-          command_b64=$(printf '%s' "$TERMUX_CI_COMMAND" | base64 --wrap=0)
           workdir_b64=$(printf '%s' "$TERMUX_CI_WORKING_DIRECTORY" | base64 --wrap=0)
+          printf '%s' "$TERMUX_CI_COMMAND" >"$RUNNER_TEMP/termux-ci-command"
+          {
+            printf '%s\n' '#!/data/data/com.termux/files/usr/bin/bash' 'set -euo pipefail'
+            printf "workdir_b64='%s'\n" "$workdir_b64"
+            cat <<'RUNNER'
+          export HOME=/data/data/com.termux/files/home
+          export PREFIX=/data/data/com.termux/files/usr
+          export TMPDIR=$PREFIX/tmp
+          export PATH=$PREFIX/bin
+          workdir=$(printf %s "$workdir_b64" | base64 -d)
+          project_root=$(cd "$HOME/project" && pwd -P)
+          workdir_path=$(cd "$project_root/$workdir" && pwd -P)
+          case "$workdir_path" in
+            "$project_root"|"$project_root"/*) ;;
+            *) echo "working-directory escapes checkout" >&2; exit 1 ;;
+          esac
+          cd "$workdir_path"
+          bash "$TMPDIR/termux-ci-command"
+          RUNNER
+          } >"$RUNNER_TEMP/termux-ci-runner"
           {
             printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail'
-            printf "command_b64='%s'\n" "$command_b64"
-            printf "workdir_b64='%s'\n" "$workdir_b64"
             cat <<'SCRIPT'
           apk="$RUNNER_TEMP/termux.apk"
           echo "Installing Termux APK"
@@ -82,24 +99,13 @@ jobs:
           tar -C "$GITHUB_WORKSPACE" -cf - . |
             timeout 120 adb shell run-as com.termux tar -C files/home/project -xf -
 
+          echo "Copying Termux runner"
+          tar -C "$RUNNER_TEMP" -cf - termux-ci-command termux-ci-runner |
+            timeout 30 adb shell run-as com.termux tar -C files/usr/tmp -xf -
+
           echo "Running caller command inside Termux"
-          {
-            printf '%s\n' 'set -euo pipefail'
-            printf "command_b64='%s'\n" "$command_b64"
-            printf "workdir_b64='%s'\n" "$workdir_b64"
-            printf '%s\n' \
-              'export HOME=/data/data/com.termux/files/home' \
-              'export PREFIX=/data/data/com.termux/files/usr' \
-              'export TMPDIR=$PREFIX/tmp' \
-              'export PATH=$PREFIX/bin' \
-              'workdir=$(printf %s "$workdir_b64" | base64 -d)' \
-              'printf %s "$command_b64" | base64 -d >"$TMPDIR/termux-ci-command"' \
-              'project_root=$(cd "$HOME/project" && pwd -P)' \
-              'workdir_path=$(cd "$project_root/$workdir" && pwd -P)' \
-              'case "$workdir_path" in "$project_root"|"$project_root"/*) ;; *) echo "working-directory escapes checkout" >&2; exit 1 ;; esac' \
-              'cd "$workdir_path"' \
-              'bash "$TMPDIR/termux-ci-command"'
-          } | adb exec-out run-as com.termux files/usr/bin/bash -s
+          timeout 1200 adb shell run-as com.termux \
+            files/usr/bin/bash files/usr/tmp/termux-ci-runner
           SCRIPT
           } >"$RUNNER_TEMP/termux-ci-host.sh"
           chmod 0700 "$RUNNER_TEMP/termux-ci-host.sh"
