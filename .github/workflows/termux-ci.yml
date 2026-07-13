@@ -36,6 +36,14 @@ jobs:
           curl --fail --location --show-error --silent "$TERMUX_APK_URL" --output "$apk"
           printf '%s  %s\n' "$TERMUX_APK_SHA256" "$apk" | sha256sum --check --strict
 
+      - name: Enable KVM acceleration
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
       - name: Run caller tests in Termux
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         env:
