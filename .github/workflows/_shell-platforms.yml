@@ -66,8 +66,8 @@ jobs:
     name: ${{ matrix.name }}
     steps:
       - name: Install OS prerequisites
-        # This is a first-party shared CI action and intentionally floats on
-        # main: changing cgraf78/actions should update every caller immediately.
+        # Keep first-party prerequisites pinned so an outer reusable-workflow
+        # SHA controls every executable action in the call graph.
         uses: cgraf78/actions/.github/actions/shell-ci-prereqs@57eaad1f86fb8581e370ac64cdbc060bc82a5906
         with:
           matrix-name: ${{ matrix.name }}
