@@ -14,10 +14,12 @@ jobs:
     name: Termux runtime
     uses: ./.github/workflows/termux-ci.yml
     with:
+      working-directory: .github
       command: |
         test "$(uname -o)" = Android
         test "$PREFIX" = /data/data/com.termux/files/usr
         test -x "$PREFIX/bin/bash"
+        test -f workflows/termux-ci.yml
         printf 'Termux %s on %s\n' "${TERMUX_VERSION:-unknown}" "$(uname -m)"
 
   android-rust-toolchain:

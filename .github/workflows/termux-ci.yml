@@ -84,6 +84,9 @@ jobs:
                 'export PATH=$PREFIX/bin' \
                 'workdir=$(printf %s "$workdir_b64" | base64 -d)' \
                 'printf %s "$command_b64" | base64 -d >"$TMPDIR/termux-ci-command"' \
-                'cd "$HOME/project/$workdir"' \
+                'project_root=$(cd "$HOME/project" && pwd -P)' \
+                'workdir_path=$(cd "$project_root/$workdir" && pwd -P)' \
+                'case "$workdir_path" in "$project_root"|"$project_root"/*) ;; *) echo "working-directory escapes checkout" >&2; exit 1 ;; esac' \
+                'cd "$workdir_path"' \
                 'bash "$TMPDIR/termux-ci-command"'
             } | adb exec-out run-as com.termux files/usr/bin/bash -s
