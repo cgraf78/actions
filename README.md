@@ -18,8 +18,8 @@ full matrix.
 Callers should pin a reviewed full commit SHA so an unchanged caller commit
 always executes the same workflow code. Enable weekly GitHub Actions Dependabot
 updates in the caller repository so shared fixes arrive as ordinary dependency
-PRs and run through the caller's CI before merge. The examples below use the
-latest `actions` commit that passed its own CI at the time of writing.
+PRs and run through the caller's CI before merge. The examples below use a
+reviewed `actions` commit that passed its own CI.
 
 Dependabot-triggered workflows receive only Dependabot secrets. After reviewing
 the proposed workflow commit, a caller whose CI requires sensitive repository

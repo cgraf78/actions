@@ -120,18 +120,65 @@ jobs:
             .cache/mise
             .cache/aqua
             .cache/ubi
-          key: checkrun-dev-tools-${{ runner.os }}-${{ matrix.name }}-${{ hashFiles('.github/mise/checkrun-ci.toml', '.github/mise/mise.lock') }}
+          key: checkrun-dev-tools-${{ runner.os }}-${{ runner.arch }}-${{ matrix.name }}-${{ hashFiles('.github/mise/checkrun-ci.toml', '.github/mise/mise.lock') }}
           restore-keys: |
-            checkrun-dev-tools-${{ runner.os }}-${{ matrix.name }}-
+            checkrun-dev-tools-${{ runner.os }}-${{ runner.arch }}-${{ matrix.name }}-
 
-      - name: Set up checkrun dev tools
+      - name: Install pinned Mise
         if: inputs.setup == 'checkrun' && matrix.name != 'Alpine'
-        # Alpine deliberately skips this expensive dev-tool bootstrap because
-        # checkrun's historical workflow skipped it there too.
-        uses: cgraf78/actions/.github/actions/checkrun-dev-tools@57eaad1f86fb8581e370ac64cdbc060bc82a5906
+        # Alpine deliberately keeps the smaller historical prerequisite-only
+        # path; every other platform consumes the committed tool lock.
+        uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
+        with:
+          version: 2026.7.11
+          install: false
+          cache: false
+
+      - name: Set up Checkrun dev tools
+        if: inputs.setup == 'checkrun' && matrix.name != 'Alpine'
+        shell: bash
         env:
-          GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          retry() {
+            local attempt rc delay
+            for attempt in 1 2 3; do
+              if "$@"; then
+                return 0
+              fi
+
+              rc=$?
+              if [[ "$attempt" -eq 3 ]]; then
+                return "$rc"
+              fi
+
+              delay=$((attempt * 15))
+              echo "$* failed (attempt $attempt/3, exit $rc); retrying in ${delay}s..." >&2
+              sleep "$delay"
+            done
+          }
+
+          export MISE_GLOBAL_CONFIG_FILE="$PWD/.github/mise/checkrun-ci.toml"
+          export MISE_GITHUB_TOKEN="$GITHUB_TOKEN"
+          echo "MISE_GLOBAL_CONFIG_FILE=$MISE_GLOBAL_CONFIG_FILE" >>"$GITHUB_ENV"
+          mise trust "$MISE_GLOBAL_CONFIG_FILE" >/dev/null || true
+          retry mise install --locked
+
+          python3 -m venv "$HOME/.venv"
+          "$HOME/.venv/bin/python" -m pip install --upgrade pip
+          "$HOME/.venv/bin/python" -m pip install clang-format jsonschema PyYAML tomli
+
+          curl https://sh.rustup.rs -sSf | sh -s -- \
+            -y --profile minimal --component rustfmt
+
+          {
+            echo "$HOME/.local/bin"
+            echo "$HOME/.local/share/mise/shims"
+            echo "$HOME/.venv/bin"
+            echo "$HOME/.cargo/bin"
+          } >>"$GITHUB_PATH"
 
       - name: Cache dotfiles dependency installs
         if: inputs.setup == 'dotfiles'
