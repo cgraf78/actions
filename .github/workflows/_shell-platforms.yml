@@ -96,6 +96,20 @@ jobs:
         # current workspace so repo-aware tests work without broad Git trust.
         run: git config --global --add safe.directory "$(pwd)"
 
+      - name: Configure Checkrun tool lock
+        if: inputs.setup == 'checkrun' && matrix.name != 'Alpine'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f .github/mise/mise.lock || {
+            echo "missing Checkrun CI tool lock: .github/mise/mise.lock" >&2
+            exit 1
+          }
+          {
+            echo "MISE_GLOBAL_CONFIG_ROOT=$PWD/.github/mise"
+            echo "MISE_LOCKED=1"
+          } >>"$GITHUB_ENV"
+
       - name: Cache checkrun dev tools
         if: inputs.setup == 'checkrun' && matrix.name != 'Alpine'
         # actions/cache v4.2.4
@@ -114,7 +128,7 @@ jobs:
         if: inputs.setup == 'checkrun' && matrix.name != 'Alpine'
         # Alpine deliberately skips this expensive dev-tool bootstrap because
         # checkrun's historical workflow skipped it there too.
-        uses: cgraf78/actions/.github/actions/checkrun-dev-tools@e43c1f433e4696ac89d20b0bab30320a428c1159
+        uses: cgraf78/actions/.github/actions/checkrun-dev-tools@57eaad1f86fb8581e370ac64cdbc060bc82a5906
         env:
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}

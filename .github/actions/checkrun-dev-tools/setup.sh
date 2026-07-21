@@ -33,22 +33,10 @@ if [ -n "${GITHUB_TOKEN:-}" ]; then
 fi
 
 export MISE_GLOBAL_CONFIG_FILE="$PWD/.github/mise/checkrun-ci.toml"
-export MISE_GLOBAL_CONFIG_ROOT="$PWD/.github/mise"
-export MISE_LOCKED=1
-{
-  echo "MISE_GLOBAL_CONFIG_FILE=$MISE_GLOBAL_CONFIG_FILE"
-  echo "MISE_GLOBAL_CONFIG_ROOT=$MISE_GLOBAL_CONFIG_ROOT"
-  echo "MISE_LOCKED=$MISE_LOCKED"
-} >>"$GITHUB_ENV"
-
-if [ ! -f "$MISE_GLOBAL_CONFIG_ROOT/mise.lock" ]; then
-  echo "missing Checkrun CI tool lock: .github/mise/mise.lock" >&2
-  exit 1
-fi
-
+echo "MISE_GLOBAL_CONFIG_FILE=$MISE_GLOBAL_CONFIG_FILE" >>"$GITHUB_ENV"
 # Trust the checked-in CI tool manifest so mise can install without prompting.
 mise trust "$MISE_GLOBAL_CONFIG_FILE" >/dev/null || true
-retry mise install --locked
+retry mise install
 
 # checkrun tests exercise Python linters/formatters through real commands, so
 # install those Python-only tools into a workspace-local virtualenv.
