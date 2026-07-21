@@ -7,8 +7,27 @@ drafting, asset upload, and publishing. Caller repositories own product
 contracts such as package layout, installer behavior, generated metadata,
 signing, and smoke-test assertions.
 
-Callers should reference workflows at `@main` so fixes to shared CI behavior roll
-out consistently across `cgraf78` repositories.
+Callers must reference workflows by full 40-character commit SHA. Treat the
+workflow ref as a dependency: enable weekly GitHub Actions Dependabot updates,
+let each update run the caller's normal CI, and review it before merge. This keeps
+shared fixes moving across `cgraf78` repositories without changing the workflow
+code executed by an unchanged caller commit.
+
+The examples in this repository pin
+`7d88c3afa6e51a83e9cfefb0c12f503155e17952`, which passed the `actions` CI
+suite. Callers may pin a newer commit after reviewing it and confirming that its
+CI passed.
+
+Dependabot-triggered workflows receive a read-only token and only secrets stored
+for Dependabot. After reviewing the proposed workflow commit, callers that
+require sensitive repository Actions secrets should recreate the bump on a
+trusted branch before treating its CI result as authoritative. An equivalent
+Dependabot secret is appropriate only when it is intentionally least-privileged
+and safe to expose to the proposed dependency code before review. In particular,
+do not expose a private-repository deploy key to an unreviewed reusable-workflow
+update. Re-running the bot-authored workflow as another actor does not restore
+repository Actions secrets. See GitHub's
+[Dependabot workflow restrictions](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-on-actions#restrictions-when-dependabot-triggers-events).
 
 ## Common Contracts
 
@@ -67,6 +86,12 @@ Do not use it for release upload permissions; `rust-release.yml` uses
 | `matrix-set`   | `auto`   | Platform matrix policy. See [Matrix Sets](#matrix-sets).                   |
 | `setup`        | `none`   | Named setup mode. Supported values are `none`, `checkrun`, and `dotfiles`. |
 | `test-command` | required | Caller-owned Bash command run on every selected platform.                  |
+
+The `checkrun` setup mode requires the caller to commit both
+`.github/mise/checkrun-ci.toml` and `.github/mise/mise.lock`. The setup uses
+Mise's strict locked mode, so a missing lock or unresolved platform asset fails
+before the caller's tests run. Checkrun's suite separately rejects structural
+manifest/lock drift.
 
 ### Secrets
 
