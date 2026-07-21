@@ -33,10 +33,22 @@ if [ -n "${GITHUB_TOKEN:-}" ]; then
 fi
 
 export MISE_GLOBAL_CONFIG_FILE="$PWD/.github/mise/checkrun-ci.toml"
-echo "MISE_GLOBAL_CONFIG_FILE=$MISE_GLOBAL_CONFIG_FILE" >>"$GITHUB_ENV"
+export MISE_GLOBAL_CONFIG_ROOT="$PWD/.github/mise"
+export MISE_LOCKED=1
+{
+  echo "MISE_GLOBAL_CONFIG_FILE=$MISE_GLOBAL_CONFIG_FILE"
+  echo "MISE_GLOBAL_CONFIG_ROOT=$MISE_GLOBAL_CONFIG_ROOT"
+  echo "MISE_LOCKED=$MISE_LOCKED"
+} >>"$GITHUB_ENV"
+
+if [ ! -f "$MISE_GLOBAL_CONFIG_ROOT/mise.lock" ]; then
+  echo "missing Checkrun CI tool lock: .github/mise/mise.lock" >&2
+  exit 1
+fi
+
 # Trust the checked-in CI tool manifest so mise can install without prompting.
 mise trust "$MISE_GLOBAL_CONFIG_FILE" >/dev/null || true
-retry mise install
+retry mise install --locked
 
 # checkrun tests exercise Python linters/formatters through real commands, so
 # install those Python-only tools into a workspace-local virtualenv.
@@ -53,4 +65,3 @@ curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --component rustf
   echo "$HOME/.venv/bin"
   echo "$HOME/.cargo/bin"
 } >>"$GITHUB_PATH"
-
