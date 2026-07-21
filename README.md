@@ -15,12 +15,23 @@ Runs shell-tool test suites across the shared platform matrix. Push and pull
 request runs cover the high-signal subset; scheduled and manual runs cover the
 full matrix.
 
-Callers should reference `main` so shared CI fixes roll out immediately:
+Callers should pin a reviewed full commit SHA so an unchanged caller commit
+always executes the same workflow code. Enable weekly GitHub Actions Dependabot
+updates in the caller repository so shared fixes arrive as ordinary dependency
+PRs and run through the caller's CI before merge. The examples below use the
+latest `actions` commit that passed its own CI at the time of writing.
+
+Dependabot-triggered workflows receive only Dependabot secrets. After reviewing
+the proposed workflow commit, a caller whose CI requires sensitive repository
+secrets should recreate the bump on a trusted branch before relying on its CI
+result. An equivalent Dependabot secret is appropriate only when it is
+least-privileged and safe to expose to the proposed dependency code before
+review.
 
 ```yaml
 jobs:
   test:
-    uses: cgraf78/actions/.github/workflows/shell-ci.yml@main
+    uses: cgraf78/actions/.github/workflows/shell-ci.yml@7d88c3afa6e51a83e9cfefb0c12f503155e17952
     with:
       profiles: base,jq,python
       test-command: test/example-test
@@ -38,7 +49,7 @@ installer or bootstrap compatibility coverage. Keep this separate from
 ```yaml
 jobs:
   bash32:
-    uses: cgraf78/actions/.github/workflows/bash32-ci.yml@main
+    uses: cgraf78/actions/.github/workflows/bash32-ci.yml@7d88c3afa6e51a83e9cfefb0c12f503155e17952
     with:
       command: /bin/bash scripts/smoke-install-bash32.sh
 ```
@@ -53,7 +64,7 @@ running formatting, clippy, and docs redundantly on every OS.
 ```yaml
 jobs:
   test:
-    uses: cgraf78/actions/.github/workflows/rust-ci.yml@main
+    uses: cgraf78/actions/.github/workflows/rust-ci.yml@7d88c3afa6e51a83e9cfefb0c12f503155e17952
     with:
       test-command: cargo test --locked
 ```
@@ -79,7 +90,7 @@ into `$HOME/project`, with Termux's real `HOME`, `PREFIX`, `TMPDIR`, and `PATH`.
 ```yaml
 jobs:
   termux:
-    uses: cgraf78/actions/.github/workflows/termux-ci.yml@main
+    uses: cgraf78/actions/.github/workflows/termux-ci.yml@7d88c3afa6e51a83e9cfefb0c12f503155e17952
     with:
       rust-toolchain: stable
       host-command: |
@@ -104,7 +115,7 @@ and can opt out of publishing to leave a draft release.
 ```yaml
 jobs:
   release:
-    uses: cgraf78/actions/.github/workflows/rust-release.yml@main
+    uses: cgraf78/actions/.github/workflows/rust-release.yml@7d88c3afa6e51a83e9cfefb0c12f503155e17952
     with:
       android-aarch64: true
       version-command: scripts/cargo-version.sh
@@ -154,9 +165,10 @@ steps are split into first-party composite actions:
 - `.github/actions/dotfiles-bootstrap/` owns `dot update`, `mise install`, and
   `dot doctor`.
 
-Callers reference the workflow at `@main` so shared CI fixes roll out
-immediately. The workflow also references these first-party composite actions at
-`@main` for the same reason.
+Callers pin reusable workflows to reviewed commit SHAs and use dependency PRs to
+roll shared fixes across the fleet. Internal workflows likewise pin first-party
+composite actions to reviewed commits so every workflow dependency is explicit
+and reproducible.
 
 ## License
 
