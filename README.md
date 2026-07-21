@@ -130,8 +130,8 @@ the latter for public asset names.
 
 ## Layout
 
-The reusable workflow is intentionally small orchestration glue. The reusable
-steps are split into first-party composite actions:
+The public workflows delegate to internal workers, while steps shared by more
+than one worker are split into first-party composite actions:
 
 - `.github/workflows/shell-ci.yml` owns shell CI event policy. This is the
   public workflow shell-tool repos call.
@@ -139,7 +139,8 @@ steps are split into first-party composite actions:
   contract for installer/bootstrap scripts that still support Bash 3.2.
 - `.github/workflows/_shell-platforms.yml` is the internal shell worker. GitHub
   requires reusable workflows to live under `.github/workflows`, so this cannot
-  live beside the composite actions under `.github/actions`.
+  live beside the composite actions under `.github/actions`. It also owns
+  Checkrun's one-use Mise, Python, and Rust test bootstrap.
 - `.github/workflows/rust-ci.yml` owns Rust CI event policy. This is the public
   workflow Rust repos call.
 - `.github/workflows/termux-ci.yml` owns the public real Android/Termux caller
@@ -158,8 +159,6 @@ steps are split into first-party composite actions:
 - `.github/actions/shell-ci-prereqs/` owns shell-CI pre-checkout OS package
   installation. It is split into profile packages, checkrun prereqs, and the
   exact dotfiles bootstrap package list.
-- `.github/actions/checkrun-dev-tools/` owns checkrun's mise, Python, and Rust
-  test tool bootstrap.
 - `.github/actions/dotfiles-private-deps/` owns dotfiles' private dependency
   deploy-key setup.
 - `.github/actions/dotfiles-bootstrap/` owns `dot update`, `mise install`, and
