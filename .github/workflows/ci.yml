@@ -126,7 +126,11 @@ jobs:
         shell: bash
         run: zizmor --offline .github/workflows/*.yml
 
-      - name: Lint shell helper scripts
+      - name: Test shell prerequisite profiles
+        shell: bash
+        run: test/shell-ci-prereqs-test
+
+      - name: Lint shell scripts
         shell: bash
         run: |-
           mapfile -t scripts < <(git ls-files .github/actions | awk '/[.]sh$/ { print }')
@@ -136,4 +140,5 @@ jobs:
           fi
           # install.sh sources sibling modules through SCRIPT_DIR; the source
           # path keeps ShellCheck's cross-file analysis working from repo root.
-          shellcheck -x -P .github/actions/shell-ci-prereqs "${scripts[@]}"
+          shellcheck -x -P .github/actions/shell-ci-prereqs \
+            "${scripts[@]}" test/shell-ci-prereqs-test

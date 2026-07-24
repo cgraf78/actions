@@ -1,0 +1,42 @@
+#!/bin/sh
+set -eu
+
+REPO_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+PREREQS_DIR=$REPO_ROOT/.github/actions/shell-ci-prereqs
+
+# shellcheck source=.github/actions/shell-ci-prereqs/lib.sh
+. "$PREREQS_DIR/lib.sh"
+# shellcheck source=.github/actions/shell-ci-prereqs/profiles.sh
+. "$PREREQS_DIR/profiles.sh"
+
+install_package_lists() {
+  :
+}
+
+assert_eq() {
+  expected=$1
+  actual=$2
+  label=$3
+
+  if [ "$actual" != "$expected" ]; then
+    printf 'not ok - %s: expected <%s>, got <%s>\n' \
+      "$label" "$expected" "$actual" >&2
+    return 1
+  fi
+}
+
+export PROFILES=procps
+brew_pkgs=
+apt_pkgs=
+arch_pkgs=
+dnf_pkgs=
+apk_pkgs=
+install_profile_prereqs
+
+assert_eq '' "$brew_pkgs" 'procps macOS packages'
+assert_eq procps "$apt_pkgs" 'procps apt packages'
+assert_eq procps-ng "$arch_pkgs" 'procps Arch packages'
+assert_eq procps-ng "$dnf_pkgs" 'procps dnf packages'
+assert_eq procps "$apk_pkgs" 'procps Alpine packages'
+
+printf 'ok - procps profile package mapping\n'
