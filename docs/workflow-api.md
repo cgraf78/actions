@@ -87,6 +87,11 @@ Do not use it for release upload permissions; `rust-release.yml` uses
 | `setup`        | `none`   | Named setup mode. Supported values are `none`, `checkrun`, and `dotfiles`. |
 | `test-command` | required | Caller-owned Bash command run on every selected platform.                  |
 
+Supported generic profiles are `base`, `jq`, `python`, `zsh`, `lua`, `neovim`,
+`tmux`, `openssh-netcat-lsof`, `procps`, and `shellcheck`. The `procps` profile
+provides a full procps-compatible `ps` on Linux; macOS uses its system `ps`
+without an additional Homebrew package.
+
 The `checkrun` setup mode requires the caller to commit both
 `.github/mise/checkrun-ci.toml` and `.github/mise/mise.lock`. The setup uses
 Mise's strict locked mode, so a missing lock or unresolved platform asset fails

@@ -72,6 +72,13 @@ install_profile_prereqs() {
     add_pkg dnf_pkgs "lsof openssh-clients nmap-ncat"
     add_pkg apk_pkgs "lsof openssh-client netcat-openbsd"
   fi
+  if has_profile procps; then
+    # macOS provides a compatible ps command without a Homebrew package.
+    add_pkg apt_pkgs "procps"
+    add_pkg arch_pkgs "procps-ng"
+    add_pkg dnf_pkgs "procps-ng"
+    add_pkg apk_pkgs "procps"
+  fi
   if has_profile shellcheck; then
     add_pkg brew_pkgs "shellcheck"
     add_pkg apt_pkgs "shellcheck"
