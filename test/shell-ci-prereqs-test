@@ -15,6 +15,10 @@ install_package_lists() {
   :
 }
 
+ensure_lua_command() {
+  :
+}
+
 assert_eq() {
   expected=$1
   actual=$2
