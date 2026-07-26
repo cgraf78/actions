@@ -65,7 +65,7 @@ jobs:
       - name: Install OS prerequisites
         # Keep first-party prerequisites pinned so an outer reusable-workflow
         # SHA controls every executable action in the call graph.
-        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@2c5bafc4b83be63b82d49b2ae6e947efc2209fd4
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@1a3880a9a9767295dfa825108efcad30b458e6f1
         with:
           matrix-name: ${{ matrix.name }}
           profiles: ${{ inputs.profiles }}
