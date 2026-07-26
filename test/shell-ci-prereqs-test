@@ -8,8 +8,14 @@ PREREQS_DIR=$REPO_ROOT/.github/actions/shell-ci-prereqs
 . "$PREREQS_DIR/lib.sh"
 # shellcheck source=.github/actions/shell-ci-prereqs/profiles.sh
 . "$PREREQS_DIR/profiles.sh"
+# shellcheck source=.github/actions/shell-ci-prereqs/dotfiles.sh
+. "$PREREQS_DIR/dotfiles.sh"
 
 install_package_lists() {
+  :
+}
+
+ensure_lua_command() {
   :
 }
 
@@ -23,6 +29,21 @@ assert_eq() {
       "$label" "$expected" "$actual" >&2
     return 1
   fi
+}
+
+assert_contains() {
+  expected=$1
+  actual=$2
+  label=$3
+
+  case "$actual" in
+    *"$expected"*) ;;
+    *)
+      printf 'not ok - %s: expected to contain <%s>\n' \
+        "$label" "$expected" >&2
+      return 1
+      ;;
+  esac
 }
 
 export PROFILES=procps
@@ -40,3 +61,40 @@ assert_eq procps-ng "$dnf_pkgs" 'procps dnf packages'
 assert_eq procps "$apk_pkgs" 'procps Alpine packages'
 
 printf 'ok - procps profile package mapping\n'
+
+mock_bin=$(mktemp -d)
+trap 'rm -rf "$mock_bin"' EXIT HUP INT TERM
+command_log=$mock_bin/commands.log
+export command_log
+for command in apt-get dnf apk; do
+  cat >"$mock_bin/$command" <<'MOCK'
+#!/bin/sh
+printf '%s %s\n' "${0##*/}" "$*" >>"$command_log"
+MOCK
+  chmod +x "$mock_bin/$command"
+done
+
+PATH="$mock_bin:$PATH"
+export PATH
+
+export MATRIX_NAME=Debian
+install_dotfiles_bootstrap_prereqs
+assert_contains \
+  'apt-get install -y git curl sudo openssh-client lsof netcat-openbsd procps' \
+  "$(cat "$command_log")" 'dotfiles Debian installs ps'
+
+: >"$command_log"
+export MATRIX_NAME='CentOS Stream'
+install_dotfiles_bootstrap_prereqs
+assert_contains \
+  'dnf install -y --allowerasing git curl sudo openssh-clients lsof nmap-ncat procps-ng' \
+  "$(cat "$command_log")" 'dotfiles dnf installs ps'
+
+: >"$command_log"
+export MATRIX_NAME=Alpine
+install_dotfiles_bootstrap_prereqs
+assert_contains \
+  'apk add --no-cache git curl sudo bash coreutils shellcheck lua5.4 openssh-client lsof netcat-openbsd procps' \
+  "$(cat "$command_log")" 'dotfiles Alpine installs full ps'
+
+printf 'ok - dotfiles setup installs process tools\n'
