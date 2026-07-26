@@ -1,0 +1,31 @@
+#!/bin/sh
+set -eu
+
+REPO_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+
+if private_refs=$(git -C "$REPO_ROOT" grep -n -E \
+  'DS_DEPLOY_KEY|dotfiles-private-deps|github[.]com-ds|SHDEPS_DS_REPO' \
+  -- . ':!test/dotfiles-public-deps-test'); then
+  printf '%s\n' "$private_refs"
+  echo 'not ok - dotfiles CI still references private ds access' >&2
+  exit 1
+else
+  grep_rc=$?
+  if [ "$grep_rc" -ne 1 ]; then
+    echo "not ok - unable to scan dotfiles CI dependencies (git grep exit $grep_rc)" >&2
+    exit "$grep_rc"
+  fi
+fi
+
+if [ -e "$REPO_ROOT/.github/actions/dotfiles-private-deps" ]; then
+  echo 'not ok - obsolete dotfiles private-dependency action still exists' >&2
+  exit 1
+fi
+
+if ! grep -Fq 'actions/dotfiles-bootstrap@' \
+  "$REPO_ROOT/.github/workflows/_shell-platforms.yml"; then
+  echo 'not ok - dotfiles setup no longer runs its public bootstrap action' >&2
+  exit 1
+fi
+
+echo 'ok - dotfiles CI uses only public dependency access'

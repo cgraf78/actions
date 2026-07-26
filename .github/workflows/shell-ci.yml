@@ -26,9 +26,6 @@ on:
       DEPENDENCY_GH_TOKEN:
         description: Optional GitHub token exposed to caller commands as GH_TOKEN and GITHUB_TOKEN for private dependency downloads or rate-limit avoidance.
         required: false
-      DS_DEPLOY_KEY:
-        description: Dotfiles-only deploy key for the private ds dependency.
-        required: false
 
 permissions:
   contents: read
@@ -44,7 +41,6 @@ jobs:
     uses: ./.github/workflows/_shell-platforms.yml
     secrets:
       DEPENDENCY_GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
-      DS_DEPLOY_KEY: ${{ secrets.DS_DEPLOY_KEY }}
     with:
       matrix-set: ${{ inputs.matrix-set != 'auto' && inputs.matrix-set || ((github.event_name == 'push' || github.event_name == 'pull_request') && 'core' || 'full') }}
       profiles: ${{ inputs.profiles }}

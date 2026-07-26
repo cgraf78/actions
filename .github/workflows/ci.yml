@@ -130,6 +130,10 @@ jobs:
         shell: bash
         run: test/shell-ci-prereqs-test
 
+      - name: Test public dotfiles dependencies
+        shell: bash
+        run: test/dotfiles-public-deps-test
+
       - name: Lint shell scripts
         shell: bash
         run: |-
@@ -141,4 +145,6 @@ jobs:
           # install.sh sources sibling modules through SCRIPT_DIR; the source
           # path keeps ShellCheck's cross-file analysis working from repo root.
           shellcheck -x -P .github/actions/shell-ci-prereqs \
-            "${scripts[@]}" test/shell-ci-prereqs-test
+            "${scripts[@]}" \
+            test/dotfiles-public-deps-test \
+            test/shell-ci-prereqs-test

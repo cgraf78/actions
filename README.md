@@ -159,8 +159,6 @@ than one worker are split into first-party composite actions:
 - `.github/actions/shell-ci-prereqs/` owns shell-CI pre-checkout OS package
   installation. It is split into profile packages, checkrun prereqs, and the
   exact dotfiles bootstrap package list.
-- `.github/actions/dotfiles-private-deps/` owns dotfiles' private dependency
-  deploy-key setup.
 - `.github/actions/dotfiles-bootstrap/` owns `dot update`, `mise install`, and
   `dot doctor`.
 
