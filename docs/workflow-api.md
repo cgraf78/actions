@@ -103,7 +103,6 @@ manifest/lock drift.
 | Secret                | Contract                                                                    |
 | --------------------- | --------------------------------------------------------------------------- |
 | `DEPENDENCY_GH_TOKEN` | Optional token exposed to caller commands as `GH_TOKEN` and `GITHUB_TOKEN`. |
-| `DS_DEPLOY_KEY`       | Dotfiles-only deploy key. Preserved for the `dotfiles` setup mode.          |
 
 ## `bash32-ci.yml`
 

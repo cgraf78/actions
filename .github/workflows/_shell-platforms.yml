@@ -33,9 +33,6 @@ on:
       DEPENDENCY_GH_TOKEN:
         description: Optional GitHub token exposed to caller commands as GH_TOKEN and GITHUB_TOKEN for private dependency downloads or rate-limit avoidance.
         required: false
-      DS_DEPLOY_KEY:
-        description: Dotfiles-only deploy key for the private ds dependency.
-        required: false
 
 permissions:
   contents: read
@@ -194,14 +191,6 @@ jobs:
           key: dot-deps-${{ runner.os }}-${{ matrix.name }}-${{ hashFiles('.config/mise/config.toml', '.config/mise/mise.lock', '.config/shdeps/**/*.conf', '.config/shdeps/hooks.d/**/*') }}
           restore-keys: |
             dot-deps-${{ runner.os }}-${{ matrix.name }}-
-
-      - name: Configure dotfiles private dependencies
-        if: inputs.setup == 'dotfiles'
-        # Dotfiles is the only setup mode that needs private dependency keys.
-        # Keep that secret-handling boundary out of the public repo callers.
-        uses: cgraf78/actions/.github/actions/dotfiles-private-deps@57eaad1f86fb8581e370ac64cdbc060bc82a5906
-        env:
-          DS_DEPLOY_KEY: ${{ secrets.DS_DEPLOY_KEY }}
 
       - name: Bootstrap dotfiles dependencies
         if: inputs.setup == 'dotfiles'

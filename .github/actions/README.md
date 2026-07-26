@@ -11,7 +11,6 @@ this repo and by other `cgraf78` repositories.
 - `shell-ci-prereqs` installs shell test dependencies by profile and setup mode.
 - `rust-ci-prereqs` installs Rust CI prerequisites that are not handled by
   `actions-rust-lang/setup-rust-toolchain`.
-- `dotfiles-private-deps` configures access to private dotfiles dependencies.
 - `dotfiles-bootstrap` runs the dotfiles bootstrap/update/doctor flow in CI.
 
 Keep composite actions narrow and reusable. If behavior is only needed by a

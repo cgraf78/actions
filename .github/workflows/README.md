@@ -24,3 +24,8 @@ local organization.
 Keep input names and behavior backward compatible for public reusable
 workflows. Implementation workflows may change more freely, but callers should
 continue to go through the public files above.
+
+The July 2026 public-dotfiles migration deliberately removes the obsolete
+dotfiles-only deploy-key secret after `cgraf78/ds` became public. Existing
+immutable workflow pins retain the old contract; advancing the dotfiles caller
+pin must remove that secret in the same change.
