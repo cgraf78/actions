@@ -9,17 +9,17 @@ install_dotfiles_bootstrap_prereqs() {
       brew install bash
       ;;
     Debian)
-      apt-get update && apt-get install -y git curl sudo openssh-client lsof netcat-openbsd
+      apt-get update && apt-get install -y git curl sudo openssh-client lsof netcat-openbsd procps
       ;;
     Arch)
       pacman-key --init && pacman-key --populate
       pacman -Syu --noconfirm git curl sudo openssh lsof openbsd-netcat
       ;;
     CentOS* | Fedora)
-      dnf install -y --allowerasing git curl sudo openssh-clients lsof nmap-ncat
+      dnf install -y --allowerasing git curl sudo openssh-clients lsof nmap-ncat procps-ng
       ;;
     Alpine)
-      apk add --no-cache git curl sudo bash coreutils shellcheck lua5.4 openssh-client lsof netcat-openbsd
+      apk add --no-cache git curl sudo bash coreutils shellcheck lua5.4 openssh-client lsof netcat-openbsd procps
       # Dotfiles' Lua suite is a direct test contract. Alpine cannot run the
       # bootstrapped glibc Neovim fallback, so provide the plain lua command.
       ensure_lua_command
