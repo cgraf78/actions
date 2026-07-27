@@ -2,6 +2,12 @@
 
 Reusable GitHub Actions workflows and action helpers for `cgraf78` repos.
 
+Public CI workflows expose a stable `Required` job for branch protection.
+Require `<caller job> / Required` rather than internal platform jobs so matrix
+membership can evolve here without protection changes in every caller. The
+detailed result contract is documented in
+[`docs/workflow-api.md`](docs/workflow-api.md).
+
 ## Workflows
 
 For the full caller-facing API, see

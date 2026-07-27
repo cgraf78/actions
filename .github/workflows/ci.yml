@@ -10,6 +10,59 @@ permissions:
   contents: read
 
 jobs:
+  shell-smoke:
+    name: Shell smoke
+    uses: ./.github/workflows/shell-ci.yml
+    with:
+      matrix-set: core
+      profiles: base
+      test-command: test "$MATRIX_NAME" != ""
+
+  rust-smoke:
+    name: Rust smoke
+    uses: ./.github/workflows/rust-ci.yml
+    with:
+      matrix-set: core
+      working-directory: test/fixtures/rust-smoke
+      test-command: cargo test --locked
+
+  matrix-contract:
+    name: Matrix contract
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - id: core
+        uses: ./.github/actions/platform-matrix
+        with:
+          matrix-set: core
+
+      - id: full
+        uses: ./.github/actions/platform-matrix
+        with:
+          matrix-set: full
+
+      - id: invalid
+        continue-on-error: true
+        uses: ./.github/actions/platform-matrix
+        with:
+          matrix-set: unsupported
+
+      - name: Check matrix outputs
+        shell: bash
+        env:
+          CORE_MATRIX: ${{ steps.core.outputs.matrix }}
+          FULL_MATRIX: ${{ steps.full.outputs.matrix }}
+          INVALID_OUTCOME: ${{ steps.invalid.outcome }}
+        run: |
+          test "$(jq -c '[.include[].name]' <<<"$CORE_MATRIX")" = \
+            '["macOS","CentOS Stream","Arch","Debian","Ubuntu"]'
+          test "$(jq -c '[.include[].name]' <<<"$FULL_MATRIX")" = \
+            '["macOS","CentOS Stream","Arch","Debian","Ubuntu","WSL","Fedora","Alpine"]'
+          test "$INVALID_OUTCOME" = failure
+
   termux-runtime:
     name: Termux runtime
     uses: ./.github/workflows/termux-ci.yml
@@ -125,6 +178,10 @@ jobs:
       - name: Audit workflows
         shell: bash
         run: zizmor --offline .github/workflows/*.yml
+
+      - name: Check workflow contracts
+        shell: bash
+        run: test/workflow-contract-test
 
       - name: Test shell prerequisite profiles
         shell: bash

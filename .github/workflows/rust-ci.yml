@@ -256,3 +256,39 @@ jobs:
       host-command: ${{ inputs.termux-host-command }}
       rust-toolchain: ${{ inputs.rust-toolchain }}
       working-directory: ${{ inputs.working-directory }}
+
+  required:
+    name: Required
+    if: ${{ always() }}
+    needs: [platforms, quality, android-package, termux]
+    runs-on: ubuntu-24.04
+    env:
+      ANDROID_PACKAGE_COMMAND: ${{ inputs.android-package-smoke-command }}
+      ANDROID_PACKAGE_RESULT: ${{ needs.android-package.result }}
+      PLATFORMS_RESULT: ${{ needs.platforms.result }}
+      QUALITY_RESULT: ${{ needs.quality.result }}
+      TERMUX_COMMAND: ${{ inputs.termux-command }}
+      TERMUX_RESULT: ${{ needs.termux.result }}
+    steps:
+      - name: Require successful Rust CI
+        shell: bash
+        run: |-
+          printf 'Platforms: %s\n' "$PLATFORMS_RESULT"
+          printf 'Quality: %s\n' "$QUALITY_RESULT"
+          printf 'Android package: %s\n' "$ANDROID_PACKAGE_RESULT"
+          printf 'Termux runtime: %s\n' "$TERMUX_RESULT"
+
+          test "$PLATFORMS_RESULT" = success
+          test "$QUALITY_RESULT" = success
+
+          if [[ -n "$ANDROID_PACKAGE_COMMAND" ]]; then
+            test "$ANDROID_PACKAGE_RESULT" = success
+          else
+            test "$ANDROID_PACKAGE_RESULT" = skipped
+          fi
+
+          if [[ -n "$TERMUX_COMMAND" ]]; then
+            test "$TERMUX_RESULT" = success
+          else
+            test "$TERMUX_RESULT" = skipped
+          fi

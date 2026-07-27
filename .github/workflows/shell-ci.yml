@@ -46,3 +46,17 @@ jobs:
       profiles: ${{ inputs.profiles }}
       setup: ${{ inputs.setup }}
       test-command: ${{ inputs.test-command }}
+
+  required:
+    name: Required
+    if: ${{ always() }}
+    needs: platforms
+    runs-on: ubuntu-24.04
+    env:
+      PLATFORMS_RESULT: ${{ needs.platforms.result }}
+    steps:
+      - name: Require successful shell platforms
+        shell: bash
+        run: |-
+          printf 'Platforms: %s\n' "$PLATFORMS_RESULT"
+          test "$PLATFORMS_RESULT" = success

@@ -18,6 +18,22 @@ The examples in this repository pin
 suite. Callers may pin a newer commit after reviewing it and confirming that its
 CI passed.
 
+## Required Check Contract
+
+The public `shell-ci.yml`, `rust-ci.yml`, and `termux-ci.yml` workflows each
+expose a job named `Required`. GitHub combines that name with the caller's job
+key, producing a stable context such as `shell / Required`.
+
+Branch protection should require this aggregate context instead of selector,
+platform, quality, or runtime implementation contexts. The aggregate fails
+closed when a mandatory child job fails, is cancelled, or is unexpectedly
+skipped.
+
+The Rust aggregate always requires Platforms and Quality. Android package and
+Termux runtime are also required when their corresponding command inputs are
+nonempty; when an input is empty, only the resulting intentional skip is
+accepted.
+
 Dependabot-triggered workflows receive a read-only token and only secrets stored
 for Dependabot. After reviewing the proposed workflow commit, callers that
 require sensitive repository Actions secrets should recreate the bump on a
