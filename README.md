@@ -81,8 +81,8 @@ tooling, or a nested crate path can use `setup-command` and
 `working-directory` without forking the shared workflow. Binary repos can use
 `build-command`, `package-smoke-setup-command`, and `package-smoke-command` to
 validate release artifacts while keeping package layout and smoke assertions in
-the product repository. `termux-command` opts into a real Android emulator
-running the official Termux app. Shell callers can use `termux-profiles` to
+the product repository. `termux-command` overrides the mandatory Shell
+Android runtime command when needed. Shell callers can use `termux-profiles` to
 override Android prerequisites without changing conventional platforms. Rust callers can pair it with
 `termux-host-command` to cross-build an x86_64 Android artifact on Ubuntu and
 then execute that artifact under Android/Bionic in Termux. This complements the
