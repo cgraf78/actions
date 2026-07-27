@@ -17,6 +17,12 @@ jobs:
       matrix-set: core
       profiles: base
       test-command: test -f .github/workflows/shell-ci.yml
+      termux-command: |
+        test "$(uname -o)" = Android
+        test "$PREFIX" = /data/data/com.termux/files/usr
+        test -x "$PREFIX/bin/bash"
+        test -f .github/workflows/shell-ci.yml
+        test -f .github/workflows/_termux-ci.yml
 
   rust-smoke:
     name: Rust smoke
@@ -25,6 +31,22 @@ jobs:
       matrix-set: core
       working-directory: test/fixtures/rust-smoke
       test-command: cargo test --locked
+      android-package-smoke-command: |
+        cargo build --locked --target "$RUST_TARGET"
+        binary="target/$RUST_TARGET/debug/actions-rust-smoke"
+        readelf -h "$binary" | grep -Fq AArch64
+        readelf -l "$binary" | grep -Fq /system/bin/linker64
+      termux-host-command: |
+        cargo build --locked --target "$RUST_TARGET" \
+          --target-dir "$RUNNER_TEMP/actions-rust-smoke-target"
+        mkdir -p .termux-ci
+        install -m 0755 \
+          "$RUNNER_TEMP/actions-rust-smoke-target/$RUST_TARGET/debug/actions-rust-smoke" \
+          .termux-ci/actions-rust-smoke
+      termux-command: |
+        test "$(uname -o)" = Android
+        test "$PREFIX" = /data/data/com.termux/files/usr
+        test "$(.termux-ci/actions-rust-smoke)" = actions-rust-smoke
 
   matrix-contract:
     name: Matrix contract
@@ -62,29 +84,6 @@ jobs:
           test "$(jq -c '[.include[].name]' <<<"$FULL_MATRIX")" = \
             '["macOS","CentOS Stream","Arch","Debian","Ubuntu","WSL","Fedora","Alpine"]'
           test "$INVALID_OUTCOME" = failure
-
-  termux-runtime:
-    name: Termux runtime
-    uses: ./.github/workflows/termux-ci.yml
-    with:
-      working-directory: .github
-      rust-toolchain: stable
-      host-command: |
-        crate="$RUNNER_TEMP/android-termux-smoke"
-        cargo new --quiet --bin --vcs none "$crate"
-        cargo build --manifest-path "$crate/Cargo.toml" --target "$RUST_TARGET"
-        mkdir -p .termux-ci
-        install -m 0755 \
-          "$crate/target/$RUST_TARGET/debug/android-termux-smoke" \
-          .termux-ci/android-termux-smoke
-      command: |
-        test "$(uname -o)" = Android
-        test "$PREFIX" = /data/data/com.termux/files/usr
-        test -x "$PREFIX/bin/bash"
-        test -f workflows/termux-ci.yml
-        test -f workflows/_termux-ci.yml
-        test "$(.termux-ci/android-termux-smoke)" = 'Hello, world!'
-        printf 'Termux %s on %s\n' "${TERMUX_VERSION:-unknown}" "$(uname -m)"
 
   android-rust-toolchain:
     name: Android Rust toolchain

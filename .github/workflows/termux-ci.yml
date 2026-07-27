@@ -18,11 +18,21 @@ on:
         required: false
         type: string
         default: ""
+      profiles:
+        description: Comma-separated portable prerequisite profiles to install in Termux.
+        required: false
+        type: string
+        default: ""
       rust-toolchain:
         description: Optional Rust toolchain for an x86_64 Android host build.
         required: false
         type: string
         default: ""
+      setup:
+        description: Named Shell setup mode; named modes receive only base Termux prerequisites.
+        required: false
+        type: string
+        default: none
       working-directory:
         description: Checkout-relative directory where the command should run.
         required: false
@@ -43,7 +53,9 @@ jobs:
     with:
       command: ${{ inputs.command }}
       host-command: ${{ inputs.host-command }}
+      profiles: ${{ inputs.profiles }}
       rust-toolchain: ${{ inputs.rust-toolchain }}
+      setup: ${{ inputs.setup }}
       working-directory: ${{ inputs.working-directory }}
     secrets:
       DEPENDENCY_GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}

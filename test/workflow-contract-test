@@ -22,15 +22,29 @@ contracts() {
 
   check '.jobs.required.name == "Required"' shell-ci.yml
   check '.jobs.required.if == "${{ always() }}"' shell-ci.yml
-  check '.jobs.required.needs == "platforms"' shell-ci.yml
+  check '.jobs.required.needs | join(",") == "platforms,termux"' shell-ci.yml
   check '.jobs.required.env.PLATFORMS_RESULT == "${{ needs.platforms.result }}"' shell-ci.yml
+  check '.jobs.required.env.TERMUX_RESULT == "${{ needs.termux.result }}"' shell-ci.yml
   check '.jobs.required.steps[0].run | contains("test \"$PLATFORMS_RESULT\" = success")' shell-ci.yml
+  check '.jobs.required.steps[0].run | contains("test \"$TERMUX_RESULT\" = success")' shell-ci.yml
+  check '.jobs.termux.if == null' shell-ci.yml
+  check '.jobs.termux.uses == "./.github/workflows/termux-ci.yml"' shell-ci.yml
+  check '.jobs.termux.with.command == "${{ inputs.termux-command != '"'"''"'"' && inputs.termux-command || inputs.test-command }}"' shell-ci.yml
+  check '.jobs.termux.with.profiles == "${{ inputs.profiles }}"' shell-ci.yml
+  check '.jobs.termux.with.setup == "${{ inputs.setup }}"' shell-ci.yml
 
   check '.jobs.required.name == "Required"' termux-ci.yml
   check '.jobs.required.if == "${{ always() }}"' termux-ci.yml
   check '.jobs.required.needs == "runtime"' termux-ci.yml
   check '.jobs.required.env.RUNTIME_RESULT == "${{ needs.runtime.result }}"' termux-ci.yml
   check '.jobs.required.steps[0].run | contains("test \"$RUNTIME_RESULT\" = success")' termux-ci.yml
+  check '.jobs.runtime.with.profiles == "${{ inputs.profiles }}"' termux-ci.yml
+  check '.jobs.runtime.with.setup == "${{ inputs.setup }}"' termux-ci.yml
+
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("unsupported Termux setup mode")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("apt-get update")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("DEBIAN_FRONTEND=noninteractive")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("--force-confold")' _termux-ci.yml
 
   check '.jobs.required.name == "Required"' rust-ci.yml
   check '.jobs.required.if == "${{ always() }}"' rust-ci.yml
@@ -42,9 +56,19 @@ contracts() {
   check '.jobs.required.steps[0].run | contains("test \"$PLATFORMS_RESULT\" = success")' rust-ci.yml
   check '.jobs.required.steps[0].run | contains("test \"$QUALITY_RESULT\" = success")' rust-ci.yml
   check '.jobs.required.steps[0].run | contains("test \"$ANDROID_PACKAGE_RESULT\" = success")' rust-ci.yml
-  check '.jobs.required.steps[0].run | contains("test \"$ANDROID_PACKAGE_RESULT\" = skipped")' rust-ci.yml
   check '.jobs.required.steps[0].run | contains("test \"$TERMUX_RESULT\" = success")' rust-ci.yml
-  check '.jobs.required.steps[0].run | contains("test \"$TERMUX_RESULT\" = skipped")' rust-ci.yml
+  check '.jobs.required.steps[0].run | contains("skipped") | not' rust-ci.yml
+  check '.on.workflow_call.inputs.android-package-smoke-command.required == true' rust-ci.yml
+  check '.on.workflow_call.inputs.termux-command.required == true' rust-ci.yml
+  check '.jobs.android-package.if == null' rust-ci.yml
+  check '.jobs.termux.if == null' rust-ci.yml
+
+  check '.jobs.shell-smoke.with.termux-command != null' ci.yml
+  check '.jobs.rust-smoke.with.android-package-smoke-command != null' ci.yml
+  check '.jobs.rust-smoke.with.termux-host-command != null' ci.yml
+  check '.jobs.rust-smoke.with.termux-host-command | contains("--target-dir \"$RUNNER_TEMP/actions-rust-smoke-target\"")' ci.yml
+  check '.jobs.rust-smoke.with.termux-command != null' ci.yml
+  check '.jobs.termux-runtime == null' ci.yml
 
   for workflow in _shell-platforms.yml _rust-platforms.yml _termux-ci.yml; do
     check '.jobs.required == null' "$workflow"

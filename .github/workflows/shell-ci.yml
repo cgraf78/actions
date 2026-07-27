@@ -22,6 +22,16 @@ on:
         description: Command to run after checkout and setup.
         required: true
         type: string
+      termux-command:
+        description: Optional Android-specific test command. Empty reuses test-command.
+        required: false
+        type: string
+        default: ""
+      termux-host-command:
+        description: Optional command that prepares checkout artifacts for Termux.
+        required: false
+        type: string
+        default: ""
     secrets:
       DEPENDENCY_GH_TOKEN:
         description: Optional GitHub token exposed to caller commands as GH_TOKEN and GITHUB_TOKEN for private dependency downloads or rate-limit avoidance.
@@ -47,16 +57,30 @@ jobs:
       setup: ${{ inputs.setup }}
       test-command: ${{ inputs.test-command }}
 
+  termux:
+    name: Termux
+    uses: ./.github/workflows/termux-ci.yml
+    secrets:
+      DEPENDENCY_GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+    with:
+      command: ${{ inputs.termux-command != '' && inputs.termux-command || inputs.test-command }}
+      host-command: ${{ inputs.termux-host-command }}
+      profiles: ${{ inputs.profiles }}
+      setup: ${{ inputs.setup }}
+
   required:
     name: Required
     if: ${{ always() }}
-    needs: platforms
+    needs: [platforms, termux]
     runs-on: ubuntu-24.04
     env:
       PLATFORMS_RESULT: ${{ needs.platforms.result }}
+      TERMUX_RESULT: ${{ needs.termux.result }}
     steps:
       - name: Require successful shell platforms
         shell: bash
         run: |-
           printf 'Platforms: %s\n' "$PLATFORMS_RESULT"
+          printf 'Termux: %s\n' "$TERMUX_RESULT"
           test "$PLATFORMS_RESULT" = success
+          test "$TERMUX_RESULT" = success

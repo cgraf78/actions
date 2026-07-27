@@ -59,15 +59,13 @@ on:
         type: string
         default: ""
       android-package-smoke-command:
-        description: Optional command that builds and validates the Android aarch64 release artifact.
-        required: false
+        description: Command that builds and validates the Android aarch64 release artifact.
+        required: true
         type: string
-        default: ""
       termux-command:
-        description: Optional command to execute in the official Termux app on an Android emulator.
-        required: false
+        description: Command to execute in the official Termux app on an Android emulator.
+        required: true
         type: string
-        default: ""
       termux-host-command:
         description: Optional command that cross-builds artifacts for the Termux emulator.
         required: false
@@ -216,7 +214,6 @@ jobs:
 
   android-package:
     name: Package / Android aarch64
-    if: inputs.android-package-smoke-command != ''
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -247,7 +244,6 @@ jobs:
 
   termux:
     name: Termux runtime
-    if: inputs.termux-command != ''
     uses: ./.github/workflows/termux-ci.yml
     secrets:
       DEPENDENCY_GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
@@ -263,11 +259,9 @@ jobs:
     needs: [platforms, quality, android-package, termux]
     runs-on: ubuntu-24.04
     env:
-      ANDROID_PACKAGE_COMMAND: ${{ inputs.android-package-smoke-command }}
       ANDROID_PACKAGE_RESULT: ${{ needs.android-package.result }}
       PLATFORMS_RESULT: ${{ needs.platforms.result }}
       QUALITY_RESULT: ${{ needs.quality.result }}
-      TERMUX_COMMAND: ${{ inputs.termux-command }}
       TERMUX_RESULT: ${{ needs.termux.result }}
     steps:
       - name: Require successful Rust CI
@@ -280,15 +274,5 @@ jobs:
 
           test "$PLATFORMS_RESULT" = success
           test "$QUALITY_RESULT" = success
-
-          if [[ -n "$ANDROID_PACKAGE_COMMAND" ]]; then
-            test "$ANDROID_PACKAGE_RESULT" = success
-          else
-            test "$ANDROID_PACKAGE_RESULT" = skipped
-          fi
-
-          if [[ -n "$TERMUX_COMMAND" ]]; then
-            test "$TERMUX_RESULT" = success
-          else
-            test "$TERMUX_RESULT" = skipped
-          fi
+          test "$ANDROID_PACKAGE_RESULT" = success
+          test "$TERMUX_RESULT" = success
