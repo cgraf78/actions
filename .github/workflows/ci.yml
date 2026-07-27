@@ -190,6 +190,10 @@ jobs:
         shell: bash
         run: test/dotfiles-public-deps-test
 
+      - name: Test infrastructure retry classification
+        shell: bash
+        run: test/infra-retry-test
+
       - name: Lint shell scripts
         shell: bash
         run: |-
@@ -203,4 +207,5 @@ jobs:
           shellcheck -x -P .github/actions/shell-ci-prereqs \
             "${scripts[@]}" \
             test/dotfiles-public-deps-test \
+            test/infra-retry-test \
             test/shell-ci-prereqs-test

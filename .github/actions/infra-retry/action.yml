@@ -1,0 +1,32 @@
+name: Retry allowlisted infrastructure failures
+description: Rerun failed jobs once when every failed leaf job matches a known infrastructure failure.
+
+inputs:
+  github-token:
+    description: Token with actions:write access to the target repository.
+    required: true
+  repository:
+    description: Owner and repository containing the completed workflow run.
+    required: true
+  run-id:
+    description: Completed workflow run ID.
+    required: true
+  run-attempt:
+    description: Completed workflow attempt number.
+    required: true
+  conclusion:
+    description: Completed workflow conclusion.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Classify failure and rerun when safe
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        TARGET_CONCLUSION: ${{ inputs.conclusion }}
+        TARGET_REPOSITORY: ${{ inputs.repository }}
+        TARGET_RUN_ATTEMPT: ${{ inputs.run-attempt }}
+        TARGET_RUN_ID: ${{ inputs.run-id }}
+      run: "$GITHUB_ACTION_PATH/retry.sh"

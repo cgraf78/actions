@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+retry="$root/.github/actions/infra-retry/retry.sh"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() {
+  printf 'infra-retry-test: %s\n' "$*" >&2
+  exit 1
+}
+
+write_jobs() {
+  local destination=$1
+  shift
+  jq -cn --args '$ARGS.positional | map(
+    split(":") | {
+      id: (.[0] | tonumber),
+      name: .[1],
+      conclusion: .[2]
+    }
+  ) | {total_count: length, jobs: .}' -- "$@" >"$destination"
+}
+
+run_case() {
+  local name=$1
+  local jobs=$2
+  local logs=$3
+  local attempt=${4:-1}
+  local conclusion=${5:-failure}
+  local case_dir="$tmp/$name"
+  mkdir -p "$case_dir/bin"
+
+  cat >"$case_dir/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_GH_CALLS"
+
+case "$*" in
+  *'/actions/runs/'*'/jobs?'*)
+    cat "$FAKE_JOBS"
+    ;;
+  *'/actions/jobs/'*'/logs'*)
+    job_id=${*%/logs}
+    job_id=${job_id##*/}
+    cat "$FAKE_LOGS/$job_id.log"
+    ;;
+  *'/rerun-failed-jobs'*)
+    ;;
+  *)
+    printf 'unexpected gh call: %s\n' "$*" >&2
+    exit 2
+    ;;
+esac
+EOF
+  chmod +x "$case_dir/bin/gh"
+
+  FAKE_GH_CALLS="$case_dir/gh-calls" \
+    FAKE_JOBS="$jobs" \
+    FAKE_LOGS="$logs" \
+    GH_TOKEN=test-token \
+    TARGET_CONCLUSION="$conclusion" \
+    TARGET_REPOSITORY=cgraf78/example \
+    TARGET_RUN_ATTEMPT="$attempt" \
+    TARGET_RUN_ID=12345 \
+    PATH="$case_dir/bin:$PATH" \
+    bash "$retry" >"$case_dir/stdout" 2>"$case_dir/stderr"
+}
+
+mkdir -p "$tmp/infra-logs" "$tmp/app-logs" "$tmp/mixed-logs"
+write_jobs "$tmp/infra-jobs.json" \
+  '11:shell / Platforms / Arch:failure' \
+  '12:shell / Required:failure' \
+  '13:shell / Platforms / Ubuntu:success'
+cat >"$tmp/infra-logs/11.log" <<'EOF'
+##[command]/usr/bin/docker pull archlinux:latest
+Error response from daemon: Get "https://registry-1.docker.io/v2/": context deadline exceeded
+##[warning]Docker pull failed with exit code 1, back off 3 seconds before retry.
+##[error]Docker pull failed with exit code 1
+EOF
+
+run_case infra "$tmp/infra-jobs.json" "$tmp/infra-logs"
+grep -Fq 'rerun-failed-jobs' "$tmp/infra/gh-calls" ||
+  fail "allowlisted infrastructure failure was not rerun"
+grep -Fq 'rerunning failed jobs once' "$tmp/infra/stdout" ||
+  fail "retry decision was not reported"
+
+write_jobs "$tmp/app-jobs.json" \
+  '21:shell / Platforms / Arch:failure' \
+  '22:shell / Required:failure'
+cat >"$tmp/app-logs/21.log" <<'EOF'
+Run tests
+assertion failed: expected 1, got 2
+Process completed with exit code 1.
+EOF
+
+run_case app "$tmp/app-jobs.json" "$tmp/app-logs"
+if grep -Fq 'rerun-failed-jobs' "$tmp/app/gh-calls"; then
+  fail "application failure was rerun"
+fi
+grep -Fq 'not an allowlisted infrastructure failure' "$tmp/app/stdout" ||
+  fail "application failure decision was not reported"
+
+write_jobs "$tmp/mixed-jobs.json" \
+  '31:shell / Platforms / Arch:failure' \
+  '32:rust / Quality / Ubuntu:failure' \
+  '33:shell / Required:failure'
+cp "$tmp/infra-logs/11.log" "$tmp/mixed-logs/31.log"
+cp "$tmp/app-logs/21.log" "$tmp/mixed-logs/32.log"
+
+run_case mixed "$tmp/mixed-jobs.json" "$tmp/mixed-logs"
+if grep -Fq 'rerun-failed-jobs' "$tmp/mixed/gh-calls"; then
+  fail "mixed infrastructure and application failures were rerun"
+fi
+
+mkdir -p "$tmp/unavailable-logs" "$tmp/aggregate-logs"
+write_jobs "$tmp/unavailable-jobs.json" \
+  '41:shell / Platforms / Arch:failure' \
+  '42:shell / Required:failure'
+run_case unavailable "$tmp/unavailable-jobs.json" "$tmp/unavailable-logs"
+if grep -Fq 'rerun-failed-jobs' "$tmp/unavailable/gh-calls"; then
+  fail "failure with an unavailable log was rerun"
+fi
+grep -Fq 'could not read failed job log' "$tmp/unavailable/stdout" ||
+  fail "unavailable-log decision was not reported"
+
+write_jobs "$tmp/aggregate-jobs.json" '51:shell / Required:failure'
+run_case aggregate-only "$tmp/aggregate-jobs.json" "$tmp/aggregate-logs"
+if grep -Fq 'rerun-failed-jobs' "$tmp/aggregate-only/gh-calls"; then
+  fail "aggregate-only failure was rerun"
+fi
+grep -Fq 'no failed leaf jobs' "$tmp/aggregate-only/stdout" ||
+  fail "aggregate-only decision was not reported"
+
+jq '.total_count = 101' "$tmp/infra-jobs.json" >"$tmp/incomplete-jobs.json"
+run_case incomplete "$tmp/incomplete-jobs.json" "$tmp/infra-logs"
+if grep -Fq 'rerun-failed-jobs' "$tmp/incomplete/gh-calls"; then
+  fail "run with an incomplete job listing was rerun"
+fi
+grep -Fq 'job list is incomplete' "$tmp/incomplete/stdout" ||
+  fail "incomplete-job-list decision was not reported"
+
+run_case second-attempt "$tmp/infra-jobs.json" "$tmp/infra-logs" 2
+if [[ -s "$tmp/second-attempt/gh-calls" ]]; then
+  fail "second attempt queried or reran the workflow"
+fi
+grep -Fq 'attempt 2 is not eligible' "$tmp/second-attempt/stdout" ||
+  fail "second-attempt decision was not reported"
+
+run_case success "$tmp/infra-jobs.json" "$tmp/infra-logs" 1 success
+if [[ -s "$tmp/success/gh-calls" ]]; then
+  fail "successful workflow queried or reran jobs"
+fi
+
+printf 'infra-retry-test: ok\n'
