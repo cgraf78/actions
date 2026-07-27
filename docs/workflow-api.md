@@ -110,8 +110,8 @@ provides a full procps-compatible `ps` on Linux; macOS uses its system `ps`
 without an additional Homebrew package.
 
 Termux installs the Android equivalents of generic profile capabilities from
-the same profile list. Its job always runs. Named setup modes receive the base
-Termux tools and use `termux-command` only for genuinely product-specific
+the same profile list, including when a named setup mode is selected. Its job
+always runs. Callers use `termux-command` only for genuinely product-specific
 preparation or test selection.
 
 The `checkrun` setup mode requires the caller to commit both
@@ -241,7 +241,7 @@ depend on the emulator, bootstrap, or sandbox-transport implementation.
 | `host-command`      | `""`     | Optional command that prepares checkout artifacts on the Ubuntu host. |
 | `profiles`          | `""`     | Portable Shell capability profiles installed with Termux packages.    |
 | `rust-toolchain`    | `""`     | Optional toolchain enabling the fixed x86_64 Android NDK host build.   |
-| `setup`             | `none`   | Shell setup mode controlling generic versus base prerequisites.       |
+| `setup`             | `none`   | Shell setup mode composed with the requested prerequisite profiles.   |
 | `working-directory` | `.`      | Checkout-relative directory used by the host and Termux commands.     |
 
 ### Secrets
