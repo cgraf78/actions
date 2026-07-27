@@ -114,6 +114,10 @@ the same profile list, including when a named setup mode is selected. Its job
 always runs. Callers use `termux-command` only for genuinely product-specific
 preparation or test selection.
 
+The runner also activates Termux's `termux-exec` compatibility layer before
+caller code runs. Repository scripts can therefore keep portable Linux
+shebangs such as `#!/usr/bin/env bash` instead of embedding an app data path.
+
 The `checkrun` setup mode requires the caller to commit both
 `.github/mise/checkrun-ci.toml` and `.github/mise/mise.lock`. The setup uses
 Mise's strict locked mode, so a missing lock or unresolved platform asset fails

@@ -144,7 +144,7 @@ jobs:
               *) return 1 ;;
             esac
           }
-          packages=(bash git curl)
+          packages=(bash git curl termux-exec)
           has_profile jq && packages+=(jq)
           has_profile python && packages+=(python)
           has_profile zsh && packages+=(zsh)
@@ -159,6 +159,15 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get \
             -o Dpkg::Options::=--force-confold \
             install -y "${packages[@]}"
+          termux_exec_lib="$PREFIX/lib/libtermux-exec.so"
+          if [[ ! -f "$termux_exec_lib" ]]; then
+            termux_exec_lib="$PREFIX/lib/libtermux-exec-ld-preload.so"
+          fi
+          [[ -f "$termux_exec_lib" ]] || {
+            echo "termux-exec preload library is unavailable" >&2
+            exit 1
+          }
+          export LD_PRELOAD="$termux_exec_lib"
           workdir=$(printf %s "$workdir_b64" | base64 -d)
           project_root=$(cd "$HOME/project" && pwd -P)
           workdir_path=$(cd "$project_root/$workdir" && pwd -P)
