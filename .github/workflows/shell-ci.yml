@@ -33,7 +33,7 @@ on:
         type: string
         default: ""
       termux-profiles:
-        description: Optional Termux-specific profiles. Empty reuses profiles.
+        description: Optional Termux profiles. Empty reuses profiles, then falls back to runtime.
         required: false
         type: string
         default: ""
@@ -70,7 +70,7 @@ jobs:
     with:
       command: ${{ inputs.termux-command != '' && inputs.termux-command || inputs.test-command }}
       host-command: ${{ inputs.termux-host-command }}
-      profiles: ${{ inputs.termux-profiles != '' && inputs.termux-profiles || inputs.profiles }}
+      profiles: ${{ inputs.termux-profiles != '' && inputs.termux-profiles || (inputs.profiles != '' && inputs.profiles || 'runtime') }}
       setup: ${{ inputs.setup }}
 
   required:

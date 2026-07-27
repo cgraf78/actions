@@ -30,7 +30,7 @@ contracts() {
   check '.jobs.termux.if == null' shell-ci.yml
   check '.jobs.termux.uses == "./.github/workflows/termux-ci.yml"' shell-ci.yml
   check '.jobs.termux.with.command == "${{ inputs.termux-command != '"'"''"'"' && inputs.termux-command || inputs.test-command }}"' shell-ci.yml
-  check '.jobs.termux.with.profiles == "${{ inputs.termux-profiles != '"'"''"'"' && inputs.termux-profiles || inputs.profiles }}"' shell-ci.yml
+  check '.jobs.termux.with.profiles == "${{ inputs.termux-profiles != '"'"''"'"' && inputs.termux-profiles || (inputs.profiles != '"'"''"'"' && inputs.profiles || '"'"'runtime'"'"') }}"' shell-ci.yml
   check '.jobs.termux.with.setup == "${{ inputs.setup }}"' shell-ci.yml
 
   check '.jobs.required.name == "Required"' termux-ci.yml
