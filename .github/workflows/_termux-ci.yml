@@ -157,6 +157,7 @@ jobs:
             has_profile procps && packages+=(procps)
             has_profile shellcheck && packages+=(shellcheck)
           fi
+          apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get \
             -o Dpkg::Options::=--force-confold \
             install -y "${packages[@]}"
