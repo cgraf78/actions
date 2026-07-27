@@ -16,7 +16,7 @@ jobs:
     with:
       matrix-set: core
       profiles: base
-      test-command: test "$MATRIX_NAME" != ""
+      test-command: test -f .github/workflows/shell-ci.yml
 
   rust-smoke:
     name: Rust smoke
