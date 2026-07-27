@@ -29,10 +29,9 @@ platform, quality, or runtime implementation contexts. The aggregate fails
 closed when a mandatory child job fails, is cancelled, or is unexpectedly
 skipped.
 
-The Rust aggregate always requires Platforms and Quality. Android package and
-Termux runtime are also required when their corresponding command inputs are
-nonempty; when an input is empty, only the resulting intentional skip is
-accepted.
+The Shell aggregate always requires its conventional Platforms and real Termux
+runtime. The Rust aggregate always requires Platforms, Quality, Android package,
+and real Termux runtime. Neither family accepts a skipped Android/Termux result.
 
 Dependabot-triggered workflows receive a read-only token and only secrets stored
 for Dependabot. After reviewing the proposed workflow commit, callers that
@@ -96,17 +95,24 @@ Do not use it for release upload permissions; `rust-release.yml` uses
 
 ### Inputs
 
-| Input          | Default  | Contract                                                                   |
-| -------------- | -------- | -------------------------------------------------------------------------- |
-| `profiles`     | `""`     | Comma-separated OS prerequisite profiles consumed by `shell-ci-prereqs`.   |
-| `matrix-set`   | `auto`   | Platform matrix policy. See [Matrix Sets](#matrix-sets).                   |
-| `setup`        | `none`   | Named setup mode. Supported values are `none`, `checkrun`, and `dotfiles`. |
-| `test-command` | required | Caller-owned Bash command run on every selected platform.                  |
+| Input                 | Default  | Contract                                                                           |
+| --------------------- | -------- | ---------------------------------------------------------------------------------- |
+| `profiles`            | `""`     | Comma-separated prerequisite profiles used by conventional platforms and Termux.   |
+| `matrix-set`          | `auto`   | Platform matrix policy. See [Matrix Sets](#matrix-sets).                           |
+| `setup`               | `none`   | Named setup mode. Supported values are `none`, `checkrun`, and `dotfiles`.         |
+| `test-command`        | required | Caller-owned Bash command run on every conventional platform and, by default, Termux. |
+| `termux-command`      | `""`     | Android-specific command override. Empty reuses `test-command`; it never skips CI. |
+| `termux-host-command` | `""`     | Optional Ubuntu-host preparation for artifacts copied into Termux.                 |
 
 Supported generic profiles are `base`, `jq`, `python`, `zsh`, `lua`, `neovim`,
 `tmux`, `openssh-netcat-lsof`, `procps`, and `shellcheck`. The `procps` profile
 provides a full procps-compatible `ps` on Linux; macOS uses its system `ps`
 without an additional Homebrew package.
+
+Termux installs the Android equivalents of generic profile capabilities from
+the same profile list. Its job always runs. Named setup modes receive the base
+Termux tools and use `termux-command` only for genuinely product-specific
+preparation or test selection.
 
 The `checkrun` setup mode requires the caller to commit both
 `.github/mise/checkrun-ci.toml` and `.github/mise/mise.lock`. The setup uses
@@ -172,8 +178,8 @@ Ubuntu quality gate.
 | `doc-command`                 | `cargo doc --locked --no-deps`                                      | Ubuntu quality docs command. Empty disables the step.                                                               |
 | `package-smoke-setup-command` | `""`                                                                | Optional setup command run immediately before package smoke.                                                        |
 | `package-smoke-command`       | `""`                                                                | Optional caller-owned command that builds and validates a representative release artifact. Empty disables the step. |
-| `android-package-smoke-command` | `""`                                                              | Optional caller-owned command that cross-builds and validates the Android aarch64 release artifact. Empty disables the job. |
-| `termux-command`              | `""`                                                                | Optional command run inside the official Termux app on an Android x86_64 emulator. Empty disables the job.           |
+| `android-package-smoke-command` | required                                                          | Caller-owned command that cross-builds and validates the Android aarch64 release artifact.                           |
+| `termux-command`              | required                                                            | Command run inside the official Termux app on an Android x86_64 emulator.                                            |
 | `termux-host-command`         | `""`                                                                | Optional host command that cross-builds artifacts copied into the Termux sandbox.                                    |
 
 ### Locked Defaults
@@ -233,7 +239,9 @@ depend on the emulator, bootstrap, or sandbox-transport implementation.
 | ------------------- | -------- | --------------------------------------------------------------------- |
 | `command`           | required | Bash command executed inside Termux.                                  |
 | `host-command`      | `""`     | Optional command that prepares checkout artifacts on the Ubuntu host. |
+| `profiles`          | `""`     | Portable Shell capability profiles installed with Termux packages.    |
 | `rust-toolchain`    | `""`     | Optional toolchain enabling the fixed x86_64 Android NDK host build.   |
+| `setup`             | `none`   | Shell setup mode controlling generic versus base prerequisites.       |
 | `working-directory` | `.`      | Checkout-relative directory used by the host and Termux commands.     |
 
 ### Secrets
