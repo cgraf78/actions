@@ -15,6 +15,11 @@ local organization.
   official Termux app on an Android emulator.
 - `rust-release.yml` builds and publishes Rust release artifacts.
 
+The `infra-retry` composite action is an opt-in companion for caller
+`workflow_run` controllers. It reruns failed jobs once only when every failed
+leaf job matches a narrowly allowlisted infrastructure signature. See
+`docs/workflow-api.md` for the caller and security contract.
+
 The public shell, Rust, and Termux CI workflows expose a `Required`
 aggregation job. Shell and Rust always require their Android/Termux work;
 caller branch protection should require `<caller job> / Required`. Internal

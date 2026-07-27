@@ -44,6 +44,57 @@ update. Re-running the bot-authored workflow as another actor does not restore
 repository Actions secrets. See GitHub's
 [Dependabot workflow restrictions](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-on-actions#restrictions-when-dependabot-triggers-events).
 
+## Infrastructure Retry Action
+
+The `infra-retry` composite action lets a caller smooth over a small allowlist
+of failures caused before repository code runs. It currently recognizes only
+GitHub runner job-container pulls that exhausted the runner's own retries due
+to transient registry transport failures. It does not retry test, lint, build,
+package-manager, authentication, or mixed infrastructure/application failures.
+
+The action inspects failed leaf-job logs and ignores only derived `Required`
+aggregates. It reruns failed jobs through GitHub's API when every failed leaf is
+allowlisted and `run_attempt` is exactly `1`. A failed second attempt remains a
+hard failure, which prevents retry loops and preserves a visible reliability
+signal.
+
+Callers opt in with a controller on their default branch. Pin the action to a
+reviewed 40-character commit, substitute the caller's workflow name, and do not
+make the controller itself a required check:
+
+```yaml
+name: Retry CI infrastructure failures
+
+on:
+  workflow_run:
+    workflows: [Tests]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  retry:
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.run_attempt == 1
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: cgraf78/actions/.github/actions/infra-retry@FULL_COMMIT_SHA
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
+          run-attempt: ${{ github.event.workflow_run.run_attempt }}
+          conclusion: ${{ github.event.workflow_run.conclusion }}
+```
+
+`workflow_run` uses the controller from the default branch. It does not execute
+or check out code from the failed branch, and its token is scoped to Actions
+reruns plus read-only repository contents.
+
 ## Common Contracts
 
 ### Command Inputs
