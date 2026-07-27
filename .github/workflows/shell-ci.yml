@@ -32,6 +32,11 @@ on:
         required: false
         type: string
         default: ""
+      termux-profiles:
+        description: Optional Termux-specific profiles. Empty reuses profiles.
+        required: false
+        type: string
+        default: ""
     secrets:
       DEPENDENCY_GH_TOKEN:
         description: Optional GitHub token exposed to caller commands as GH_TOKEN and GITHUB_TOKEN for private dependency downloads or rate-limit avoidance.
@@ -65,7 +70,7 @@ jobs:
     with:
       command: ${{ inputs.termux-command != '' && inputs.termux-command || inputs.test-command }}
       host-command: ${{ inputs.termux-host-command }}
-      profiles: ${{ inputs.profiles }}
+      profiles: ${{ inputs.termux-profiles != '' && inputs.termux-profiles || inputs.profiles }}
       setup: ${{ inputs.setup }}
 
   required:

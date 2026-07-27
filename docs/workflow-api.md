@@ -103,6 +103,7 @@ Do not use it for release upload permissions; `rust-release.yml` uses
 | `test-command`        | required | Caller-owned Bash command run on every conventional platform and, by default, Termux. |
 | `termux-command`      | `""`     | Android-specific command override. Empty reuses `test-command`; it never skips CI. |
 | `termux-host-command` | `""`     | Optional Ubuntu-host preparation for artifacts copied into Termux.                 |
+| `termux-profiles`     | `""`     | Android-specific profile override. Empty reuses `profiles`.                        |
 
 Supported generic profiles are `base`, `jq`, `python`, `zsh`, `lua`, `neovim`,
 `tmux`, `openssh-netcat-lsof`, `procps`, and `shellcheck`. The `procps` profile
