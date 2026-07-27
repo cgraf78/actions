@@ -145,18 +145,16 @@ jobs:
             esac
           }
           packages=(bash git curl)
-          if [[ "$setup" == none ]]; then
-            has_profile jq && packages+=(jq)
-            has_profile python && packages+=(python)
-            has_profile zsh && packages+=(zsh)
-            has_profile lua && packages+=(lua54)
-            has_profile neovim && packages+=(neovim)
-            has_profile tmux && packages+=(tmux)
-            has_profile openssh-netcat-lsof &&
-              packages+=(openssh netcat-openbsd lsof)
-            has_profile procps && packages+=(procps)
-            has_profile shellcheck && packages+=(shellcheck)
-          fi
+          has_profile jq && packages+=(jq)
+          has_profile python && packages+=(python)
+          has_profile zsh && packages+=(zsh)
+          has_profile lua && packages+=(lua54)
+          has_profile neovim && packages+=(neovim)
+          has_profile tmux && packages+=(tmux)
+          has_profile openssh-netcat-lsof &&
+            packages+=(openssh netcat-openbsd lsof)
+          has_profile procps && packages+=(procps)
+          has_profile shellcheck && packages+=(shellcheck)
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get \
             -o Dpkg::Options::=--force-confold \
