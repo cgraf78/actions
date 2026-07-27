@@ -63,6 +63,7 @@ contracts() {
   check '.jobs.shell-smoke.with.termux-command != null' ci.yml
   check '.jobs.rust-smoke.with.android-package-smoke-command != null' ci.yml
   check '.jobs.rust-smoke.with.termux-host-command != null' ci.yml
+  check '.jobs.rust-smoke.with.termux-host-command | contains("--target-dir \"$RUNNER_TEMP/actions-rust-smoke-target\"")' ci.yml
   check '.jobs.rust-smoke.with.termux-command != null' ci.yml
   check '.jobs.termux-runtime == null' ci.yml
 

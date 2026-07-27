@@ -37,10 +37,11 @@ jobs:
         readelf -h "$binary" | grep -Fq AArch64
         readelf -l "$binary" | grep -Fq /system/bin/linker64
       termux-host-command: |
-        cargo build --locked --target "$RUST_TARGET"
+        cargo build --locked --target "$RUST_TARGET" \
+          --target-dir "$RUNNER_TEMP/actions-rust-smoke-target"
         mkdir -p .termux-ci
         install -m 0755 \
-          "target/$RUST_TARGET/debug/actions-rust-smoke" \
+          "$RUNNER_TEMP/actions-rust-smoke-target/$RUST_TARGET/debug/actions-rust-smoke" \
           .termux-ci/actions-rust-smoke
       termux-command: |
         test "$(uname -o)" = Android
