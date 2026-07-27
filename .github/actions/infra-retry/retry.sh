@@ -27,6 +27,14 @@ is_retryable_docker_pull() {
       "$log"
 }
 
+is_retryable_termux_bootstrap() {
+  local log=$1
+
+  grep -Fq 'Installing Termux APK' "$log" &&
+    grep -Fq 'Waiting for Termux bootstrap' "$log" &&
+    grep -Fq 'Termux bootstrap did not become ready' "$log"
+}
+
 validate_inputs() {
   [[ "$TARGET_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || {
     notice "invalid repository: $TARGET_REPOSITORY"
@@ -96,6 +104,9 @@ main() {
 
     if is_retryable_docker_pull "$log"; then
       notice "allowlisted Docker pull failure: $name"
+      retryable_leaf=$((retryable_leaf + 1))
+    elif is_retryable_termux_bootstrap "$log"; then
+      notice "allowlisted Termux bootstrap failure: $name"
       retryable_leaf=$((retryable_leaf + 1))
     else
       notice "not an allowlisted infrastructure failure: $name"

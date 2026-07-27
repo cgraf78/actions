@@ -68,7 +68,7 @@ EOF
     bash "$retry" >"$case_dir/stdout" 2>"$case_dir/stderr"
 }
 
-mkdir -p "$tmp/infra-logs" "$tmp/app-logs" "$tmp/mixed-logs"
+mkdir -p "$tmp/infra-logs" "$tmp/termux-logs" "$tmp/app-logs" "$tmp/mixed-logs"
 write_jobs "$tmp/infra-jobs.json" \
   '11:shell / Platforms / Arch:failure' \
   '12:shell / Required:failure' \
@@ -85,6 +85,37 @@ grep -Fq 'rerun-failed-jobs' "$tmp/infra/gh-calls" ||
   fail "allowlisted infrastructure failure was not rerun"
 grep -Fq 'rerunning failed jobs once' "$tmp/infra/stdout" ||
   fail "retry decision was not reported"
+
+write_jobs "$tmp/termux-jobs.json" \
+  '16:rust / Termux runtime / Runtime / Android / Termux x86_64:failure' \
+  '17:rust / Termux runtime / Required:failure' \
+  '18:rust / Required:failure'
+cat >"$tmp/termux-logs/16.log" <<'EOF'
+Installing Termux APK
+Waiting for Termux bootstrap
+Termux bootstrap did not become ready
+The process '/usr/bin/sh' failed with exit code 1
+EOF
+
+run_case termux "$tmp/termux-jobs.json" "$tmp/termux-logs"
+grep -Fq 'rerun-failed-jobs' "$tmp/termux/gh-calls" ||
+  fail "allowlisted Termux bootstrap failure was not rerun"
+grep -Fq 'allowlisted Termux bootstrap failure' "$tmp/termux/stdout" ||
+  fail "Termux bootstrap retry decision was not reported"
+
+write_jobs "$tmp/termux-partial-jobs.json" \
+  '19:rust / Termux runtime / Runtime / Android / Termux x86_64:failure' \
+  '20:rust / Required:failure'
+cat >"$tmp/termux-logs/19.log" <<'EOF'
+Run caller tests in Termux
+Termux bootstrap did not become ready
+Process completed with exit code 1.
+EOF
+
+run_case termux-partial "$tmp/termux-partial-jobs.json" "$tmp/termux-logs"
+if grep -Fq 'rerun-failed-jobs' "$tmp/termux-partial/gh-calls"; then
+  fail "partial Termux signature was rerun"
+fi
 
 write_jobs "$tmp/app-jobs.json" \
   '21:shell / Platforms / Arch:failure' \
