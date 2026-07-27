@@ -19,17 +19,17 @@ on:
         type: string
         default: ""
       profiles:
-        description: Comma-separated portable prerequisite profiles to install in Termux.
+        description: Comma-separated Termux prerequisite profiles; runtime is the lightweight baseline.
         required: false
         type: string
-        default: ""
+        default: runtime
       rust-toolchain:
         description: Optional Rust toolchain for an x86_64 Android host build.
         required: false
         type: string
         default: ""
       setup:
-        description: Named Shell setup mode; named modes receive only base Termux prerequisites.
+        description: Named Shell setup mode composed with the requested Termux profiles.
         required: false
         type: string
         default: none
@@ -144,7 +144,17 @@ jobs:
               *) return 1 ;;
             esac
           }
-          packages=(bash git curl termux-exec)
+          # Every runtime needs a trusted shell and Termux's exec-path shim.
+          # `base` adds network/source-control tools for repository test suites;
+          # `runtime` keeps smoke-only callers lean and avoids Git's OpenSSH
+          # dependency and first-install host-key setup.
+          packages=(bash termux-exec)
+          if has_profile base; then
+            packages+=(git curl)
+          elif ! has_profile runtime; then
+            echo "Termux profiles must include base or runtime" >&2
+            exit 2
+          fi
           has_profile jq && packages+=(jq)
           has_profile python && packages+=(python)
           has_profile zsh && packages+=(zsh)
