@@ -83,10 +83,13 @@ tooling, or a nested crate path can use `setup-command` and
 validate release artifacts while keeping package layout and smoke assertions in
 the product repository. `termux-command` overrides the mandatory Shell
 Android runtime command when needed. Shell callers can use `termux-profiles` to
-override Android prerequisites without changing conventional platforms. Rust callers can pair it with
-`termux-host-command` to cross-build an x86_64 Android artifact on Ubuntu and
-then execute that artifact under Android/Bionic in Termux. This complements the
-release's exact-architecture AArch64 cross-build rather than replacing it.
+override Android prerequisites without changing conventional platforms. Start
+with `base` when tests need Git or curl, or `runtime` for lightweight commands
+that only need Bash and `termux-exec`, then add capability profiles such as
+`shellcheck`. Rust callers can pair it with `termux-host-command` to cross-build
+an x86_64 Android artifact on Ubuntu and then execute that artifact under
+Android/Bionic in Termux. This complements the release's exact-architecture
+AArch64 cross-build rather than replacing it.
 
 ### `termux-ci.yml`
 

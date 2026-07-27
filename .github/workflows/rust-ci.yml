@@ -250,6 +250,7 @@ jobs:
     with:
       command: ${{ inputs.termux-command }}
       host-command: ${{ inputs.termux-host-command }}
+      profiles: runtime
       rust-toolchain: ${{ inputs.rust-toolchain }}
       working-directory: ${{ inputs.working-directory }}
 

@@ -40,11 +40,15 @@ contracts() {
   check '.jobs.required.steps[0].run | contains("test \"$RUNTIME_RESULT\" = success")' termux-ci.yml
   check '.jobs.runtime.with.profiles == "${{ inputs.profiles }}"' termux-ci.yml
   check '.jobs.runtime.with.setup == "${{ inputs.setup }}"' termux-ci.yml
+  check '.on.workflow_call.inputs.profiles.default == "runtime"' termux-ci.yml
+  check '.on.workflow_call.inputs.profiles.default == "runtime"' _termux-ci.yml
 
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("unsupported Termux setup mode")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("apt-get update")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("DEBIAN_FRONTEND=noninteractive")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("--force-confold")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("packages=(bash termux-exec)")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("if has_profile base; then\n  packages+=(git curl)\nelif ! has_profile runtime; then")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("termux-exec")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("LD_PRELOAD")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("[[ \"$setup\" == none ]]") | not' _termux-ci.yml
@@ -65,6 +69,7 @@ contracts() {
   check '.on.workflow_call.inputs.termux-command.required == true' rust-ci.yml
   check '.jobs.android-package.if == null' rust-ci.yml
   check '.jobs.termux.if == null' rust-ci.yml
+  check '.jobs.termux.with.profiles == "runtime"' rust-ci.yml
 
   check '.jobs.shell-smoke.with.termux-command != null' ci.yml
   check '.jobs.rust-smoke.with.android-package-smoke-command != null' ci.yml

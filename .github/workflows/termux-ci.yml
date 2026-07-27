@@ -19,17 +19,17 @@ on:
         type: string
         default: ""
       profiles:
-        description: Comma-separated portable prerequisite profiles to install in Termux.
+        description: Comma-separated Termux prerequisite profiles; runtime is the lightweight baseline.
         required: false
         type: string
-        default: ""
+        default: runtime
       rust-toolchain:
         description: Optional Rust toolchain for an x86_64 Android host build.
         required: false
         type: string
         default: ""
       setup:
-        description: Named Shell setup mode; named modes receive only base Termux prerequisites.
+        description: Named Shell setup mode composed with the requested Termux profiles.
         required: false
         type: string
         default: none

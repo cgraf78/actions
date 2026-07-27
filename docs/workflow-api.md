@@ -106,9 +106,11 @@ Do not use it for release upload permissions; `rust-release.yml` uses
 | `termux-profiles`     | `""`     | Android-specific profile override. Empty reuses `profiles`.                        |
 
 Supported generic profiles are `base`, `jq`, `python`, `zsh`, `lua`, `neovim`,
-`tmux`, `openssh-netcat-lsof`, `procps`, and `shellcheck`. The `procps` profile
-provides a full procps-compatible `ps` on Linux; macOS uses its system `ps`
-without an additional Homebrew package.
+`tmux`, `openssh-netcat-lsof`, `procps`, and `shellcheck`. Termux additionally
+supports `runtime` as a lightweight alternative to `base`: both provide Bash
+and `termux-exec`, while `base` also provides Git and curl. The `procps`
+profile provides a full procps-compatible `ps` on Linux; macOS uses its system
+`ps` without an additional Homebrew package.
 
 Termux installs the Android equivalents of generic profile capabilities from
 the same profile list, including when a named setup mode is selected. Its job
@@ -244,7 +246,7 @@ depend on the emulator, bootstrap, or sandbox-transport implementation.
 | ------------------- | -------- | --------------------------------------------------------------------- |
 | `command`           | required | Bash command executed inside Termux.                                  |
 | `host-command`      | `""`     | Optional command that prepares checkout artifacts on the Ubuntu host. |
-| `profiles`          | `""`     | Portable Shell capability profiles installed with Termux packages.    |
+| `profiles`          | `runtime` | Termux profiles; `runtime` is lightweight, while `base` adds Git/curl. |
 | `rust-toolchain`    | `""`     | Optional toolchain enabling the fixed x86_64 Android NDK host build.   |
 | `setup`             | `none`   | Shell setup mode composed with the requested prerequisite profiles.   |
 | `working-directory` | `.`      | Checkout-relative directory used by the host and Termux commands.     |
