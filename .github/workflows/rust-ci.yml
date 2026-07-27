@@ -3,6 +3,11 @@ name: Rust CI
 on:
   workflow_call:
     inputs:
+      concurrency-scope:
+        description: Stable identity that distinguishes multiple Rust CI calls in one caller workflow.
+        required: false
+        type: string
+        default: default
       rust-toolchain:
         description: Rust toolchain to install for all checks.
         required: false
@@ -78,6 +83,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: rust-ci-${{ github.repository }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.concurrency-scope }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always

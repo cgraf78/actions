@@ -89,6 +89,32 @@ Use this for private dependency downloads or GitHub API rate-limit avoidance.
 Do not use it for release upload permissions; `rust-release.yml` uses
 `github.token` only at its write boundaries.
 
+### Concurrency Scope
+
+The public shell and Rust workflows cancel an older run only when its
+repository, event, pull request or ref, CI family, and `concurrency-scope` all
+match a newer run. The optional scope defaults to `default`, which is
+appropriate when a caller invokes a CI family once.
+
+Callers that invoke the same family more than once in one workflow must pass a
+distinct, stable scope for each call. The scope only needs to be unique within
+that caller repository and CI family:
+
+```yaml
+jobs:
+  shell:
+    uses: cgraf78/actions/.github/workflows/shell-ci.yml@FULL_COMMIT_SHA
+    with:
+      concurrency-scope: shell
+      test-command: tests/shell-test
+
+  shellcheck:
+    uses: cgraf78/actions/.github/workflows/shell-ci.yml@FULL_COMMIT_SHA
+    with:
+      concurrency-scope: shellcheck
+      test-command: tests/shellcheck-test
+```
+
 ## `shell-ci.yml`
 
 `shell-ci.yml` runs shell-tool tests across the shared platform matrix.
@@ -97,6 +123,7 @@ Do not use it for release upload permissions; `rust-release.yml` uses
 
 | Input                 | Default  | Contract                                                                           |
 | --------------------- | -------- | ---------------------------------------------------------------------------------- |
+| `concurrency-scope`   | `default` | Stable identity for this call. Must differ between multiple shell calls.          |
 | `profiles`            | `""`     | Comma-separated prerequisite profiles used by conventional platforms and Termux.   |
 | `matrix-set`          | `auto`   | Platform matrix policy. See [Matrix Sets](#matrix-sets).                           |
 | `setup`               | `none`   | Named setup mode. Supported values are `none`, `checkrun`, and `dotfiles`.         |
@@ -174,6 +201,7 @@ Ubuntu quality gate.
 
 | Input                         | Default                                                             | Contract                                                                                                            |
 | ----------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `concurrency-scope`           | `default`                                                           | Stable identity for this call. Must differ between multiple Rust calls.                                             |
 | `rust-toolchain`              | `stable`                                                            | Toolchain passed to `dtolnay/rust-toolchain`.                                                                       |
 | `matrix-set`                  | `auto`                                                              | Platform matrix policy. See [Matrix Sets](#matrix-sets).                                                            |
 | `working-directory`           | `.`                                                                 | Directory where command hooks run.                                                                                  |
