@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
+check() {
+  local expression=$1
+  local workflow=$2
+
+  if ! yq -e "$expression" "$root/.github/workflows/$workflow" >/dev/null; then
+    printf 'workflow contract failed: %s: %s\n' "$workflow" "$expression" >&2
+    return 1
+  fi
+}
+
+# The yq programs intentionally compare literal GitHub and shell expressions;
+# neither language should be expanded by this test process.
+# shellcheck disable=SC2016
+contracts() {
+  local workflow
+
+  check '.jobs.required.name == "Required"' shell-ci.yml
+  check '.jobs.required.if == "${{ always() }}"' shell-ci.yml
+  check '.jobs.required.needs == "platforms"' shell-ci.yml
+  check '.jobs.required.env.PLATFORMS_RESULT == "${{ needs.platforms.result }}"' shell-ci.yml
+  check '.jobs.required.steps[0].run | contains("test \"$PLATFORMS_RESULT\" = success")' shell-ci.yml
+
+  check '.jobs.required.name == "Required"' termux-ci.yml
+  check '.jobs.required.if == "${{ always() }}"' termux-ci.yml
+  check '.jobs.required.needs == "runtime"' termux-ci.yml
+  check '.jobs.required.env.RUNTIME_RESULT == "${{ needs.runtime.result }}"' termux-ci.yml
+  check '.jobs.required.steps[0].run | contains("test \"$RUNTIME_RESULT\" = success")' termux-ci.yml
+
+  check '.jobs.required.name == "Required"' rust-ci.yml
+  check '.jobs.required.if == "${{ always() }}"' rust-ci.yml
+  check '.jobs.required.needs | join(",") == "platforms,quality,android-package,termux"' rust-ci.yml
+  check '.jobs.required.env.PLATFORMS_RESULT == "${{ needs.platforms.result }}"' rust-ci.yml
+  check '.jobs.required.env.QUALITY_RESULT == "${{ needs.quality.result }}"' rust-ci.yml
+  check '.jobs.required.env.ANDROID_PACKAGE_RESULT == "${{ needs.android-package.result }}"' rust-ci.yml
+  check '.jobs.required.env.TERMUX_RESULT == "${{ needs.termux.result }}"' rust-ci.yml
+  check '.jobs.required.steps[0].run | contains("test \"$PLATFORMS_RESULT\" = success")' rust-ci.yml
+  check '.jobs.required.steps[0].run | contains("test \"$QUALITY_RESULT\" = success")' rust-ci.yml
+  check '.jobs.required.steps[0].run | contains("test \"$ANDROID_PACKAGE_RESULT\" = success")' rust-ci.yml
+  check '.jobs.required.steps[0].run | contains("test \"$ANDROID_PACKAGE_RESULT\" = skipped")' rust-ci.yml
+  check '.jobs.required.steps[0].run | contains("test \"$TERMUX_RESULT\" = success")' rust-ci.yml
+  check '.jobs.required.steps[0].run | contains("test \"$TERMUX_RESULT\" = skipped")' rust-ci.yml
+
+  for workflow in _shell-platforms.yml _rust-platforms.yml _termux-ci.yml; do
+    check '.jobs.required == null' "$workflow"
+  done
+}
+
+contracts
+printf 'workflow-contract-test: ok\n'

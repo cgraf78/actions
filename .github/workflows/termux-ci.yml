@@ -47,3 +47,17 @@ jobs:
       working-directory: ${{ inputs.working-directory }}
     secrets:
       DEPENDENCY_GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+
+  required:
+    name: Required
+    if: ${{ always() }}
+    needs: runtime
+    runs-on: ubuntu-24.04
+    env:
+      RUNTIME_RESULT: ${{ needs.runtime.result }}
+    steps:
+      - name: Require successful Termux runtime
+        shell: bash
+        run: |-
+          printf 'Runtime: %s\n' "$RUNTIME_RESULT"
+          test "$RUNTIME_RESULT" = success

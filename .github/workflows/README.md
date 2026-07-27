@@ -13,6 +13,11 @@ local organization.
   official Termux app on an Android emulator.
 - `rust-release.yml` builds and publishes Rust release artifacts.
 
+The public shell, Rust, and Termux CI workflows expose a `Required` aggregation
+job. Caller branch protection should require `<caller job> / Required`;
+internal worker and matrix job names are diagnostic details rather than stable
+API.
+
 ## Internal Workflows
 
 - `_shell-platforms.yml` and `_rust-platforms.yml` are shared implementation
