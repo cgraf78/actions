@@ -5,6 +5,9 @@ on:
     branches:
       - main
   pull_request:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,7 +17,7 @@ jobs:
     name: Shell smoke
     uses: ./.github/workflows/shell-ci.yml
     with:
-      matrix-set: core
+      matrix-set: auto
       profiles: base
       test-command: test -f .github/workflows/shell-ci.yml
       termux-command: |
@@ -28,7 +31,7 @@ jobs:
     name: Rust smoke
     uses: ./.github/workflows/rust-ci.yml
     with:
-      matrix-set: core
+      matrix-set: auto
       working-directory: test/fixtures/rust-smoke
       test-command: cargo test --locked
       android-package-smoke-command: |
@@ -209,3 +212,29 @@ jobs:
             test/dotfiles-public-deps-test \
             test/infra-retry-test \
             test/shell-ci-prereqs-test
+
+  required:
+    name: Required
+    if: ${{ always() }}
+    needs: [shell-smoke, rust-smoke, matrix-contract, android-rust-toolchain, quality]
+    runs-on: ubuntu-24.04
+    env:
+      SHELL_SMOKE_RESULT: ${{ needs.shell-smoke.result }}
+      RUST_SMOKE_RESULT: ${{ needs.rust-smoke.result }}
+      MATRIX_CONTRACT_RESULT: ${{ needs.matrix-contract.result }}
+      ANDROID_TOOLCHAIN_RESULT: ${{ needs.android-rust-toolchain.result }}
+      QUALITY_RESULT: ${{ needs.quality.result }}
+    steps:
+      - name: Require successful Actions CI
+        shell: bash
+        run: |-
+          printf 'Shell smoke: %s\n' "$SHELL_SMOKE_RESULT"
+          printf 'Rust smoke: %s\n' "$RUST_SMOKE_RESULT"
+          printf 'Matrix contract: %s\n' "$MATRIX_CONTRACT_RESULT"
+          printf 'Android toolchain: %s\n' "$ANDROID_TOOLCHAIN_RESULT"
+          printf 'Quality: %s\n' "$QUALITY_RESULT"
+          test "$SHELL_SMOKE_RESULT" = success
+          test "$RUST_SMOKE_RESULT" = success
+          test "$MATRIX_CONTRACT_RESULT" = success
+          test "$ANDROID_TOOLCHAIN_RESULT" = success
+          test "$QUALITY_RESULT" = success

@@ -78,11 +78,23 @@ contracts() {
   check '.concurrency["cancel-in-progress"] == true' rust-ci.yml
 
   check '.jobs.shell-smoke.with.termux-command != null' ci.yml
+  check '.on.schedule[0].cron == "0 7 * * *"' ci.yml
+  check '.on | has("workflow_dispatch")' ci.yml
+  check '.jobs.shell-smoke.with.matrix-set == "auto"' ci.yml
+  check '.jobs.rust-smoke.with.matrix-set == "auto"' ci.yml
   check '.jobs.rust-smoke.with.android-package-smoke-command != null' ci.yml
   check '.jobs.rust-smoke.with.termux-host-command != null' ci.yml
   check '.jobs.rust-smoke.with.termux-host-command | contains("--target-dir \"$RUNNER_TEMP/actions-rust-smoke-target\"")' ci.yml
   check '.jobs.rust-smoke.with.termux-command != null' ci.yml
   check '.jobs.termux-runtime == null' ci.yml
+  check '.jobs.required.name == "Required"' ci.yml
+  check '.jobs.required.if == "${{ always() }}"' ci.yml
+  check '.jobs.required.needs | join(",") == "shell-smoke,rust-smoke,matrix-contract,android-rust-toolchain,quality"' ci.yml
+  check '.jobs.required.steps[0].run | contains("test \"$SHELL_SMOKE_RESULT\" = success")' ci.yml
+  check '.jobs.required.steps[0].run | contains("test \"$RUST_SMOKE_RESULT\" = success")' ci.yml
+  check '.jobs.required.steps[0].run | contains("test \"$MATRIX_CONTRACT_RESULT\" = success")' ci.yml
+  check '.jobs.required.steps[0].run | contains("test \"$ANDROID_TOOLCHAIN_RESULT\" = success")' ci.yml
+  check '.jobs.required.steps[0].run | contains("test \"$QUALITY_RESULT\" = success")' ci.yml
 
   for workflow in _shell-platforms.yml _rust-platforms.yml _termux-ci.yml; do
     check '.jobs.required == null' "$workflow"
