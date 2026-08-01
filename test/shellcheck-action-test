@@ -14,6 +14,8 @@ fail() {
 [[ -x "$validator" ]] || fail "shared ShellCheck validator is missing"
 yq -e '.inputs."inventory-path".required == true' "$action" >/dev/null ||
   fail "inventory-path input is not required"
+yq -e '.inputs."exclude-codes".default == ""' "$action" >/dev/null ||
+  fail "exclude-codes input does not default to empty"
 yq -e '.runs.steps | length == 1' "$action" >/dev/null ||
   fail "composite action should expose one validation step"
 # shellcheck disable=SC2016 # yq must match the literal Actions environment name.
@@ -38,10 +40,11 @@ new_repo() {
 }
 
 run_gate() {
-  local repo=$1 inventory=$2
+  local repo=$1 inventory=$2 exclude_codes=${3-}
   local inventory_path=${inventory#"$repo"/}
   set +e
-  gate_output=$("$validator" "$repo" "$inventory_path" 2>&1)
+  gate_output=$(SHELLCHECK_EXCLUDE_CODES=$exclude_codes \
+    "$validator" "$repo" "$inventory_path" 2>&1)
   gate_status=$?
   set -e
 }
@@ -144,7 +147,14 @@ printf '#!/usr/bin/env bash\nprintf "%%s\\n" $UNQUOTED\n' >"$repo/bin/tool"
 run_gate "$repo" "$inventory"
 assert_status 1 "ShellCheck finding"
 assert_contains "SC2086" "ShellCheck finding"
+run_gate "$repo" "$inventory" SC2086
+assert_status 0 "scoped ShellCheck exclusion"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "ok"\n' >"$repo/bin/tool"
+
+run_gate "$repo" "$inventory" 'SC2086;touch /tmp/unsafe'
+assert_status 1 "invalid ShellCheck exclusion"
+assert_contains "exclude codes use a comma-separated SC1234 list" \
+  "invalid ShellCheck exclusion"
 
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "new"\n' >"$repo/bin/new-tool"
 git -C "$repo" add bin/new-tool
@@ -275,13 +285,16 @@ dialect_repo="$tmp/dialect-repo"
 new_repo "$dialect_repo"
 mkdir -p "$dialect_repo/.github" "$dialect_repo/scripts"
 printf '#!/bin/sh\nprintf "ok\\n"\n' >"$dialect_repo/scripts/sh-tool"
-printf '#!/bin/ash\nprintf "ok\\n"\n' >"$dialect_repo/scripts/ash-tool"
+# shellcheck disable=SC2016 # The fixture must contain literal ANSI-C quoting.
+printf '#!/bin/ash\nvalue=$'\''ok'\''\nprintf "%%s\\n" "$value"\n' \
+  >"$dialect_repo/scripts/ash-tool"
 printf '#!/usr/bin/env bash\nprintf "ok\\n"\n' >"$dialect_repo/scripts/bash-tool"
 printf '#!/bin/dash\nprintf "ok\\n"\n' >"$dialect_repo/scripts/dash-tool"
 printf '#!/usr/bin/ksh\nprintf "ok\\n"\n' >"$dialect_repo/scripts/ksh-tool"
 printf '#!/usr/bin/env -S bash -eu\nprintf "ok\\n"\n' \
   >"$dialect_repo/scripts/env-s-tool"
-printf '#!/bin/busybox sh\nprintf "ok\\n"\n' \
+# shellcheck disable=SC2016 # The fixture must contain literal ANSI-C quoting.
+printf '#!/bin/busybox sh\nvalue=$'\''ok'\''\nprintf "%%s\\n" "$value"\n' \
   >"$dialect_repo/scripts/busybox-tool"
 printf '# shellcheck shell=bash\nprintf "ok\\n"\n' \
   >"$dialect_repo/scripts/directive-tool"
@@ -304,15 +317,36 @@ git -C "$dialect_repo" add -- \
 run_gate "$dialect_repo" "$dialect_repo/.github/shellcheck-files.txt"
 assert_status 0 "supported dialect inventory"
 
-printf '# shellcheck shell=busybox\nprintf "ok\\n"\n' \
+# shellcheck disable=SC2016 # The fixture must contain literal ANSI-C quoting.
+printf '# shellcheck shell=busybox\nvalue=$'\''ok'\''\nprintf "%%s\\n" "$value"\n' \
   >"$dialect_repo/scripts/unsupported-busybox.sh"
 printf 'program\tscripts/unsupported-busybox.sh\n' \
   >>"$dialect_repo/.github/shellcheck-files.txt"
 git -C "$dialect_repo" add scripts/unsupported-busybox.sh \
   .github/shellcheck-files.txt
 run_gate "$dialect_repo" "$dialect_repo/.github/shellcheck-files.txt"
-assert_status 1 "unsupported BusyBox directive"
-assert_contains "busybox" "unsupported BusyBox directive"
+assert_status 0 "supported BusyBox directive"
+
+old_shellcheck_bin="$tmp/old-shellcheck-bin"
+mkdir -p "$old_shellcheck_bin"
+real_shellcheck=$(type -P shellcheck)
+cat >"$old_shellcheck_bin/shellcheck" <<'MOCK'
+#!/usr/bin/env bash
+case " $* " in
+  *' -s busybox '*) exit 2 ;;
+esac
+exec "$REAL_SHELLCHECK" "$@"
+MOCK
+chmod +x "$old_shellcheck_bin/shellcheck"
+set +e
+gate_output=$(PATH="$old_shellcheck_bin:$PATH" \
+  REAL_SHELLCHECK="$real_shellcheck" SHELLCHECK_EXCLUDE_CODES='' \
+  "$validator" "$dialect_repo" .github/shellcheck-files.txt 2>&1)
+gate_status=$?
+set -e
+assert_status 1 "old ShellCheck BusyBox diagnostic"
+assert_contains "ShellCheck 0.11 or newer is required for BusyBox dialect" \
+  "old ShellCheck BusyBox diagnostic"
 
 printf 'program\tbin/tool\nfixture\ttest/fixtures/invalid.sh\n' >"$inventory"
 mock_bin="$tmp/bin"

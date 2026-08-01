@@ -5,6 +5,10 @@ inputs:
   inventory-path:
     description: Normalized repository-relative path to the tracked inventory file.
     required: true
+  exclude-codes:
+    description: Optional comma-separated ShellCheck codes, such as SC1091.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -13,5 +17,6 @@ runs:
       shell: bash
       env:
         INVENTORY_PATH: ${{ inputs.inventory-path }}
+        SHELLCHECK_EXCLUDE_CODES: ${{ inputs.exclude-codes }}
       run: |-
         "$GITHUB_ACTION_PATH/run.sh" "$GITHUB_WORKSPACE" "$INVENTORY_PATH"
