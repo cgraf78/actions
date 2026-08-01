@@ -1,0 +1,17 @@
+name: Validate and lint repository shell inventory
+description: Require a reviewed typed inventory of every shell program, then run ShellCheck.
+
+inputs:
+  inventory-path:
+    description: Normalized repository-relative path to the tracked inventory file.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inventory and run ShellCheck
+      shell: bash
+      env:
+        INVENTORY_PATH: ${{ inputs.inventory-path }}
+      run: |-
+        "$GITHUB_ACTION_PATH/run.sh" "$GITHUB_WORKSPACE" "$INVENTORY_PATH"

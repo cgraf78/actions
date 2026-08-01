@@ -189,6 +189,10 @@ jobs:
         shell: bash
         run: test/shell-ci-prereqs-test
 
+      - name: Test shared ShellCheck inventory action
+        shell: bash
+        run: test/shellcheck-action-test
+
       - name: Test public dotfiles dependencies
         shell: bash
         run: test/dotfiles-public-deps-test
@@ -197,21 +201,10 @@ jobs:
         shell: bash
         run: test/infra-retry-test
 
-      - name: Lint shell scripts
-        shell: bash
-        run: |-
-          mapfile -t scripts < <(git ls-files .github/actions | awk '/[.]sh$/ { print }')
-          if ((${#scripts[@]} == 0)); then
-            echo "No shell helper scripts found."
-            exit 0
-          fi
-          # install.sh sources sibling modules through SCRIPT_DIR; the source
-          # path keeps ShellCheck's cross-file analysis working from repo root.
-          shellcheck -x -P .github/actions/shell-ci-prereqs \
-            "${scripts[@]}" \
-            test/dotfiles-public-deps-test \
-            test/infra-retry-test \
-            test/shell-ci-prereqs-test
+      - name: Lint shell inventory
+        uses: ./.github/actions/shellcheck-inventory
+        with:
+          inventory-path: .github/shellcheck-files.txt
 
   required:
     name: Required

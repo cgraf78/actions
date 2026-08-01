@@ -78,6 +78,10 @@ contracts() {
   check '.concurrency["cancel-in-progress"] == true' rust-ci.yml
 
   check '.jobs.shell-smoke.with.termux-command != null' ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Test shared ShellCheck inventory action").run == "test/shellcheck-action-test"' ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Lint shell inventory").uses == "./.github/actions/shellcheck-inventory"' ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Lint shell inventory").with."inventory-path" == ".github/shellcheck-files.txt"' ci.yml
+  check '[.jobs.quality.steps[] | select(.name == "Lint shell scripts")] | length == 0' ci.yml
   check '.on.schedule[0].cron == "0 7 * * *"' ci.yml
   check '.on | has("workflow_dispatch")' ci.yml
   check '.jobs.shell-smoke.with.matrix-set == "auto"' ci.yml
