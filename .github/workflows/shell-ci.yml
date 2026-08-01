@@ -18,6 +18,11 @@ on:
         required: false
         type: string
         default: ""
+      shellcheck-exclude-codes:
+        description: Optional comma-separated ShellCheck codes excluded only from the shared lint job.
+        required: false
+        type: string
+        default: ""
       matrix-set:
         description: Platform matrix to run. Supported values are auto, core, and full.
         required: false
@@ -82,7 +87,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Install ShellCheck prerequisites
-        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@9117f95ef45f0647d85add2d978ec3d2b6203083
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@6ae8c87bdd20a901d550de9d97216d9761617ae8
         with:
           matrix-name: Ubuntu
           profiles: base,shellcheck
@@ -94,9 +99,10 @@ jobs:
           persist-credentials: false
 
       - name: Validate and lint shell inventory
-        uses: cgraf78/actions/.github/actions/shellcheck-inventory@9117f95ef45f0647d85add2d978ec3d2b6203083
+        uses: cgraf78/actions/.github/actions/shellcheck-inventory@6ae8c87bdd20a901d550de9d97216d9761617ae8
         with:
           inventory-path: ${{ inputs.shellcheck-inventory-path }}
+          exclude-codes: ${{ inputs.shellcheck-exclude-codes }}
 
   termux:
     name: Termux

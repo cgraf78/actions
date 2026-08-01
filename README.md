@@ -48,6 +48,8 @@ Optional `matrix-set` can force `core` or `full`; the default `auto` keeps
 push/PR runs on `core` and scheduled/manual runs on `full`.
 `shellcheck-inventory-path` adds one Ubuntu lint job to the existing required
 aggregate without repeating static lint across the runtime matrix.
+`shellcheck-exclude-codes` optionally applies a validated repository-wide
+suppression list only to that shared lint invocation.
 
 ### `bash32-ci.yml`
 
