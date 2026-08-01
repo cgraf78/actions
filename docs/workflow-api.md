@@ -222,6 +222,7 @@ jobs:
 | `concurrency-scope`   | `default` | Stable identity for this call. Must differ between multiple shell calls.          |
 | `profiles`            | `""`     | Comma-separated prerequisite profiles used by conventional platforms and Termux.   |
 | `shellcheck-inventory-path` | `""` | Repository-relative typed inventory for one Ubuntu ShellCheck gate. Empty disables it. |
+| `shellcheck-exclude-codes` | `""` | Validated comma-separated ShellCheck codes excluded from the shared lint invocation. |
 | `matrix-set`          | `auto`   | Platform matrix policy. See [Matrix Sets](#matrix-sets).                           |
 | `setup`               | `none`   | Named setup mode. Supported values are `none`, `checkrun`, and `dotfiles`.         |
 | `test-command`        | required | Caller-owned Bash command run on every conventional platform and, by default, Termux. |
@@ -250,8 +251,8 @@ once on Ubuntu and invokes the pinned
 [`shellcheck-inventory`](#shellcheck-inventory-action) action. The lint leaf is
 part of the existing `Required` aggregate, so callers keep the same branch
 protection context while gaining consistent static coverage. ShellCheck does
-not run redundantly in the platform or Termux matrices. Its version is owned by
-the immutable prerequisite-action revision pinned in the workflow, so all
+not run redundantly in the platform or Termux matrices. The immutable
+prerequisite-action revision pins checksum-verified ShellCheck 0.11.0, so all
 callers share the same reviewed CI baseline.
 
 The `checkrun` setup mode requires the caller to commit both
