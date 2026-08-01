@@ -13,6 +13,11 @@ on:
         required: false
         type: string
         default: ""
+      shellcheck-inventory-path:
+        description: Optional repository-relative ShellCheck inventory. Empty disables the lint job.
+        required: false
+        type: string
+        default: ""
       matrix-set:
         description: Platform matrix to run. Supported values are auto, core, and full.
         required: false
@@ -71,6 +76,28 @@ jobs:
       setup: ${{ inputs.setup }}
       test-command: ${{ inputs.test-command }}
 
+  shellcheck:
+    name: ShellCheck
+    if: ${{ inputs.shellcheck-inventory-path != '' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Install ShellCheck prerequisites
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@9117f95ef45f0647d85add2d978ec3d2b6203083
+        with:
+          matrix-name: Ubuntu
+          profiles: base,shellcheck
+          setup: none
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Do not leave the read-only workflow token in caller Git config.
+          persist-credentials: false
+
+      - name: Validate and lint shell inventory
+        uses: cgraf78/actions/.github/actions/shellcheck-inventory@9117f95ef45f0647d85add2d978ec3d2b6203083
+        with:
+          inventory-path: ${{ inputs.shellcheck-inventory-path }}
+
   termux:
     name: Termux
     uses: ./.github/workflows/termux-ci.yml
@@ -85,16 +112,25 @@ jobs:
   required:
     name: Required
     if: ${{ always() }}
-    needs: [platforms, termux]
+    needs: [platforms, shellcheck, termux]
     runs-on: ubuntu-24.04
     env:
       PLATFORMS_RESULT: ${{ needs.platforms.result }}
+      SHELLCHECK_ENABLED: ${{ inputs.shellcheck-inventory-path != '' }}
+      SHELLCHECK_RESULT: ${{ needs.shellcheck.result }}
       TERMUX_RESULT: ${{ needs.termux.result }}
     steps:
-      - name: Require successful shell platforms
+      - name: Require successful Shell CI
         shell: bash
         run: |-
           printf 'Platforms: %s\n' "$PLATFORMS_RESULT"
+          printf 'ShellCheck: %s (enabled: %s)\n' \
+            "$SHELLCHECK_RESULT" "$SHELLCHECK_ENABLED"
           printf 'Termux: %s\n' "$TERMUX_RESULT"
           test "$PLATFORMS_RESULT" = success
+          if [[ "$SHELLCHECK_ENABLED" == true ]]; then
+            test "$SHELLCHECK_RESULT" = success
+          else
+            test "$SHELLCHECK_RESULT" = skipped
+          fi
           test "$TERMUX_RESULT" = success

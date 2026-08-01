@@ -19,6 +19,7 @@ jobs:
     with:
       matrix-set: auto
       profiles: base
+      shellcheck-inventory-path: .github/shellcheck-files.txt
       test-command: test -f .github/workflows/shell-ci.yml
       termux-command: |
         test "$(uname -o)" = Android
