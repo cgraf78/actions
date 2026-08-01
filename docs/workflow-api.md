@@ -96,6 +96,45 @@ jobs:
 or check out code from the failed branch, and its token is scoped to Actions
 reruns plus read-only repository contents.
 
+## ShellCheck Inventory Action
+
+The `shellcheck-inventory` composite action validates a repository-owned list of
+shell programs and fixtures, then lints every program. The caller must check out
+one repository at the `GITHUB_WORKSPACE` root and install `bash`, `git`, and
+`shellcheck` before invoking the action. The shared Shell CI workflow owns those
+prerequisites for its callers; the narrow composite action intentionally uses
+the caller-provided ShellCheck version.
+
+Pin the action to a reviewed 40-character commit and pass a tracked, nonsymlink
+inventory:
+
+```yaml
+- uses: cgraf78/actions/.github/actions/shellcheck-inventory@FULL_COMMIT_SHA
+  with:
+    inventory-path: .github/shellcheck-files.txt
+```
+
+The inventory is line-oriented. Blank lines and comments beginning in column
+one are ignored; records use a literal tab:
+
+```text
+# type<TAB>repository-relative path
+program<TAB>bin/tool
+fixture<TAB>test/fixtures/intentionally-invalid.sh
+```
+
+Replace each `<TAB>` marker with one literal tab. `program` rows are linted.
+`fixture` rows are explicit, visible exclusions for shell-shaped test data that
+should not pass as standalone programs.
+
+Discovery recognizes common shell extensions, supported shebangs, and leading
+`# shellcheck shell=...` directives. An extensionless sourced library without a
+shebang needs a supported directive to opt into coverage. The Ubuntu 24.04
+ShellCheck baseline does not accept `shell=busybox`, so use an appropriate
+BusyBox `sh` or `ash` shebang instead. Discovery also examines nonignored,
+untracked files; run the action before generating scripts or add intentional
+build output to `.gitignore`.
+
 ## Common Contracts
 
 ### Command Inputs

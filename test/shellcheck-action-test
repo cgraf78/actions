@@ -1,0 +1,331 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+validator="$root/.github/actions/shellcheck-inventory/run.sh"
+action="$root/.github/actions/shellcheck-inventory/action.yml"
+
+fail() {
+  printf 'shellcheck-action-test: %s\n' "$*" >&2
+  exit 1
+}
+
+[[ -x "$validator" ]] || fail "shared ShellCheck validator is missing"
+yq -e '.inputs."inventory-path".required == true' "$action" >/dev/null ||
+  fail "inventory-path input is not required"
+yq -e '.runs.steps | length == 1' "$action" >/dev/null ||
+  fail "composite action should expose one validation step"
+# shellcheck disable=SC2016 # yq must match the literal Actions environment name.
+yq -e '.runs.steps[0].run | contains("$GITHUB_WORKSPACE")' "$action" >/dev/null ||
+  fail "composite action does not bind validation to the caller workspace"
+# shellcheck disable=SC2016 # yq must reject literal Actions expression syntax.
+yq -e '.runs.steps[0].run | contains("${{") | not' "$action" >/dev/null ||
+  fail "composite action interpolates an input into shell source"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+export GIT_CONFIG_GLOBAL=/dev/null
+export GIT_CONFIG_SYSTEM=/dev/null
+
+new_repo() {
+  local destination=$1
+  mkdir -p "$destination"
+  git -C "$destination" init --quiet
+  git -C "$destination" config user.name "ShellCheck Action Test"
+  git -C "$destination" config user.email "shellcheck-action@example.invalid"
+  git -C "$destination" config core.hooksPath /dev/null
+}
+
+run_gate() {
+  local repo=$1 inventory=$2
+  local inventory_path=${inventory#"$repo"/}
+  set +e
+  gate_output=$("$validator" "$repo" "$inventory_path" 2>&1)
+  gate_status=$?
+  set -e
+}
+
+assert_status() {
+  local expected=$1 label=$2
+  [[ "$gate_status" -eq "$expected" ]] ||
+    fail "$label: expected status $expected, got $gate_status: $gate_output"
+}
+
+assert_contains() {
+  local expected=$1 label=$2
+  [[ "$gate_output" == *"$expected"* ]] ||
+    fail "$label: missing <$expected>: $gate_output"
+}
+
+set +e
+gate_output=$("$validator" "$tmp/missing-repository" \
+  .github/shellcheck-files.txt 2>&1)
+gate_status=$?
+set -e
+assert_status 1 "inaccessible repository root"
+assert_contains "repository root is accessible" "inaccessible repository root"
+
+repo="$tmp/repo"
+new_repo "$repo"
+mkdir -p "$repo/bin" "$repo/test/fixtures"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "ok"\n' >"$repo/bin/tool"
+# shellcheck disable=SC2016 # The fixture must contain a literal unsafe expansion.
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" $UNQUOTED\n' >"$repo/test/fixtures/invalid.sh"
+git -C "$repo" add bin/tool test/fixtures/invalid.sh
+
+inventory="$repo/.github/shellcheck-files.txt"
+mkdir -p "${inventory%/*}"
+cat >"$inventory" <<'EOF'
+# type<TAB>repository-relative path
+program	bin/tool
+fixture	test/fixtures/invalid.sh
+EOF
+git -C "$repo" add .github/shellcheck-files.txt
+
+run_gate "$repo" "$inventory"
+assert_status 0 "valid typed inventory"
+assert_contains "inventory covers every repository shell program" \
+  "valid typed inventory"
+assert_contains "fixture exclusions: 1" "valid typed inventory"
+assert_contains "test/fixtures/invalid.sh" "valid typed inventory"
+
+run_gate "$repo/bin" "$inventory"
+assert_status 1 "repository root boundary"
+assert_contains "repository root is the Git worktree root" \
+  "repository root boundary"
+
+outside_inventory="$tmp/outside-inventory"
+mkdir -p "$outside_inventory"
+printf 'program\tbin/tool\n' >"$outside_inventory/inventory.txt"
+ln -s "$outside_inventory" "$repo/inventory-link"
+run_gate "$repo" "$repo/inventory-link/inventory.txt"
+assert_status 1 "inventory parent escape"
+assert_contains "inventory resolves inside the repository" \
+  "inventory parent escape"
+rm "$repo/inventory-link"
+
+set +e
+gate_output=$("$validator" "$repo" 2>&1)
+gate_status=$?
+set -e
+assert_status 1 "omitted inventory input"
+assert_contains "inventory path is a normalized repository-relative path" \
+  "omitted inventory input"
+
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "untracked"\n' >"$repo/bin/untracked"
+run_gate "$repo" "$inventory"
+assert_status 1 "untracked program"
+assert_contains "unlisted shell program: bin/untracked" "untracked program"
+rm "$repo/bin/untracked"
+
+printf '#!/usr/bin/env bash\r\nprintf "%%s\\n" "crlf"\r\n' \
+  >"$repo/bin/crlf-tool"
+run_gate "$repo" "$inventory"
+assert_status 1 "CRLF shebang program"
+assert_contains "unlisted shell program: bin/crlf-tool" "CRLF shebang program"
+rm "$repo/bin/crlf-tool"
+
+printf '#!/usr/bin/env python3\nprint("not shell")\n' >"$repo/bin/python-tool"
+run_gate "$repo" "$inventory"
+assert_status 0 "non-shell program ignored"
+rm "$repo/bin/python-tool"
+
+hostile_path=$'bin/line\nbreak.sh'
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "hostile"\n' >"$repo/$hostile_path"
+run_gate "$repo" "$inventory"
+assert_status 1 "newline program"
+assert_contains "unlisted shell program: \$'bin/line\\nbreak.sh'" \
+  "newline program"
+rm "$repo/$hostile_path"
+
+# shellcheck disable=SC2016 # The program-under-test must contain a finding.
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" $UNQUOTED\n' >"$repo/bin/tool"
+run_gate "$repo" "$inventory"
+assert_status 1 "ShellCheck finding"
+assert_contains "SC2086" "ShellCheck finding"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "ok"\n' >"$repo/bin/tool"
+
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "new"\n' >"$repo/bin/new-tool"
+git -C "$repo" add bin/new-tool
+run_gate "$repo" "$inventory"
+assert_status 1 "unlisted program"
+assert_contains "unlisted shell program: bin/new-tool" "unlisted program"
+
+rm "$repo/bin/new-tool"
+git -C "$repo" add -u bin/new-tool
+printf 'program\tbin/missing\n' >>"$inventory"
+run_gate "$repo" "$inventory"
+assert_status 1 "stale inventory"
+assert_contains "inventory path is not a detected shell program: bin/missing" \
+  "stale inventory"
+
+printf 'program\tbin/tool\nprogram\tbin/tool\n' >"$inventory"
+run_gate "$repo" "$inventory"
+assert_status 1 "duplicate inventory"
+assert_contains "duplicate inventory path: bin/tool" "duplicate inventory"
+
+printf 'program bin/tool\n' >"$inventory"
+run_gate "$repo" "$inventory"
+assert_status 1 "malformed inventory"
+assert_contains "malformed inventory record" "malformed inventory"
+
+printf 'unknown\tbin/tool\n' >"$inventory"
+run_gate "$repo" "$inventory"
+assert_status 1 "unknown inventory type"
+assert_contains "unknown inventory type" "unknown inventory type"
+
+printf 'program\tbin/../bin/tool\n' >"$inventory"
+run_gate "$repo" "$inventory"
+assert_status 1 "nonnormalized record path"
+assert_contains "invalid inventory path" "nonnormalized record path"
+
+# shellcheck disable=SC2016 # Invalid lint must not run after inventory failure.
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" $UNQUOTED\n' >"$repo/bin/tool"
+printf 'malformed record\n' >"$inventory"
+run_gate "$repo" "$inventory"
+assert_status 1 "validation before lint"
+if [[ "$gate_output" == *SC2086* ]]; then
+  fail "validation before lint: ShellCheck ran after an inventory error"
+fi
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "ok"\n' >"$repo/bin/tool"
+
+empty_repo="$tmp/empty-repo"
+new_repo "$empty_repo"
+mkdir -p "$empty_repo/.github"
+printf '# type<TAB>repository-relative path\n' \
+  >"$empty_repo/.github/shellcheck-files.txt"
+git -C "$empty_repo" add .github/shellcheck-files.txt
+run_gate "$empty_repo" "$empty_repo/.github/shellcheck-files.txt"
+assert_status 1 "empty inventory"
+assert_contains "inventory includes at least one program" "empty inventory"
+
+set +e
+gate_output=$("$validator" "$repo" 'nested/..' 2>&1)
+gate_status=$?
+set -e
+assert_status 1 "nonnormalized inventory path"
+assert_contains "inventory path is a normalized repository-relative path" \
+  "nonnormalized inventory path"
+
+printf 'program\tbin/tool\0program\tbin/other\n' >"$inventory"
+run_gate "$repo" "$inventory"
+assert_status 1 "NUL inventory"
+assert_contains "inventory contains a NUL byte" "NUL inventory"
+
+magic_repo="$tmp/magic-repo"
+new_repo "$magic_repo"
+mkdir -p "$magic_repo/.github" "$magic_repo/bin"
+printf '#!/usr/bin/env bash\nprintf "ok\\n"\n' >"$magic_repo/bin/tool"
+printf 'program\tbin/tool\n' >"$magic_repo/.github/inventory*"
+printf 'decoy\n' >"$magic_repo/.github/inventory-decoy"
+git -C "$magic_repo" add bin/tool .github/inventory-decoy
+set +e
+gate_output=$("$validator" "$magic_repo" '.github/inventory*' 2>&1)
+gate_status=$?
+set -e
+assert_status 1 "literal inventory path"
+assert_contains "inventory is tracked by Git" "literal inventory path"
+
+symlink_repo="$tmp/symlink-repo"
+new_repo "$symlink_repo"
+external="$tmp/external.sh"
+printf '#!/usr/bin/env bash\nprintf "outside\\n"\n' >"$external"
+ln -s "$external" "$symlink_repo/external.sh"
+mkdir -p "$symlink_repo/.github"
+printf 'program\texternal.sh\n' >"$symlink_repo/.github/shellcheck-files.txt"
+git -C "$symlink_repo" add external.sh .github/shellcheck-files.txt
+run_gate "$symlink_repo" "$symlink_repo/.github/shellcheck-files.txt"
+assert_status 1 "shell program symlink"
+assert_contains "shell program is a symbolic link: external.sh" \
+  "shell program symlink"
+
+broken_symlink_repo="$tmp/broken-symlink-repo"
+new_repo "$broken_symlink_repo"
+mkdir -p "$broken_symlink_repo/.github"
+ln -s missing-target "$broken_symlink_repo/broken.sh"
+printf 'program\tbroken.sh\n' \
+  >"$broken_symlink_repo/.github/shellcheck-files.txt"
+git -C "$broken_symlink_repo" add broken.sh .github/shellcheck-files.txt
+run_gate "$broken_symlink_repo" \
+  "$broken_symlink_repo/.github/shellcheck-files.txt"
+assert_status 1 "broken shell program symlink"
+assert_contains "shell program is a symbolic link: broken.sh" \
+  "broken shell program symlink"
+
+inventory_repo="$tmp/inventory-repo"
+new_repo "$inventory_repo"
+mkdir -p "$inventory_repo/.github" "$inventory_repo/bin"
+printf '#!/usr/bin/env bash\nprintf "ok\\n"\n' >"$inventory_repo/bin/tool"
+printf 'program\tbin/tool\n' >"$inventory_repo/.github/untracked.txt"
+git -C "$inventory_repo" add bin/tool
+run_gate "$inventory_repo" "$inventory_repo/.github/untracked.txt"
+assert_status 1 "untracked inventory"
+assert_contains "inventory is tracked by Git" "untracked inventory"
+
+git -C "$inventory_repo" add .github/untracked.txt
+ln -s untracked.txt "$inventory_repo/.github/symlink.txt"
+git -C "$inventory_repo" add .github/symlink.txt
+run_gate "$inventory_repo" "$inventory_repo/.github/symlink.txt"
+assert_status 1 "symlink inventory"
+assert_contains "inventory is a regular file, not a symbolic link" \
+  "symlink inventory"
+
+dialect_repo="$tmp/dialect-repo"
+new_repo "$dialect_repo"
+mkdir -p "$dialect_repo/.github" "$dialect_repo/scripts"
+printf '#!/bin/sh\nprintf "ok\\n"\n' >"$dialect_repo/scripts/sh-tool"
+printf '#!/bin/ash\nprintf "ok\\n"\n' >"$dialect_repo/scripts/ash-tool"
+printf '#!/usr/bin/env bash\nprintf "ok\\n"\n' >"$dialect_repo/scripts/bash-tool"
+printf '#!/bin/dash\nprintf "ok\\n"\n' >"$dialect_repo/scripts/dash-tool"
+printf '#!/usr/bin/ksh\nprintf "ok\\n"\n' >"$dialect_repo/scripts/ksh-tool"
+printf '#!/usr/bin/env -S bash -eu\nprintf "ok\\n"\n' \
+  >"$dialect_repo/scripts/env-s-tool"
+printf '#!/bin/busybox sh\nprintf "ok\\n"\n' \
+  >"$dialect_repo/scripts/busybox-tool"
+printf '# shellcheck shell=bash\nprintf "ok\\n"\n' \
+  >"$dialect_repo/scripts/directive-tool"
+printf 'not shell\n# shellcheck shell=bash\n' \
+  >"$dialect_repo/scripts/body-directive"
+printf '#!/usr/bin/env bash\nprintf "ok\\n"\n' >"$dialect_repo/-leading-dash"
+cat >"$dialect_repo/.github/shellcheck-files.txt" <<'EOF'
+program	-leading-dash
+program	scripts/sh-tool
+program	scripts/ash-tool
+program	scripts/bash-tool
+program	scripts/dash-tool
+program	scripts/ksh-tool
+program	scripts/env-s-tool
+program	scripts/busybox-tool
+program	scripts/directive-tool
+EOF
+git -C "$dialect_repo" add -- \
+  .github/shellcheck-files.txt -leading-dash scripts
+run_gate "$dialect_repo" "$dialect_repo/.github/shellcheck-files.txt"
+assert_status 0 "supported dialect inventory"
+
+printf '# shellcheck shell=busybox\nprintf "ok\\n"\n' \
+  >"$dialect_repo/scripts/unsupported-busybox.sh"
+printf 'program\tscripts/unsupported-busybox.sh\n' \
+  >>"$dialect_repo/.github/shellcheck-files.txt"
+git -C "$dialect_repo" add scripts/unsupported-busybox.sh \
+  .github/shellcheck-files.txt
+run_gate "$dialect_repo" "$dialect_repo/.github/shellcheck-files.txt"
+assert_status 1 "unsupported BusyBox directive"
+assert_contains "busybox" "unsupported BusyBox directive"
+
+printf 'program\tbin/tool\nfixture\ttest/fixtures/invalid.sh\n' >"$inventory"
+mock_bin="$tmp/bin"
+mkdir -p "$mock_bin"
+for command in bash git mktemp rm; do
+  ln -s "$(type -P "$command")" "$mock_bin/$command"
+done
+set +e
+gate_output=$(PATH="$mock_bin" "$validator" "$repo" \
+  "${inventory#"$repo"/}" 2>&1)
+gate_status=$?
+set -e
+assert_status 1 "missing ShellCheck"
+assert_contains "ShellCheck command is unavailable" "missing ShellCheck"
+
+printf 'shellcheck-action-test: ok\n'
