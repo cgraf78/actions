@@ -24,8 +24,8 @@ full matrix.
 Callers should pin a reviewed full commit SHA so an unchanged caller commit
 always executes the same workflow code. Enable weekly GitHub Actions Dependabot
 updates in the caller repository so shared fixes arrive as ordinary dependency
-PRs and run through the caller's CI before merge. The examples below use a
-reviewed `actions` commit that passed its own CI.
+PRs and run through the caller's CI before merge. Replace `FULL_COMMIT_SHA` in
+the examples below with a reviewed `actions` commit that passed its own CI.
 
 Dependabot-triggered workflows receive only Dependabot secrets. After reviewing
 the proposed workflow commit, a caller whose CI requires sensitive repository
@@ -37,14 +37,17 @@ review.
 ```yaml
 jobs:
   test:
-    uses: cgraf78/actions/.github/workflows/shell-ci.yml@7d88c3afa6e51a83e9cfefb0c12f503155e17952
+    uses: cgraf78/actions/.github/workflows/shell-ci.yml@FULL_COMMIT_SHA
     with:
       profiles: base,jq,python
+      shellcheck-inventory-path: .github/shellcheck-files.txt
       test-command: test/example-test
 ```
 
 Optional `matrix-set` can force `core` or `full`; the default `auto` keeps
 push/PR runs on `core` and scheduled/manual runs on `full`.
+`shellcheck-inventory-path` adds one Ubuntu lint job to the existing required
+aggregate without repeating static lint across the runtime matrix.
 
 ### `bash32-ci.yml`
 
@@ -55,7 +58,7 @@ installer or bootstrap compatibility coverage. Keep this separate from
 ```yaml
 jobs:
   bash32:
-    uses: cgraf78/actions/.github/workflows/bash32-ci.yml@7d88c3afa6e51a83e9cfefb0c12f503155e17952
+    uses: cgraf78/actions/.github/workflows/bash32-ci.yml@FULL_COMMIT_SHA
     with:
       command: /bin/bash scripts/smoke-install-bash32.sh
 ```
@@ -70,7 +73,7 @@ running formatting, clippy, and docs redundantly on every OS.
 ```yaml
 jobs:
   test:
-    uses: cgraf78/actions/.github/workflows/rust-ci.yml@7d88c3afa6e51a83e9cfefb0c12f503155e17952
+    uses: cgraf78/actions/.github/workflows/rust-ci.yml@FULL_COMMIT_SHA
     with:
       test-command: cargo test --locked
 ```
@@ -100,7 +103,7 @@ into `$HOME/project`, with Termux's real `HOME`, `PREFIX`, `TMPDIR`, and `PATH`.
 ```yaml
 jobs:
   termux:
-    uses: cgraf78/actions/.github/workflows/termux-ci.yml@7d88c3afa6e51a83e9cfefb0c12f503155e17952
+    uses: cgraf78/actions/.github/workflows/termux-ci.yml@FULL_COMMIT_SHA
     with:
       rust-toolchain: stable
       host-command: |
@@ -125,7 +128,7 @@ and can opt out of publishing to leave a draft release.
 ```yaml
 jobs:
   release:
-    uses: cgraf78/actions/.github/workflows/rust-release.yml@7d88c3afa6e51a83e9cfefb0c12f503155e17952
+    uses: cgraf78/actions/.github/workflows/rust-release.yml@FULL_COMMIT_SHA
     with:
       android-aarch64: true
       version-command: scripts/cargo-version.sh

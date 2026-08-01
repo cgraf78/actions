@@ -30,7 +30,9 @@ closed when a mandatory child job fails, is cancelled, or is unexpectedly
 skipped.
 
 The Shell aggregate always requires its conventional Platforms and real Termux
-runtime. The Rust aggregate always requires Platforms, Quality, Android package,
+runtime. When `shellcheck-inventory-path` is configured, it also requires the
+single Ubuntu ShellCheck job; that leaf may be skipped only when the input is
+empty. The Rust aggregate always requires Platforms, Quality, Android package,
 and real Termux runtime. Neither family accepts a skipped Android/Termux result.
 
 Dependabot-triggered workflows receive a read-only token and only secrets stored
@@ -216,6 +218,7 @@ jobs:
 | --------------------- | -------- | ---------------------------------------------------------------------------------- |
 | `concurrency-scope`   | `default` | Stable identity for this call. Must differ between multiple shell calls.          |
 | `profiles`            | `""`     | Comma-separated prerequisite profiles used by conventional platforms and Termux.   |
+| `shellcheck-inventory-path` | `""` | Repository-relative typed inventory for one Ubuntu ShellCheck gate. Empty disables it. |
 | `matrix-set`          | `auto`   | Platform matrix policy. See [Matrix Sets](#matrix-sets).                           |
 | `setup`               | `none`   | Named setup mode. Supported values are `none`, `checkrun`, and `dotfiles`.         |
 | `test-command`        | required | Caller-owned Bash command run on every conventional platform and, by default, Termux. |
@@ -238,6 +241,14 @@ preparation or test selection.
 The runner also activates Termux's `termux-exec` compatibility layer before
 caller code runs. Repository scripts can therefore keep portable Linux
 shebangs such as `#!/usr/bin/env bash` instead of embedding an app data path.
+
+When `shellcheck-inventory-path` is nonempty, the workflow installs ShellCheck
+once on Ubuntu and invokes the pinned
+[`shellcheck-inventory`](#shellcheck-inventory-action) action. The lint leaf is
+part of the existing `Required` aggregate, so callers keep the same branch
+protection context while gaining consistent static coverage. ShellCheck does
+not run redundantly in the platform or Termux matrices. Its version follows the
+`ubuntu-24.04` package so all callers share the same reviewed CI baseline.
 
 The `checkrun` setup mode requires the caller to commit both
 `.github/mise/checkrun-ci.toml` and `.github/mise/mise.lock`. The setup uses
