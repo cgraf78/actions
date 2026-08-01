@@ -43,6 +43,7 @@ echo "=== repository ShellCheck inventory ==="
 
 repo_root_input=${1:-${GITHUB_WORKSPACE:-}}
 inventory_path=${2-}
+exclude_codes=${SHELLCHECK_EXCLUDE_CODES:-}
 
 if [[ -z "$repo_root_input" ]] ||
   ! repo_root=$(cd -- "$repo_root_input" 2>/dev/null && pwd -P); then
@@ -68,6 +69,12 @@ _shellcheck_normalized_relative_path() {
 
 if ! _shellcheck_normalized_relative_path "$inventory_path"; then
   _fail "inventory path is a normalized repository-relative path"
+  _test_summary
+fi
+
+if [[ -n "$exclude_codes" &&
+  ! "$exclude_codes" =~ ^SC[0-9]{4}(,SC[0-9]{4})*$ ]]; then
+  _fail "shellcheck: exclude codes use a comma-separated SC1234 list"
   _test_summary
 fi
 
@@ -127,14 +134,14 @@ _shellcheck_shebang_dialect() {
   # Map ash and BusyBox launchers to a supported portable-shell dialect.
   case "$interpreter" in
     sh | bash | dash | ksh) printf '%s\n' "$interpreter" ;;
-    ash) printf '%s\n' dash ;;
+    ash) printf '%s\n' busybox ;;
     busybox)
       [[ "$via_env" -eq 0 || "$env_split" -eq 1 ]] || return 1
       case "${words[index]-}" in
         sh | ash) ;;
         *) return 1 ;;
       esac
-      printf '%s\n' sh
+      printf '%s\n' busybox
       ;;
     *) return 1 ;;
   esac
@@ -146,11 +153,8 @@ _shellcheck_directive_dialect() {
     return 1
   dialect="${BASH_REMATCH[1]}"
   case "$dialect" in
-    ash) printf '%s\n' dash ;;
-    sh | bash | dash | ksh) printf '%s\n' "$dialect" ;;
-    # Ubuntu 24.04's ShellCheck 0.9 rejects this directive before -s can
-    # provide a fallback. Keep the gate deterministic across tool versions.
-    busybox) printf '%s\n' unsupported:busybox ;;
+    ash) printf '%s\n' busybox ;;
+    sh | bash | busybox | dash | ksh) printf '%s\n' "$dialect" ;;
     *) return 1 ;;
   esac
 }
@@ -296,9 +300,12 @@ if ! command -v shellcheck >/dev/null 2>&1; then
   _fail "ShellCheck command is unavailable"
 else
   _pass "shellcheck: command is available"
+  shellcheck_args=(-x -P SCRIPTDIR)
+  [[ -z "$exclude_codes" ]] || shellcheck_args+=(-e "$exclude_codes")
   shellcheck_auto_files=()
   shellcheck_sh_files=()
   shellcheck_bash_files=()
+  shellcheck_busybox_files=()
   shellcheck_dash_files=()
   shellcheck_ksh_files=()
   for path in "${lint_files[@]}"; do
@@ -306,30 +313,38 @@ else
       case "$dialect" in
         sh) shellcheck_sh_files+=("$path") ;;
         bash) shellcheck_bash_files+=("$path") ;;
+        busybox) shellcheck_busybox_files+=("$path") ;;
         dash) shellcheck_dash_files+=("$path") ;;
         ksh) shellcheck_ksh_files+=("$path") ;;
-        unsupported:*)
-          _fail "shellcheck: unsupported directive dialect '${dialect#*:}' in $(_shellcheck_display_path "$path")"
-          ;;
       esac
     else
       shellcheck_auto_files+=("$path")
     fi
   done
   [[ "$fail_count" -eq 0 ]] || _test_summary
+  if [[ "${#shellcheck_busybox_files[@]}" -gt 0 ]]; then
+    printf ':\n' >"$temp_root/busybox-probe"
+    if ! shellcheck -s busybox -- "$temp_root/busybox-probe" \
+      >/dev/null 2>&1; then
+      _fail "shellcheck: ShellCheck 0.11 or newer is required for BusyBox dialect"
+      _test_summary
+    fi
+  fi
   if (
     cd "$repo_root" || exit 1
     shellcheck_status=0
     [[ "${#shellcheck_auto_files[@]}" -eq 0 ]] ||
-      shellcheck -x -P SCRIPTDIR -- "${shellcheck_auto_files[@]}" || shellcheck_status=1
+      shellcheck "${shellcheck_args[@]}" -- "${shellcheck_auto_files[@]}" || shellcheck_status=1
     [[ "${#shellcheck_sh_files[@]}" -eq 0 ]] ||
-      shellcheck -x -P SCRIPTDIR -s sh -- "${shellcheck_sh_files[@]}" || shellcheck_status=1
+      shellcheck "${shellcheck_args[@]}" -s sh -- "${shellcheck_sh_files[@]}" || shellcheck_status=1
     [[ "${#shellcheck_bash_files[@]}" -eq 0 ]] ||
-      shellcheck -x -P SCRIPTDIR -s bash -- "${shellcheck_bash_files[@]}" || shellcheck_status=1
+      shellcheck "${shellcheck_args[@]}" -s bash -- "${shellcheck_bash_files[@]}" || shellcheck_status=1
+    [[ "${#shellcheck_busybox_files[@]}" -eq 0 ]] ||
+      shellcheck "${shellcheck_args[@]}" -s busybox -- "${shellcheck_busybox_files[@]}" || shellcheck_status=1
     [[ "${#shellcheck_dash_files[@]}" -eq 0 ]] ||
-      shellcheck -x -P SCRIPTDIR -s dash -- "${shellcheck_dash_files[@]}" || shellcheck_status=1
+      shellcheck "${shellcheck_args[@]}" -s dash -- "${shellcheck_dash_files[@]}" || shellcheck_status=1
     [[ "${#shellcheck_ksh_files[@]}" -eq 0 ]] ||
-      shellcheck -x -P SCRIPTDIR -s ksh -- "${shellcheck_ksh_files[@]}" || shellcheck_status=1
+      shellcheck "${shellcheck_args[@]}" -s ksh -- "${shellcheck_ksh_files[@]}" || shellcheck_status=1
     exit "$shellcheck_status"
   ); then
     _pass "shellcheck: repository shell programs pass"

@@ -81,7 +81,9 @@ install_profile_prereqs() {
   fi
   if has_profile shellcheck; then
     add_pkg brew_pkgs "shellcheck"
-    add_pkg apt_pkgs "shellcheck"
+    # The shared lint leaf runs on Ubuntu. Pin its analyzer independently of
+    # the runner image so coverage cannot silently regress when apt changes.
+    [ "$MATRIX_NAME" = Ubuntu ] || add_pkg apt_pkgs "shellcheck"
     add_pkg arch_pkgs "shellcheck"
     add_pkg dnf_pkgs "ShellCheck"
     add_pkg apk_pkgs "shellcheck"
@@ -91,5 +93,8 @@ install_profile_prereqs() {
 
   if has_profile lua; then
     ensure_lua_command
+  fi
+  if has_profile shellcheck && [ "$MATRIX_NAME" = Ubuntu ]; then
+    install_pinned_shellcheck
   fi
 }

@@ -114,6 +114,7 @@ inventory:
 - uses: cgraf78/actions/.github/actions/shellcheck-inventory@FULL_COMMIT_SHA
   with:
     inventory-path: .github/shellcheck-files.txt
+    exclude-codes: SC1091
 ```
 
 The inventory is line-oriented. Blank lines and comments beginning in column
@@ -130,12 +131,14 @@ Replace each `<TAB>` marker with one literal tab. `program` rows are linted.
 should not pass as standalone programs.
 
 Discovery recognizes common shell extensions, supported shebangs, and leading
-`# shellcheck shell=...` directives. An extensionless sourced library without a
-shebang needs a supported directive to opt into coverage. The Ubuntu 24.04
-ShellCheck baseline does not accept `shell=busybox`, so use an appropriate
-BusyBox `sh` or `ash` shebang instead. Discovery also examines nonignored,
-untracked files; run the action before generating scripts or add intentional
-build output to `.gitignore`.
+`# shellcheck shell=...` directives, including BusyBox. An extensionless sourced
+library without a shebang needs a supported directive to opt into coverage.
+Direct action users need ShellCheck 0.11 or newer for the BusyBox dialect; the
+shared Shell CI workflow provides the reviewed version for its callers.
+`exclude-codes` applies a validated, repository-wide exception list for this
+action invocation without changing direct ShellCheck behavior elsewhere.
+Discovery also examines nonignored, untracked files; run the action before
+generating scripts or add intentional build output to `.gitignore`.
 
 ## Common Contracts
 
@@ -247,8 +250,9 @@ once on Ubuntu and invokes the pinned
 [`shellcheck-inventory`](#shellcheck-inventory-action) action. The lint leaf is
 part of the existing `Required` aggregate, so callers keep the same branch
 protection context while gaining consistent static coverage. ShellCheck does
-not run redundantly in the platform or Termux matrices. Its version follows the
-`ubuntu-24.04` package so all callers share the same reviewed CI baseline.
+not run redundantly in the platform or Termux matrices. Its version is owned by
+the immutable prerequisite-action revision pinned in the workflow, so all
+callers share the same reviewed CI baseline.
 
 The `checkrun` setup mode requires the caller to commit both
 `.github/mise/checkrun-ci.toml` and `.github/mise/mise.lock`. The setup uses

@@ -19,6 +19,11 @@ ensure_lua_command() {
   :
 }
 
+pinned_shellcheck_calls=0
+install_pinned_shellcheck() {
+  pinned_shellcheck_calls=$((pinned_shellcheck_calls + 1))
+}
+
 assert_eq() {
   expected=$1
   actual=$2
@@ -62,6 +67,21 @@ assert_eq procps "$apk_pkgs" 'procps Alpine packages'
 
 printf 'ok - procps profile package mapping\n'
 
+export MATRIX_NAME=Ubuntu
+export PROFILES=shellcheck
+pinned_shellcheck_calls=0
+install_profile_prereqs
+assert_eq '' "$apt_pkgs" 'Ubuntu ShellCheck is not installed from apt'
+assert_eq 1 "$pinned_shellcheck_calls" 'Ubuntu installs pinned ShellCheck'
+
+export MATRIX_NAME=Debian
+pinned_shellcheck_calls=0
+install_profile_prereqs
+assert_eq shellcheck "$apt_pkgs" 'Debian keeps its native ShellCheck package'
+assert_eq 0 "$pinned_shellcheck_calls" 'Debian does not install Ubuntu pinned ShellCheck'
+
+printf 'ok - Ubuntu ShellCheck profile uses pinned installer\n'
+
 mock_bin=$(mktemp -d)
 trap 'rm -rf "$mock_bin"' EXIT HUP INT TERM
 command_log=$mock_bin/commands.log
@@ -98,3 +118,117 @@ assert_contains \
   "$(cat "$command_log")" 'dotfiles Alpine installs full ps'
 
 printf 'ok - dotfiles setup installs process tools\n'
+
+(
+  unset -f install_pinned_shellcheck
+  # Re-source the production helper after the routing test's call-count stub.
+  # shellcheck source=.github/actions/shell-ci-prereqs/lib.sh
+  . "$PREREQS_DIR/lib.sh"
+
+  install_tmp=$mock_bin/pinned-install
+  install_mock_bin=$install_tmp/bin
+  mkdir -p "$install_mock_bin"
+  install_log=$install_tmp/commands.log
+  export install_log
+
+  cat >"$install_mock_bin/curl" <<'MOCK'
+#!/bin/sh
+printf 'curl %s\n' "$*" >>"$install_log"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = -o ]; then
+    shift
+    : >"$1"
+    break
+  fi
+  shift
+done
+MOCK
+  cat >"$install_mock_bin/sha256sum" <<'MOCK'
+#!/bin/sh
+input=$(cat)
+printf 'sha256sum %s %s\n' "$*" "$input" >>"$install_log"
+[ "${MOCK_SHA256_FAIL:-0}" -ne 1 ]
+MOCK
+  cat >"$install_mock_bin/tar" <<'MOCK'
+#!/bin/sh
+printf 'tar %s\n' "$*" >>"$install_log"
+destination=
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = -C ]; then
+    shift
+    destination=$1
+    break
+  fi
+  shift
+done
+mkdir -p "$destination/shellcheck-v0.11.0"
+cat >"$destination/shellcheck-v0.11.0/shellcheck" <<'SHELLCHECK'
+#!/bin/sh
+printf 'ShellCheck - shell script analysis tool\nversion: %s\n' \
+  "${MOCK_SHELLCHECK_VERSION:-0.11.0}"
+SHELLCHECK
+chmod +x "$destination/shellcheck-v0.11.0/shellcheck"
+MOCK
+  chmod +x "$install_mock_bin/curl" "$install_mock_bin/sha256sum" \
+    "$install_mock_bin/tar"
+
+  export PATH="$install_mock_bin:$PATH"
+  export RUNNER_TEMP="$install_tmp/runner"
+  export GITHUB_PATH="$install_tmp/github-path"
+  install_pinned_shellcheck
+
+  log=$(cat "$install_log")
+  assert_contains \
+    'https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz' \
+    "$log" 'pinned ShellCheck release URL'
+  assert_contains \
+    '--retry 3 --retry-all-errors --retry-delay 1' \
+    "$log" 'pinned ShellCheck bounded download retry'
+  assert_contains \
+    '8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198' \
+    "$log" 'pinned ShellCheck checksum'
+  assert_eq \
+    "$RUNNER_TEMP/shellcheck-v0.11.0" \
+    "$(cat "$GITHUB_PATH")" 'pinned ShellCheck command path'
+
+  : >"$install_log"
+  rm -f "$GITHUB_PATH"
+  export MOCK_SHA256_FAIL=1
+  set +e
+  (
+    set -e
+    install_pinned_shellcheck
+  )
+  failure_status=$?
+  set -e
+  unset MOCK_SHA256_FAIL
+  assert_eq 1 "$failure_status" 'checksum failure status'
+  case "$(cat "$install_log")" in
+    *'tar '*)
+      printf 'not ok - checksum failure extracted an unverified archive\n' >&2
+      exit 1
+      ;;
+  esac
+  [ ! -e "$GITHUB_PATH" ] || {
+    printf 'not ok - checksum failure exported a command path\n' >&2
+    exit 1
+  }
+
+  : >"$install_log"
+  export MOCK_SHELLCHECK_VERSION=0.10.0
+  set +e
+  (
+    set -e
+    install_pinned_shellcheck
+  )
+  failure_status=$?
+  set -e
+  unset MOCK_SHELLCHECK_VERSION
+  assert_eq 1 "$failure_status" 'version mismatch status'
+  [ ! -e "$GITHUB_PATH" ] || {
+    printf 'not ok - version mismatch exported a command path\n' >&2
+    exit 1
+  }
+)
+
+printf 'ok - pinned ShellCheck install is verified and exported\n'

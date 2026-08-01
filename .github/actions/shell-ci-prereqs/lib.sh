@@ -113,6 +113,35 @@ install_yq_v4() {
   sudo_if_available mv "$tmp" /usr/local/bin/yq
 }
 
+install_pinned_shellcheck() {
+  version=0.11.0
+  checksum=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+
+  case "$(uname -m)" in
+    x86_64 | amd64) architecture=x86_64 ;;
+    *)
+      echo "unsupported pinned ShellCheck architecture: $(uname -m)" >&2
+      exit 1
+      ;;
+  esac
+
+  archive_name="shellcheck-v${version}.linux.${architecture}.tar.xz"
+  archive="${RUNNER_TEMP:?}/$archive_name"
+  install_dir="$RUNNER_TEMP/shellcheck-v${version}"
+  url="https://github.com/koalaman/shellcheck/releases/download/v${version}/${archive_name}"
+
+  rm -rf "$install_dir"
+  mkdir -p "$RUNNER_TEMP"
+  curl -fsSL --retry 3 --retry-all-errors --retry-delay 1 \
+    "$url" -o "$archive"
+  printf '%s  %s\n' "$checksum" "$archive" | sha256sum -c -
+  tar -xJf "$archive" -C "$RUNNER_TEMP"
+  rm -f "$archive"
+
+  "$install_dir/shellcheck" --version | grep -Fq "version: $version"
+  printf '%s\n' "$install_dir" >>"${GITHUB_PATH:?}"
+}
+
 ensure_lua_command() {
   # Debian and Alpine install Lua 5.4 as lua5.4. termnav's tests expect the
   # portable command name "lua", so add a compatibility symlink when needed.

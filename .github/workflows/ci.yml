@@ -168,11 +168,12 @@ jobs:
           "$venv/bin/python" -m pip install "zizmor==${ZIZMOR_VERSION}"
           echo "$venv/bin" >> "$GITHUB_PATH"
 
-      - name: Install shellcheck
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y shellcheck
+      - name: Install ShellCheck
+        uses: ./.github/actions/shell-ci-prereqs
+        with:
+          matrix-name: Ubuntu
+          profiles: base,shellcheck
+          setup: none
 
       - name: Lint workflows
         shell: bash
