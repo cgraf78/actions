@@ -11,6 +11,11 @@ name: Shell Platforms
 on:
   workflow_call:
     inputs:
+      force-dotfiles-update:
+        description: Refresh the shdeps bootstrap before dotfiles dependency resolution.
+        required: false
+        type: boolean
+        default: false
       matrix-set:
         description: Platform matrix to run. Supported values are core and full.
         required: true
@@ -199,6 +204,7 @@ jobs:
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
           MATRIX_NAME: ${{ matrix.name }}
+          SHDEPS_FORCE: ${{ inputs.force-dotfiles-update && '1' || '0' }}
 
       - name: Run tests
         shell: bash
