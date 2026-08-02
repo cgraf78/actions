@@ -46,6 +46,9 @@ jobs:
 
 Optional `matrix-set` can force `core` or `full`; the default `auto` keeps
 push/PR runs on `core` and scheduled/manual runs on `full`.
+Dotfiles callers can set `force-dotfiles-update: true` to refresh the shdeps
+bootstrap before dependency resolution when validating forced-update behavior.
+The default is false, so normal CI consumers retain the cache-first path.
 `shellcheck-inventory-path` adds one Ubuntu lint job to the existing required
 aggregate without repeating static lint across the runtime matrix.
 `shellcheck-exclude-codes` optionally applies a validated repository-wide

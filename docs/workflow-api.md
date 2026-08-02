@@ -220,6 +220,7 @@ jobs:
 | Input                 | Default  | Contract                                                                           |
 | --------------------- | -------- | ---------------------------------------------------------------------------------- |
 | `concurrency-scope`   | `default` | Stable identity for this call. Must differ between multiple shell calls.          |
+| `force-dotfiles-update` | `false` | With `setup: dotfiles`, refresh shdeps before conventional-platform dependency resolution. |
 | `profiles`            | `""`     | Comma-separated prerequisite profiles used by conventional platforms and Termux.   |
 | `shellcheck-inventory-path` | `""` | Repository-relative typed inventory for one Ubuntu ShellCheck gate. Empty disables it. |
 | `shellcheck-exclude-codes` | `""` | Validated comma-separated ShellCheck codes excluded from the shared lint invocation. |
@@ -245,6 +246,11 @@ preparation or test selection.
 The runner also activates Termux's `termux-exec` compatibility layer before
 caller code runs. Repository scripts can therefore keep portable Linux
 shebangs such as `#!/usr/bin/env bash` instead of embedding an app data path.
+
+`force-dotfiles-update` maps to the dotfiles `SHDEPS_FORCE=1` API at the
+conventional-platform bootstrap boundary. It defaults off so ordinary callers
+keep the cache-first bootstrap. Termux starts from a fresh application sandbox
+and does not restore or invoke that shared bootstrap action.
 
 When `shellcheck-inventory-path` is nonempty, the workflow installs ShellCheck
 once on Ubuntu and invokes the pinned
