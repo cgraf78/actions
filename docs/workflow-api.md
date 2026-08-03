@@ -246,6 +246,9 @@ preparation or test selection.
 The runner also activates Termux's `termux-exec` compatibility layer before
 caller code runs. Repository scripts can therefore keep portable Linux
 shebangs such as `#!/usr/bin/env bash` instead of embedding an app data path.
+Before installing profile capabilities, the runner fully upgrades the pinned
+APK's bootstrap packages against the configured repository. This keeps
+executables and their shared libraries on one supported Termux package state.
 
 `force-dotfiles-update` maps to the dotfiles `SHDEPS_FORCE=1` API at the
 conventional-platform bootstrap boundary. It defaults off so ordinary callers

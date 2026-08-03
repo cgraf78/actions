@@ -77,6 +77,7 @@ contracts() {
 
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("unsupported Termux setup mode")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("apt-get update")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("full-upgrade -y")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("DEBIAN_FRONTEND=noninteractive")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("--force-confold")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("packages=(bash termux-exec)")' _termux-ci.yml
@@ -116,6 +117,7 @@ contracts() {
   check '.jobs.build.steps[] | select(.name == "Configure Android NDK toolchain").with."rust-target" == "${{ matrix.rust-target }}"' rust-release.yml
 
   check '.jobs.shell-smoke.with.termux-command != null' ci.yml
+  check '.jobs.shell-smoke.with.termux-command | contains("curl --version >/dev/null")' ci.yml
   check '.jobs.shell-smoke.with.shellcheck-inventory-path == ".github/shellcheck-files.txt"' ci.yml
   check '.jobs.quality.steps[] | select(.name == "Test shared ShellCheck inventory action").run == "test/shellcheck-action-test"' ci.yml
   check '.jobs.quality.steps[] | select(.name == "Lint shell inventory").uses == "./.github/actions/shellcheck-inventory"' ci.yml

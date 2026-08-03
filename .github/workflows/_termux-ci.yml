@@ -166,6 +166,13 @@ jobs:
           has_profile procps && packages+=(procps)
           has_profile shellcheck && packages+=(shellcheck)
           apt-get update
+          # The pinned APK can predate the live Termux repository. Termux does
+          # not support partial upgrades: installing a current executable
+          # beside bootstrap-era shared libraries can leave it unable to link.
+          # Converge the base image first, then install caller capabilities.
+          DEBIAN_FRONTEND=noninteractive apt-get \
+            -o Dpkg::Options::=--force-confold \
+            full-upgrade -y
           DEBIAN_FRONTEND=noninteractive apt-get \
             -o Dpkg::Options::=--force-confold \
             install -y "${packages[@]}"

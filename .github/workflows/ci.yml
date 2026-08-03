@@ -25,6 +25,7 @@ jobs:
         test "$(uname -o)" = Android
         test "$PREFIX" = /data/data/com.termux/files/usr
         test -x "$PREFIX/bin/bash"
+        curl --version >/dev/null
         test -f .github/workflows/shell-ci.yml
         test -f .github/workflows/_termux-ci.yml
 
