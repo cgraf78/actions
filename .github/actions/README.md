@@ -12,7 +12,7 @@ this repo and by other `cgraf78` repositories.
 - `shellcheck-inventory` validates a repository-owned typed inventory and runs
   ShellCheck over every reviewed program while excluding declared fixtures.
 - `rust-ci-prereqs` installs Rust CI prerequisites that are not handled by
-  `actions-rust-lang/setup-rust-toolchain`.
+  `dtolnay/rust-toolchain`.
 - `dotfiles-bootstrap` runs the dotfiles bootstrap/update/doctor flow in CI.
 
 Keep composite actions narrow and reusable. If behavior is only needed by a

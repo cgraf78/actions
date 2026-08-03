@@ -47,7 +47,7 @@ contracts() {
   check '.jobs.shellcheck.steps[] | select(.name == "Install ShellCheck prerequisites").with."matrix-name" == "Ubuntu"' shell-ci.yml
   check '.jobs.shellcheck.steps[] | select(.name == "Install ShellCheck prerequisites").with.profiles == "base,shellcheck"' shell-ci.yml
   check '.jobs.shellcheck.steps[] | select(.name == "Install ShellCheck prerequisites").with.setup == "none"' shell-ci.yml
-  check '.jobs.shellcheck.steps[] | select(.uses == "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd").with."persist-credentials" == false' shell-ci.yml
+  check '.jobs.shellcheck.steps[] | select((.uses // "") | test("^actions/checkout@[0-9a-f]{40}$")).with."persist-credentials" == false' shell-ci.yml
   check '.jobs.shellcheck.steps[] | select(.name == "Validate and lint shell inventory").uses == "cgraf78/actions/.github/actions/shellcheck-inventory@6ae8c87bdd20a901d550de9d97216d9761617ae8"' shell-ci.yml
   check '.jobs.shellcheck.steps[] | select(.name == "Validate and lint shell inventory").with."inventory-path" == "${{ inputs.shellcheck-inventory-path }}"' shell-ci.yml
   check '.jobs.shellcheck.steps[] | select(.name == "Validate and lint shell inventory").with."exclude-codes" == "${{ inputs.shellcheck-exclude-codes }}"' shell-ci.yml
@@ -87,6 +87,7 @@ contracts() {
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("termux-exec")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("LD_PRELOAD")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("[[ \"$setup\" == none ]]") | not' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Download official Termux APK").run | contains("--retry 3 --retry-all-errors --retry-delay 1")' _termux-ci.yml
 
   check '.jobs.required.name == "Required"' rust-ci.yml
   check '.jobs.required.if == "${{ always() }}"' rust-ci.yml
@@ -122,10 +123,12 @@ contracts() {
   check '.jobs.shell-smoke.with.termux-command | contains("curl --version >/dev/null")' ci.yml
   check '.jobs.shell-smoke.with.shellcheck-inventory-path == ".github/shellcheck-files.txt"' ci.yml
   check '.jobs.quality.steps[] | select(.name == "Test shared ShellCheck inventory action").run == "test/shellcheck-action-test"' ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Install actionlint").run | contains("--retry 3 --retry-all-errors --retry-delay 1")' ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Install zizmor").env.ZIZMOR_VERSION == "1.29.0"' ci.yml
   check '.jobs.quality.steps[] | select(.name == "Lint shell inventory").uses == "./.github/actions/shellcheck-inventory"' ci.yml
   check '.jobs.quality.steps[] | select(.name == "Lint shell inventory").with."inventory-path" == ".github/shellcheck-files.txt"' ci.yml
   check '[.jobs.quality.steps[] | select(.name == "Lint shell scripts")] | length == 0' ci.yml
-  check '.on.schedule[0].cron == "0 7 * * *"' ci.yml
+  check '.on.schedule[0].cron == "7 7 * * *"' ci.yml
   check '.on | has("workflow_dispatch")' ci.yml
   check '.jobs.shell-smoke.with.matrix-set == "auto"' ci.yml
   check '.jobs.rust-smoke.with.matrix-set == "auto"' ci.yml
@@ -146,6 +149,19 @@ contracts() {
   for workflow in _shell-platforms.yml _rust-platforms.yml _termux-ci.yml; do
     check '.jobs.required == null' "$workflow"
   done
+
+  yq -e '.updates[] | select(."package-ecosystem" == "github-actions") |
+    [(.directory == "/"),
+     (.schedule.interval == "weekly"),
+     (.schedule.day == "monday"),
+     (.schedule.time == "07:00"),
+     (.schedule.timezone == "America/Chicago"),
+     ([.ignore[] | select(."dependency-name" == "cgraf78/actions")] | length == 1)] |
+    all' \
+    "$root/.github/dependabot.yml" >/dev/null || {
+    echo 'workflow contract failed: Dependabot must update Actions but ignore self-references' >&2
+    return 1
+  }
 }
 
 contracts

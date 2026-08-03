@@ -20,7 +20,7 @@ jobs:
     name: macOS
     runs-on: macos-15-intel
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -34,6 +34,6 @@ jobs:
         # shell-ci. GitHub shows skipped reusable-workflow jobs in every caller,
         # so splitting the contract keeps normal shell repos visually clean while
         # preserving an explicit opt-in for installer/bootstrap compatibility.
-        run: |
+        run: |-
           /bin/bash --version
           eval "$BASH32_COMMAND"
