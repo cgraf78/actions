@@ -120,6 +120,142 @@ assert_contains \
 printf 'ok - dotfiles setup installs process tools\n'
 
 (
+  # Re-source the production helper after replacing commands used by the
+  # upstream yq installer.
+  # shellcheck source=.github/actions/shell-ci-prereqs/lib.sh
+  . "$PREREQS_DIR/lib.sh"
+
+  yq_tmp=$mock_bin/yq-install
+  yq_mock_bin=$yq_tmp/bin
+  mkdir -p "$yq_mock_bin"
+  yq_log=$yq_tmp/commands.log
+  export yq_log
+
+  cat >"$yq_mock_bin/yq" <<'MOCK'
+#!/bin/sh
+echo 'yq version v3.4.1'
+MOCK
+  cat >"$yq_mock_bin/uname" <<'MOCK'
+#!/bin/sh
+case "$1" in
+  -s) printf '%s\n' "${MOCK_UNAME_S:-Linux}" ;;
+  -m) printf '%s\n' "${MOCK_UNAME_M:-x86_64}" ;;
+  *) exit 2 ;;
+esac
+MOCK
+  cat >"$yq_mock_bin/curl" <<'MOCK'
+#!/bin/sh
+printf 'curl %s\n' "$*" >>"$yq_log"
+destination=
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = -o ]; then
+    shift
+    destination=$1
+    break
+  fi
+  shift
+done
+cat >"$destination" <<'YQ'
+#!/bin/sh
+printf 'yq version v%s\n' "${MOCK_YQ_VERSION:-4.53.3}"
+YQ
+chmod +x "$destination"
+MOCK
+  cat >"$yq_mock_bin/sha256sum" <<'MOCK'
+#!/bin/sh
+input=$(cat)
+printf 'sha256sum %s %s\n' "$*" "$input" >>"$yq_log"
+[ "${YQ_MOCK_SHA256_FAIL:-0}" -ne 1 ]
+MOCK
+  cat >"$yq_mock_bin/shasum" <<'MOCK'
+#!/bin/sh
+input=$(cat)
+printf 'shasum %s %s\n' "$*" "$input" >>"$yq_log"
+[ "${YQ_MOCK_SHA256_FAIL:-0}" -ne 1 ]
+MOCK
+  chmod +x "$yq_mock_bin/yq" "$yq_mock_bin/uname" \
+    "$yq_mock_bin/curl" "$yq_mock_bin/sha256sum" "$yq_mock_bin/shasum"
+
+  # Invoked indirectly by install_yq_v4 from the sourced production helper.
+  # shellcheck disable=SC2329
+  sudo_if_available() {
+    printf 'sudo_if_available %s\n' "$*" >>"$yq_log"
+  }
+
+  # Each installer test owns an isolated command path and runner directory.
+  # shellcheck disable=SC2030
+  export PATH="$yq_mock_bin:$PATH"
+  # shellcheck disable=SC2030
+  export RUNNER_TEMP="$yq_tmp/runner"
+  mkdir -p "$RUNNER_TEMP"
+  install_yq_v4
+
+  log=$(cat "$yq_log")
+  assert_contains \
+    'https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_linux_amd64' \
+    "$log" 'pinned yq release URL'
+  assert_contains \
+    '--retry 3 --retry-all-errors --retry-delay 1' \
+    "$log" 'pinned yq bounded download retry'
+  assert_contains \
+    'fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4' \
+    "$log" 'pinned yq checksum'
+  assert_contains \
+    'sudo_if_available mv' "$log" 'verified yq install'
+
+  : >"$yq_log"
+  export MOCK_UNAME_S=Darwin MOCK_UNAME_M=arm64
+  install_yq_v4
+  unset MOCK_UNAME_S MOCK_UNAME_M
+  log=$(cat "$yq_log")
+  assert_contains \
+    'https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_darwin_arm64' \
+    "$log" 'pinned Darwin yq release URL'
+  assert_contains \
+    '877de31753a4dd2401aa048937aa9a7fc4d5f6ce858cf31508c5802954297213' \
+    "$log" 'pinned Darwin yq checksum'
+  assert_contains 'shasum -a 256 -c -' "$log" 'Darwin checksum command'
+
+  : >"$yq_log"
+  export YQ_MOCK_SHA256_FAIL=1
+  set +e
+  (
+    set -e
+    install_yq_v4
+  )
+  failure_status=$?
+  set -e
+  unset YQ_MOCK_SHA256_FAIL
+  assert_eq 1 "$failure_status" 'yq checksum failure status'
+  case "$(cat "$yq_log")" in
+    *'sudo_if_available mv'*)
+      printf 'not ok - yq checksum failure installed an unverified binary\n' >&2
+      exit 1
+      ;;
+  esac
+
+  : >"$yq_log"
+  export MOCK_YQ_VERSION=4.52.0
+  set +e
+  (
+    set -e
+    install_yq_v4
+  )
+  failure_status=$?
+  set -e
+  unset MOCK_YQ_VERSION
+  assert_eq 1 "$failure_status" 'yq version mismatch status'
+  case "$(cat "$yq_log")" in
+    *'sudo_if_available mv'*)
+      printf 'not ok - yq version mismatch installed the wrong binary\n' >&2
+      exit 1
+      ;;
+  esac
+)
+
+printf 'ok - pinned yq install is retried and verified\n'
+
+(
   unset -f install_pinned_shellcheck
   # Re-source the production helper after the routing test's call-count stub.
   # shellcheck source=.github/actions/shell-ci-prereqs/lib.sh
@@ -172,7 +308,9 @@ MOCK
   chmod +x "$install_mock_bin/curl" "$install_mock_bin/sha256sum" \
     "$install_mock_bin/tar"
 
+  # shellcheck disable=SC2031
   export PATH="$install_mock_bin:$PATH"
+  # shellcheck disable=SC2031
   export RUNNER_TEMP="$install_tmp/runner"
   export GITHUB_PATH="$install_tmp/github-path"
   install_pinned_shellcheck

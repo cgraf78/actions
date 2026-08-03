@@ -1,0 +1,13 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:00"
+      timezone: "America/Chicago"
+    # This repository intentionally pins its own composite actions at reviewed
+    # commits. Ignoring self-references prevents an update PR for every merge.
+    ignore:
+      - dependency-name: "cgraf78/actions"

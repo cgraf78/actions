@@ -10,6 +10,16 @@ sudo_if_available() {
   fi
 }
 
+verify_sha256() {
+  expected=$1
+  file=$2
+
+  case "$(uname -s)" in
+    Darwin) printf '%s  %s\n' "$expected" "$file" | shasum -a 256 -c - ;;
+    *) printf '%s  %s\n' "$expected" "$file" | sha256sum -c - ;;
+  esac
+}
+
 has_profile() {
   # Reusable workflow inputs do not have an array type. Surrounding the
   # comma-separated profile string avoids false positives like matching "py"
@@ -90,6 +100,8 @@ install_yq_v4() {
     return
   fi
 
+  version=4.53.3
+
   case "$(uname -s)" in
     Linux) os=linux ;;
     Darwin) os=darwin ;;
@@ -107,9 +119,30 @@ install_yq_v4() {
       ;;
   esac
 
+  case "${os}_${arch}" in
+    linux_amd64) checksum=fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4 ;;
+    linux_arm64) checksum=578648e463a11c1b6db6010cbf41eafed6bee79466fcffa1bb446672cf7945ea ;;
+    darwin_amd64) checksum=b4ba1ecce3c47f00803f4f964de38394326c7a32eb6540616e04fb2935a0f08d ;;
+    darwin_arm64) checksum=877de31753a4dd2401aa048937aa9a7fc4d5f6ce858cf31508c5802954297213 ;;
+  esac
+
   tmp="${RUNNER_TEMP:-/tmp}/yq"
-  curl -fsSL "https://github.com/mikefarah/yq/releases/download/v4.45.1/yq_${os}_${arch}" -o "$tmp"
+  rm -f "$tmp"
+  if ! curl -fsSL --retry 3 --retry-all-errors --retry-delay 1 \
+    "https://github.com/mikefarah/yq/releases/download/v${version}/yq_${os}_${arch}" \
+    -o "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  if ! verify_sha256 "$checksum" "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
   chmod +x "$tmp"
+  if ! "$tmp" --version | grep -Fq "version v${version}"; then
+    rm -f "$tmp"
+    return 1
+  fi
   sudo_if_available mv "$tmp" /usr/local/bin/yq
 }
 
@@ -134,7 +167,7 @@ install_pinned_shellcheck() {
   mkdir -p "$RUNNER_TEMP"
   curl -fsSL --retry 3 --retry-all-errors --retry-delay 1 \
     "$url" -o "$archive"
-  printf '%s  %s\n' "$checksum" "$archive" | sha256sum -c -
+  verify_sha256 "$checksum" "$archive"
   tar -xJf "$archive" -C "$RUNNER_TEMP"
   rm -f "$archive"
 

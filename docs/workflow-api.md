@@ -13,10 +13,8 @@ let each update run the caller's normal CI, and review it before merge. This kee
 shared fixes moving across `cgraf78` repositories without changing the workflow
 code executed by an unchanged caller commit.
 
-The examples in this repository pin
-`7d88c3afa6e51a83e9cfefb0c12f503155e17952`, which passed the `actions` CI
-suite. Callers may pin a newer commit after reviewing it and confirming that its
-CI passed.
+Examples use `FULL_COMMIT_SHA` as a placeholder. Callers must substitute a
+reviewed commit whose `actions` CI suite passed.
 
 ## Required Check Contract
 

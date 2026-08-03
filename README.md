@@ -81,6 +81,13 @@ jobs:
     uses: cgraf78/actions/.github/workflows/rust-ci.yml@FULL_COMMIT_SHA
     with:
       test-command: cargo test --locked
+      android-package-smoke-command: |
+        cargo build --locked --target "$RUST_TARGET"
+        test -x "target/$RUST_TARGET/debug/my-tool"
+      termux-host-command: |
+        cargo build --locked --target "$RUST_TARGET"
+      termux-command: |
+        target/x86_64-linux-android/debug/my-tool --version
 ```
 
 Repos with stricter policies can override the quality-gate commands, or pass an
@@ -125,7 +132,8 @@ cross-building on the host avoids depending on emulator-hosted compiler behavior
 
 Builds and publishes Rust binary archives for the standard release platform
 set: Linux x86_64 musl, Linux aarch64 musl, macOS x86_64, and macOS aarch64.
-Callers can opt into Android aarch64 without changing their packaging command.
+Callers can opt into Android aarch64 and x86_64 without changing their packaging
+command.
 The workflow owns draft creation, tag/version validation, asset upload, and
 publishing. The caller owns packaging and smoke-test behavior through scripts,
 and can opt out of publishing to leave a draft release.
