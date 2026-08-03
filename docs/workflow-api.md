@@ -401,8 +401,9 @@ depend on the emulator, bootstrap, or sandbox-transport implementation.
 ## `rust-release.yml`
 
 `rust-release.yml` builds and publishes Rust binary release archives for the
-standard platform set. Android aarch64 is available through the explicit
-`android-aarch64` opt-in so existing callers retain their current matrix.
+standard platform set. Android aarch64 and x86_64 are available through the
+explicit `android-aarch64` and `android-x86_64` opt-ins so existing callers
+retain their current matrix.
 
 ### Release Platform Matrix
 
@@ -413,6 +414,7 @@ The workflow exposes both Rust target triples and public asset labels:
 | `x86_64-unknown-linux-musl`  | `linux-x86_64-musl`  |
 | `aarch64-unknown-linux-musl` | `linux-aarch64-musl` |
 | `aarch64-linux-android`      | `android-aarch64`    |
+| `x86_64-linux-android`       | `android-x86_64`     |
 | `x86_64-apple-darwin`        | `macos-x86_64`       |
 | `aarch64-apple-darwin`       | `macos-aarch64`      |
 
@@ -439,6 +441,7 @@ inherit Rust target triples unless a caller deliberately chooses that contract.
 | `publish`           | `true`                                                        | Whether to publish the draft release after all matrix builds upload assets.                                                        |
 | `latest`            | `true`                                                        | Whether a published release should be marked latest.                                                                               |
 | `android-aarch64`   | `false`                                                       | Whether to build and publish the Android aarch64 artifact.                                                                          |
+| `android-x86_64`    | `false`                                                       | Whether to build and publish the Android x86_64 artifact.                                                                           |
 
 ### Tag Validation
 
