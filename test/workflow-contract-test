@@ -106,6 +106,13 @@ contracts() {
   check '.concurrency.group == "rust-ci-${{ github.repository }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.concurrency-scope }}"' rust-ci.yml
   check '.concurrency["cancel-in-progress"] == true' rust-ci.yml
 
+  check '.on.workflow_call.inputs."android-x86_64".default == false' rust-release.yml
+  check '.on.workflow_call.inputs."android-x86_64".required == false' rust-release.yml
+  check '.on.workflow_call.inputs."android-x86_64".type == "boolean"' rust-release.yml
+  check '.jobs.build.strategy.matrix.include[] | select(."asset-platform" == "android-x86_64")."rust-target" == "x86_64-linux-android"' rust-release.yml
+  check '.jobs.build.strategy.matrix.include[] | select(."asset-platform" == "android-x86_64").enabled == "${{ inputs.android-x86_64 }}"' rust-release.yml
+  check '.jobs.build.steps[] | select(.name == "Configure Android NDK toolchain").if | contains("matrix.rust-target == '"'"'x86_64-linux-android'"'"'")' rust-release.yml
+
   check '.jobs.shell-smoke.with.termux-command != null' ci.yml
   check '.jobs.shell-smoke.with.shellcheck-inventory-path == ".github/shellcheck-files.txt"' ci.yml
   check '.jobs.quality.steps[] | select(.name == "Test shared ShellCheck inventory action").run == "test/shellcheck-action-test"' ci.yml
