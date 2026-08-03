@@ -223,7 +223,9 @@ jobs:
           matrix.enabled &&
           (matrix.rust-target == 'aarch64-linux-android' ||
           matrix.rust-target == 'x86_64-linux-android')
-        uses: cgraf78/actions/.github/actions/android-rust-toolchain@57eaad1f86fb8581e370ac64cdbc060bc82a5906
+        uses: cgraf78/actions/.github/actions/android-rust-toolchain@438864f7da4781edb0d5e5468835169e52fd4b32
+        with:
+          rust-target: ${{ matrix.rust-target }}
 
       - name: Run repo setup
         if: matrix.enabled && inputs.setup-command != ''
