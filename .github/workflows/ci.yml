@@ -205,6 +205,10 @@ jobs:
         shell: bash
         run: test/infra-retry-test
 
+      - name: Test shared release scripts
+        shell: bash
+        run: test/release-scripts-test
+
       - name: Lint shell inventory
         uses: ./.github/actions/shellcheck-inventory
         with:

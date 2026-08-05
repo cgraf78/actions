@@ -463,6 +463,21 @@ with:
 
 The release workflow deliberately does not inspect archive contents. It only
 passes `RUST_TARGET` and `ASSET_PLATFORM`, runs caller commands, uploads matching
-assets, and publishes the release. Keep product-specific release scripts in the
-product repository so changes to installer or archive contracts review with the
-product code.
+assets, and publishes the release. Release scripts live in the product
+repository so changes to installer or archive contracts review with the product
+code.
+
+Their *logic* does not have to be written three times. `release-scripts/` in
+this repo holds the shared implementation of release identity, packaging, and
+smoke validation; consumers vendor it into `scripts/` and declare only the
+per-project payload in `scripts/release.conf`. See
+[`release-scripts/README.md`](../release-scripts/README.md).
+
+Consumers that vendor those scripts should add the drift gate to their normal
+CI so a divergent copy fails on pull requests rather than at release time:
+
+```yaml
+- uses: cgraf78/actions/.github/actions/verify-release-scripts@FULL_COMMIT_SHA
+  with:
+    scripts-dir: scripts
+```
