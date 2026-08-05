@@ -325,6 +325,7 @@ Ubuntu quality gate.
 | `clippy-command`              | `cargo clippy --locked --all-targets --all-features -- -D warnings` | Ubuntu quality lint command. Empty disables the step.                                                               |
 | `build-command`               | `cargo build --release --locked`                                    | Ubuntu quality build command. Empty disables the step.                                                              |
 | `doc-command`                 | `cargo doc --locked --no-deps`                                      | Ubuntu quality docs command. Empty disables the step.                                                               |
+| `package-smoke-musl-target`   | `""`                                                                | Rust musl target to prepare before package smoke. Installs the musl linker toolchain and adds the target. Empty disables it. |
 | `package-smoke-setup-command` | `""`                                                                | Optional setup command run immediately before package smoke.                                                        |
 | `package-smoke-command`       | `""`                                                                | Optional caller-owned command that builds and validates a representative release artifact. Empty disables the step. |
 | `android-package-smoke-command` | required                                                          | Caller-owned command that cross-builds and validates the Android aarch64 release artifact.                           |
@@ -338,6 +339,20 @@ graph. Library repositories or unusual workspaces that intentionally do not
 commit `Cargo.lock` must override the relevant commands.
 
 ### Package Smoke
+
+### musl prerequisites
+
+Rust ships the musl libc, but a crate with a C dependency still needs a musl
+linker. Both workflows expose that install as an opt-in rather than doing it
+automatically, because repos whose crates are pure Rust link musl targets
+without it and should not pay for an apt round trip.
+
+- `rust-ci.yml`: set `package-smoke-musl-target` to the target the package
+  smoke builds. The quality gate installs the host toolchain only, so this also
+  adds the target with rustup.
+- `rust-release.yml`: set `install-musl-tools: true`. The release matrix already
+  installs each row's target, so only the linker is missing, and the step is
+  skipped on non-musl rows.
 
 `package-smoke-command` is a generic execution point, not a shared packaging
 implementation. Release archive names, binary names, metadata, checksums,
@@ -441,6 +456,7 @@ inherit Rust target triples unless a caller deliberately chooses that contract.
 | `prerelease`        | `false`                                                       | Whether to mark the release as a prerelease.                                                                                       |
 | `publish`           | `true`                                                        | Whether to publish the draft release after all matrix builds upload assets.                                                        |
 | `latest`            | `true`                                                        | Whether a published release should be marked latest.                                                                               |
+| `install-musl-tools` | `false`                                                      | Install the musl linker toolchain before packaging Linux musl targets. Needed when a crate links C code.                            |
 | `android-aarch64`   | `false`                                                       | Whether to build and publish the Android aarch64 artifact.                                                                          |
 | `android-x86_64`    | `false`                                                       | Whether to build and publish the Android x86_64 artifact.                                                                           |
 

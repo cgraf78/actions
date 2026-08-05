@@ -53,6 +53,11 @@ on:
         required: false
         type: string
         default: cargo doc --locked --no-deps
+      package-smoke-musl-target:
+        description: Rust musl target to prepare before package-smoke-command. Installs the musl linker toolchain and adds the target. Empty disables it.
+        required: false
+        type: string
+        default: ""
       package-smoke-setup-command:
         description: Optional setup command to run before package-smoke-command on the Ubuntu quality gate.
         required: false
@@ -178,6 +183,15 @@ jobs:
         run: |
           cd "$WORKING_DIRECTORY"
           eval "$BUILD_COMMAND"
+
+      # The quality gate installs the host toolchain only, so a musl package
+      # smoke needs its target added here. Consumers were each carrying this
+      # plus the musl linker install inline.
+      - name: Prepare musl package smoke target
+        if: inputs.package-smoke-command != '' && inputs.package-smoke-musl-target != ''
+        uses: cgraf78/actions/.github/actions/musl-build-prereqs@19065e7ecf3edda7386b6d867482d7ee179b875d
+        with:
+          rust-target: ${{ inputs.package-smoke-musl-target }}
 
       - name: Prepare package smoke
         if: inputs.package-smoke-command != '' && inputs.package-smoke-setup-command != ''
