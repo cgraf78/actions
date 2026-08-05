@@ -363,14 +363,27 @@ _assert_exit "smoke: falls back to the recorded package version" 0 "$rc"
 
 # The repo-specific hook is where runtime assertions live; it must actually run
 # and its failure must fail the smoke test.
+# The hook must receive a live extract directory. Sourcing the hook fires any
+# RETURN trap in the sourcing function, so a cleanup trap of the wrong kind
+# deletes the tree before the hook can read it -- assert on real contents, not
+# just that the hook ran.
 cat >"$fx/scripts/release-smoke-hook.sh" <<'HOOK'
 # shellcheck shell=bash
 release_smoke_check() {
+  local root=$1
+  [[ -d "$root" ]] || {
+    printf 'hook: extract dir is gone\n' >&2
+    return 1
+  }
+  "$root/tool" >/dev/null 2>&1 || true
+  cat "$root/README.md"
   printf 'hook ran for %s\n' "$2"
-  return 0
 }
 HOOK
-out=$(cd "$fx" && scripts/smoke-release.sh linux-x86_64-musl 2>&1)
+rc=0
+out=$(cd "$fx" && scripts/smoke-release.sh linux-x86_64-musl 2>&1) || rc=$?
+_assert_exit "smoke: hook runs against a live extract dir" 0 "$rc"
+_assert_contains "smoke: hook can read packaged files" "# readme" "$out"
 _assert_contains "smoke: invokes the repo smoke hook" "hook ran for linux-x86_64-musl" "$out"
 
 cat >"$fx/scripts/release-smoke-hook.sh" <<'HOOK'

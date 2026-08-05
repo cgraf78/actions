@@ -256,7 +256,7 @@ _release_stage_file() {
 # archive path.
 release_package() {
   local target=$1 asset_platform=$2
-  local target_dir commit tag asset dist_dir staging entry
+  local target_dir commit tag asset dist_dir
 
   release_validate_asset_platform "$asset_platform" || return $?
 
@@ -272,45 +272,46 @@ release_package() {
 
   asset="${RELEASE_ASSET_NAME}-${tag}-${asset_platform}.tar.gz"
   dist_dir=dist
-  staging=$(mktemp -d)
+  mkdir -p "$dist_dir"
 
-  # Expand the staging path into the trap now so cleanup never depends on
-  # variable state. EXIT covers hard `set -e` aborts that skip RETURN; the
-  # duplicate `rm -rf` on the normal path is a harmless no-op.
-  # shellcheck disable=SC2064
-  trap "rm -rf '$staging'" RETURN EXIT
+  # Stage inside a subshell so an EXIT trap owns cleanup: EXIT fires on every
+  # path out, including a hard `set -e` abort. A RETURN trap would be wrong
+  # here because Bash also runs RETURN traps when a sourced file finishes.
+  (
+    staging=$(mktemp -d)
+    trap 'rm -rf "$staging"' EXIT
 
-  # Release archives are consumed by bootstrap paths that may not have a Rust
-  # toolchain or a source checkout. Build the exact target binary first, then
-  # package only the executable and the declared runtime payload.
-  env \
-    "$(release_env_name BUILD_COMMIT)=$commit" \
-    "$(release_env_name BUILD_VERSION)=$tag" \
-    cargo build --release --locked --target "$target" || return 1
+    # Release archives are consumed by bootstrap paths that may not have a Rust
+    # toolchain or a source checkout. Build the exact target binary first, then
+    # package only the executable and the declared runtime payload.
+    env \
+      "$(release_env_name BUILD_COMMIT)=$commit" \
+      "$(release_env_name BUILD_VERSION)=$tag" \
+      cargo build --release --locked --target "$target" || exit 1
 
-  mkdir -p "$(dirname "$staging/$RELEASE_BINARY_DEST")"
-  install -m 0755 "${target_dir}/${target}/release/${RELEASE_BINARY}" \
-    "$staging/$RELEASE_BINARY_DEST" || return 1
+    mkdir -p "$(dirname "$staging/$RELEASE_BINARY_DEST")"
+    install -m 0755 "${target_dir}/${target}/release/${RELEASE_BINARY}" \
+      "$staging/$RELEASE_BINARY_DEST" || exit 1
 
-  for entry in ${RELEASE_PAYLOAD_FILES[@]+"${RELEASE_PAYLOAD_FILES[@]}"}; do
-    _release_stage_file "$entry" "$staging/$entry" || return 1
-  done
+    for entry in ${RELEASE_PAYLOAD_FILES[@]+"${RELEASE_PAYLOAD_FILES[@]}"}; do
+      _release_stage_file "$entry" "$staging/$entry" || exit 1
+    done
 
-  # Payload directories are optional by design: repos gain and lose generated
-  # asset trees (completions, schemas, templates) over time, and a release
-  # should not fail because an optional tree has not been generated yet.
-  for entry in ${RELEASE_PAYLOAD_DIRS[@]+"${RELEASE_PAYLOAD_DIRS[@]}"}; do
-    if [[ -d "$entry" ]]; then
-      mkdir -p "$staging/$entry"
-      cp -R "$entry/." "$staging/$entry/" || return 1
-    fi
-  done
+    # Payload directories are optional by design: repos gain and lose generated
+    # asset trees (completions, schemas, templates) over time, and a release
+    # should not fail because an optional tree has not been generated yet.
+    for entry in ${RELEASE_PAYLOAD_DIRS[@]+"${RELEASE_PAYLOAD_DIRS[@]}"}; do
+      if [[ -d "$entry" ]]; then
+        mkdir -p "$staging/$entry"
+        cp -R "$entry/." "$staging/$entry/" || exit 1
+      fi
+    done
 
-  # Include install metadata in the archive so an extracted release can be
-  # identified without guessing from filesystem shape. Activation code may
-  # rewrite or enrich this file at install time, but the packaged copy gives
-  # bundled-mode installer tests a concrete release identity to validate.
-  cat >"$staging/$RELEASE_INSTALL_METADATA_FILE" <<EOF
+    # Include install metadata in the archive so an extracted release can be
+    # identified without guessing from filesystem shape. Activation code may
+    # rewrite or enrich this file at install time, but the packaged copy gives
+    # bundled-mode installer tests a concrete release identity to validate.
+    cat >"$staging/$RELEASE_INSTALL_METADATA_FILE" <<EOF
 {
   "schema": 1,
   "method": "release",
@@ -322,13 +323,13 @@ release_package() {
 }
 EOF
 
-  mkdir -p "$dist_dir"
-  # Local package+smoke loops are not anchored by a pushed release tag. Record
-  # the version that was actually packaged so smoke always verifies the archive
-  # produced by the immediately preceding package step. Real tag releases remain
-  # governed by the GitHub tag and do not depend on this ignored breadcrumb.
-  printf '%s\n' "$tag" >"${dist_dir}/${RELEASE_VERSION_FILE}"
-  tar -C "$staging" -czf "${dist_dir}/${asset}" . || return 1
+    # Local package+smoke loops are not anchored by a pushed release tag. Record
+    # the version that was actually packaged so smoke always verifies the archive
+    # produced by the immediately preceding package step. Real tag releases remain
+    # governed by the GitHub tag and do not depend on this ignored breadcrumb.
+    printf '%s\n' "$tag" >"${dist_dir}/${RELEASE_VERSION_FILE}"
+    tar -C "$staging" -czf "${dist_dir}/${asset}" . || exit 1
+  ) || return 1
 
   # GNU coreutils and macOS expose different checksum commands. Prefer
   # `sha256sum` when present, but keep archive creation native on macOS runners
@@ -374,7 +375,7 @@ _release_archive_path() {
 # release_smoke_check <extract-dir> <asset-platform>.
 release_smoke() {
   local asset_platform=$1
-  local archive smoke entry hook
+  local archive hook
 
   release_validate_asset_platform "$asset_platform" || return $?
 
@@ -386,61 +387,67 @@ release_smoke() {
     return 1
   }
 
-  smoke=$(mktemp -d)
-  # shellcheck disable=SC2064  # see release_package for why this is pre-expanded.
-  trap "rm -rf '$smoke'" RETURN EXIT
-
-  tar -xzf "$archive" -C "$smoke" || return 1
-
-  [[ -x "$smoke/$RELEASE_BINARY_DEST" ]] || {
-    release_die "packaged binary is missing or not executable: $RELEASE_BINARY_DEST"
-    return 1
-  }
-  [[ -f "$smoke/$RELEASE_INSTALL_METADATA_FILE" ]] || {
-    release_die "packaged install metadata is missing: $RELEASE_INSTALL_METADATA_FILE"
-    return 1
-  }
-  for entry in ${RELEASE_PAYLOAD_FILES[@]+"${RELEASE_PAYLOAD_FILES[@]}"}; do
-    [[ -f "$smoke/$entry" ]] || {
-      release_die "declared payload file missing from archive: $entry"
-      return 1
-    }
-    # A shipped installer or wrapper that arrives without its executable bit
-    # fails much later, in the consumer's bootstrap.
-    if [[ -x "$entry" && ! -x "$smoke/$entry" ]]; then
-      release_die "payload file lost its executable bit in the archive: $entry"
-      return 1
-    fi
-  done
-
-  # Payload directories are optional, but one that exists in the checkout and
-  # is missing from the archive is a packaging failure, not a valid absence.
-  for entry in ${RELEASE_PAYLOAD_DIRS[@]+"${RELEASE_PAYLOAD_DIRS[@]}"}; do
-    if [[ -d "$entry" && ! -d "$smoke/$entry" ]]; then
-      release_die "declared payload directory missing from archive: $entry"
-      return 1
-    fi
-  done
-
-  if [[ "$asset_platform" == android-* ]]; then
-    # Android artifacts are cross-built on an x86_64 runner. Validate the
-    # architecture and Bionic loader without trying to execute them on glibc.
-    _release_check_android "$smoke/$RELEASE_BINARY_DEST" "$asset_platform" || return 1
-    return 0
-  fi
-
   hook="$RELEASE_SCRIPTS_DIR/release-smoke-hook.sh"
-  if [[ -f "$hook" ]]; then
-    # shellcheck source=/dev/null
-    . "$hook"
-    # A hook that exists but defines nothing would otherwise fail with a bare
-    # "command not found" that reads like a broken archive.
-    declare -F release_smoke_check >/dev/null || {
-      release_die "$hook must define release_smoke_check"
-      return 1
+
+  # Validate inside a subshell so an EXIT trap owns cleanup. This must not be a
+  # RETURN trap: Bash runs RETURN traps when a sourced file finishes, so
+  # sourcing the repo hook below would delete the extracted tree before the
+  # hook could read it.
+  (
+    smoke=$(mktemp -d)
+    trap 'rm -rf "$smoke"' EXIT
+
+    tar -xzf "$archive" -C "$smoke" || exit 1
+
+    [[ -x "$smoke/$RELEASE_BINARY_DEST" ]] || {
+      release_die "packaged binary is missing or not executable: $RELEASE_BINARY_DEST"
+      exit 1
     }
-    release_smoke_check "$smoke" "$asset_platform" || return 1
-  fi
+    [[ -f "$smoke/$RELEASE_INSTALL_METADATA_FILE" ]] || {
+      release_die "packaged install metadata is missing: $RELEASE_INSTALL_METADATA_FILE"
+      exit 1
+    }
+    for entry in ${RELEASE_PAYLOAD_FILES[@]+"${RELEASE_PAYLOAD_FILES[@]}"}; do
+      [[ -f "$smoke/$entry" ]] || {
+        release_die "declared payload file missing from archive: $entry"
+        exit 1
+      }
+      # A shipped installer or wrapper that arrives without its executable bit
+      # fails much later, in the consumer's bootstrap.
+      if [[ -x "$entry" && ! -x "$smoke/$entry" ]]; then
+        release_die "payload file lost its executable bit in the archive: $entry"
+        exit 1
+      fi
+    done
+
+    # Payload directories are optional, but one that exists in the checkout and
+    # is missing from the archive is a packaging failure, not a valid absence.
+    for entry in ${RELEASE_PAYLOAD_DIRS[@]+"${RELEASE_PAYLOAD_DIRS[@]}"}; do
+      if [[ -d "$entry" && ! -d "$smoke/$entry" ]]; then
+        release_die "declared payload directory missing from archive: $entry"
+        exit 1
+      fi
+    done
+
+    if [[ "$asset_platform" == android-* ]]; then
+      # Android artifacts are cross-built on an x86_64 runner. Validate the
+      # architecture and Bionic loader without trying to execute them on glibc.
+      _release_check_android "$smoke/$RELEASE_BINARY_DEST" "$asset_platform" || exit 1
+      exit 0
+    fi
+
+    if [[ -f "$hook" ]]; then
+      # shellcheck source=/dev/null
+      . "$hook"
+      # A hook that exists but defines nothing would otherwise fail with a bare
+      # "command not found" that reads like a broken archive.
+      declare -F release_smoke_check >/dev/null || {
+        release_die "$hook must define release_smoke_check"
+        exit 1
+      }
+      release_smoke_check "$smoke" "$asset_platform" || exit 1
+    fi
+  ) || return 1
 }
 
 _release_check_android() {
