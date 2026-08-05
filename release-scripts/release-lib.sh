@@ -21,6 +21,23 @@
 RELEASE_SCRIPTS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 RELEASE_REPO_ROOT=$(cd "$RELEASE_SCRIPTS_DIR/.." && pwd)
 
+# The config contract, in one place. release_load_config fills these in from
+# scripts/release.conf and rejects the ones that are still empty but required.
+# Declaring them here keeps the library's inputs discoverable without opening a
+# consumer's config, and lets static analysis see them.
+RELEASE_ENV_PREFIX=${RELEASE_ENV_PREFIX:-}
+RELEASE_SLUG=${RELEASE_SLUG:-}
+RELEASE_ASSET_NAME=${RELEASE_ASSET_NAME:-}
+RELEASE_BINARY=${RELEASE_BINARY:-}
+RELEASE_BINARY_DEST=${RELEASE_BINARY_DEST:-}
+RELEASE_REPO=${RELEASE_REPO:-}
+RELEASE_PAYLOAD_FILES=(${RELEASE_PAYLOAD_FILES[@]+"${RELEASE_PAYLOAD_FILES[@]}"})
+RELEASE_PAYLOAD_DIRS=(${RELEASE_PAYLOAD_DIRS[@]+"${RELEASE_PAYLOAD_DIRS[@]}"})
+
+# Derived from RELEASE_SLUG by release_load_config.
+RELEASE_VERSION_FILE=""
+RELEASE_INSTALL_METADATA_FILE=""
+
 release_die() {
   printf 'release: %s\n' "$*" >&2
   return 1
@@ -83,15 +100,6 @@ release_load_config() {
   # Most projects ship the binary at the archive root; those that use a bin/
   # layout override this.
   : "${RELEASE_BINARY_DEST:=$RELEASE_BINARY}"
-
-  # Declared payload is optional, but referencing an unset array under `set -u`
-  # is not. Normalize both to empty arrays so callers can expand them plainly.
-  if ! declare -p RELEASE_PAYLOAD_FILES >/dev/null 2>&1; then
-    RELEASE_PAYLOAD_FILES=()
-  fi
-  if ! declare -p RELEASE_PAYLOAD_DIRS >/dev/null 2>&1; then
-    RELEASE_PAYLOAD_DIRS=()
-  fi
 
   RELEASE_VERSION_FILE=".${RELEASE_SLUG}-release-version"
   RELEASE_INSTALL_METADATA_FILE=".${RELEASE_SLUG}-install.json"

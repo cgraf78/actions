@@ -14,6 +14,12 @@ verify="$root/.github/actions/verify-release-scripts/verify.sh"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
+# The library honors GITHUB_SHA and GITHUB_REF* by design, and CI sets them to
+# the *actions* repo's own commit. Left in place they leak into every fixture,
+# so a fixture would resolve this repo's SHA instead of its own HEAD. Clear
+# them here; the cases that exercise ref handling set them explicitly.
+unset GITHUB_SHA GITHUB_REF GITHUB_REF_TYPE GITHUB_REF_NAME
+
 echo "=== Shared release scripts ==="
 
 _passes=0

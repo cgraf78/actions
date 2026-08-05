@@ -60,6 +60,7 @@ release-scripts/sync.sh ~/git/hive-memory/scripts
 
 ```bash
 # shellcheck shell=bash
+# shellcheck disable=SC2034  # consumed by release-lib.sh after sourcing
 RELEASE_ENV_PREFIX=HIVE_MEMORY          # env namespace: HIVE_MEMORY_BUILD_COMMIT, ...
 RELEASE_SLUG=hive-memory                # repo name; names the breadcrumb and install metadata
 RELEASE_REPO=cgraf78/hive-memory        # optional, defaults to cgraf78/<slug>
@@ -78,6 +79,11 @@ repos gain and lose generated asset trees over time.
 Every archive also gets `.<slug>-install.json` describing the release identity,
 so an extracted archive can be identified without guessing from filesystem
 shape.
+
+`release.conf` only ever assigns; the library reads it after sourcing, which
+ShellCheck cannot see. Keep the file-level `SC2034` disable, and register the
+file as a `program` row in the repo's ShellCheck inventory alongside
+`release-lib.sh` and any `release-smoke-hook.sh`.
 
 ### Repo-specific smoke assertions
 
