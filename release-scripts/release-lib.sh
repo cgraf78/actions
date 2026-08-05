@@ -405,6 +405,21 @@ release_smoke() {
       release_die "declared payload file missing from archive: $entry"
       return 1
     }
+    # A shipped installer or wrapper that arrives without its executable bit
+    # fails much later, in the consumer's bootstrap.
+    if [[ -x "$entry" && ! -x "$smoke/$entry" ]]; then
+      release_die "payload file lost its executable bit in the archive: $entry"
+      return 1
+    fi
+  done
+
+  # Payload directories are optional, but one that exists in the checkout and
+  # is missing from the archive is a packaging failure, not a valid absence.
+  for entry in ${RELEASE_PAYLOAD_DIRS[@]+"${RELEASE_PAYLOAD_DIRS[@]}"}; do
+    if [[ -d "$entry" && ! -d "$smoke/$entry" ]]; then
+      release_die "declared payload directory missing from archive: $entry"
+      return 1
+    fi
   done
 
   if [[ "$asset_platform" == android-* ]]; then

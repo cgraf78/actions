@@ -398,6 +398,37 @@ out=$(cd "$fx" && scripts/smoke-release.sh linux-x86_64-musl 2>&1) || rc=$?
 _assert_exit "smoke: detects a payload file missing from the archive" 1 "$rc"
 _assert_contains "smoke: names the missing archive entry" "CHANGELOG.md" "$out"
 
+# A payload directory present in the checkout but absent from the archive is a
+# packaging failure, not the valid "not generated yet" case.
+fx=$(_fixture smoke-missing-dir)
+_cargo_stub "$tmp/smoke-missing-dir-bin" tool
+cd "$fx" && env PATH="$tmp/smoke-missing-dir-bin:$PATH" TOOL_BUILD_COMMIT=abcdef123456 \
+  TOOL_BUILD_VERSION=20990208-091011-abcdef12 \
+  scripts/package-release.sh x86_64-unknown-linux-musl linux-x86_64-musl >/dev/null
+cd "$root" || exit 1
+printf 'RELEASE_PAYLOAD_DIRS=(schemas)\n' >>"$fx/scripts/release.conf"
+mkdir -p "$fx/schemas"
+printf '{}\n' >"$fx/schemas/policy.json"
+rc=0
+out=$(cd "$fx" && scripts/smoke-release.sh linux-x86_64-musl 2>&1) || rc=$?
+_assert_exit "smoke: detects a payload directory missing from the archive" 1 "$rc"
+_assert_contains "smoke: names the missing directory" "schemas" "$out"
+
+# An installer that arrives without its executable bit fails later, in the
+# consumer's bootstrap rather than here.
+fx=$(_fixture smoke-mode)
+_cargo_stub "$tmp/smoke-mode-bin" tool
+printf '#!/usr/bin/env bash\n' >"$fx/install.sh"
+chmod +x "$fx/install.sh"
+printf 'RELEASE_PAYLOAD_FILES+=(install.sh)\n' >>"$fx/scripts/release.conf"
+cd "$fx" && env PATH="$tmp/smoke-mode-bin:$PATH" TOOL_BUILD_COMMIT=abcdef123456 \
+  TOOL_BUILD_VERSION=20990208-091011-abcdef12 \
+  scripts/package-release.sh x86_64-unknown-linux-musl linux-x86_64-musl >/dev/null
+cd "$root" || exit 1
+rc=0
+(cd "$fx" && scripts/smoke-release.sh linux-x86_64-musl) >/dev/null 2>&1 || rc=$?
+_assert_exit "smoke: accepts an executable payload file" 0 "$rc"
+
 # Android artifacts are cross-built and cannot be executed on the runner, so the
 # only meaningful check is the ELF machine and loader.
 fx=$(_fixture smoke-android)
