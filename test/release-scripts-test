@@ -607,6 +607,45 @@ out=$(cd "$fx" && scripts/release.sh --push 2>&1) || rc=$?
 _assert_exit "cut: refuses when the remote already has the tag" 1 "$rc"
 _assert_contains "cut: existing-tag error is specific" "already has tag $want_tag" "$out"
 
+git -C "$fx" tag -d "$want_tag" >/dev/null
+git -C "$fx" push --quiet origin ":refs/tags/$want_tag"
+
+# Without --push the tag stays local, and the output has to say so rather than
+# leaving the maintainer thinking a release was published.
+out=$(cd "$fx" && scripts/release.sh)
+_assert_contains "cut: creates a local-only tag without --push" \
+  "release: created tag $want_tag" "$out"
+_assert_contains "cut: says the tag is unpublished" "tag $want_tag is local only" "$out"
+if git ls-remote --exit-code --tags "$tmp/cut-origin.git" "refs/tags/$want_tag" >/dev/null 2>&1; then
+  _fail "cut: a local-only cut does not reach the remote"
+else
+  _pass "cut: a local-only cut does not reach the remote"
+fi
+
+# Publishing an already-cut local tag is the normal two-step flow, not an error.
+out=$(cd "$fx" && scripts/release.sh --push)
+_assert_contains "cut: reuses an existing local tag at HEAD" \
+  "local tag $want_tag already exists at HEAD" "$out"
+_assert_contains "cut: publishes the reused tag" "release: pushed tag $want_tag" "$out"
+
+git -C "$fx" tag -d "$want_tag" >/dev/null
+git -C "$fx" push --quiet origin ":refs/tags/$want_tag"
+
+# A published GitHub release with no matching tag still means the version is
+# taken, so the cut must stop before creating anything.
+mkdir -p "$tmp/gh-bin"
+cat >"$tmp/gh-bin/gh" <<'GH'
+#!/usr/bin/env bash
+[[ "${1:-}" == release && "${2:-}" == view ]] && exit 0
+exit 1
+GH
+chmod +x "$tmp/gh-bin/gh"
+rc=0
+out=$(cd "$fx" && env PATH="$tmp/gh-bin:$PATH" scripts/release.sh --dry-run 2>&1) || rc=$?
+_assert_exit "cut: refuses when a GitHub release already exists" 1 "$rc"
+_assert_contains "cut: existing-release error is specific" \
+  "GitHub release $want_tag already exists" "$out"
+
 # A tag left over from a failed push must not be silently reused for a
 # different commit.
 fx=$(_release_repo cut-stale)
