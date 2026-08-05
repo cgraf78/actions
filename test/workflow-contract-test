@@ -108,6 +108,22 @@ contracts() {
   check '.jobs.termux.if == null' rust-ci.yml
   check '.jobs.termux.with.profiles == "runtime"' rust-ci.yml
   check '.on.workflow_call.inputs.concurrency-scope.default == "default"' rust-ci.yml
+
+  # musl prerequisites are opt-in in both workflows. A default that turned them
+  # on would add an apt round trip to every consumer, including the ones whose
+  # crates link musl without a musl linker.
+  check '.on.workflow_call.inputs.package-smoke-musl-target.default == ""' rust-ci.yml
+  check '.on.workflow_call.inputs.package-smoke-musl-target.required == false' rust-ci.yml
+  check '.on.workflow_call.inputs.package-smoke-musl-target.type == "string"' rust-ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Prepare musl package smoke target").if == "inputs.package-smoke-command != '"'"''"'"' && inputs.package-smoke-musl-target != '"'"''"'"'"' rust-ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Prepare musl package smoke target").with."rust-target" == "${{ inputs.package-smoke-musl-target }}"' rust-ci.yml
+
+  check '.on.workflow_call.inputs.install-musl-tools.default == false' rust-release.yml
+  check '.on.workflow_call.inputs.install-musl-tools.required == false' rust-release.yml
+  check '.on.workflow_call.inputs.install-musl-tools.type == "boolean"' rust-release.yml
+  # Guarded on the matrix row so a caller that opts in does not run apt on the
+  # macOS or Android rows, where musl-tools does not apply.
+  check '.jobs.build.steps[] | select(.name == "Install musl build prerequisites").if | contains("endsWith(matrix.rust-target, '"'"'-musl'"'"')")' rust-release.yml
   check '.concurrency.group == "rust-ci-${{ github.repository }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.concurrency-scope }}"' rust-ci.yml
   check '.concurrency["cancel-in-progress"] == true' rust-ci.yml
 

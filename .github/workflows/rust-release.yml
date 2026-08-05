@@ -73,6 +73,11 @@ on:
         required: false
         type: boolean
         default: true
+      install-musl-tools:
+        description: Install the musl linker toolchain before packaging Linux musl targets. Needed when any crate links C code.
+        required: false
+        type: boolean
+        default: false
       android-aarch64:
         description: Build and publish the Android aarch64 release artifact.
         required: false
@@ -226,6 +231,16 @@ jobs:
         uses: cgraf78/actions/.github/actions/android-rust-toolchain@438864f7da4781edb0d5e5468835169e52fd4b32
         with:
           rust-target: ${{ matrix.rust-target }}
+
+      # This workflow owns the release matrix, so it owns that matrix's linker
+      # prerequisites. The toolchain action already added the target, so only
+      # the musl linker is missing. Opt-in because repos whose crates are pure
+      # Rust link musl targets without it.
+      - name: Install musl build prerequisites
+        if: >-
+          matrix.enabled && inputs.install-musl-tools &&
+          endsWith(matrix.rust-target, '-musl')
+        uses: cgraf78/actions/.github/actions/musl-build-prereqs@19065e7ecf3edda7386b6d867482d7ee179b875d
 
       - name: Run repo setup
         if: matrix.enabled && inputs.setup-command != ''
