@@ -13,6 +13,8 @@ this repo and by other `cgraf78` repositories.
   ShellCheck over every reviewed program while excluding declared fixtures.
 - `rust-ci-prereqs` installs Rust CI prerequisites that are not handled by
   `dtolnay/rust-toolchain`.
+- `musl-build-prereqs` installs the musl linker toolchain, and optionally adds
+  the Rust musl target, for repos whose crates link C code.
 - `dotfiles-bootstrap` runs the dotfiles bootstrap/update/doctor flow in CI.
 - `verify-release-scripts` fails a consumer repository whose vendored release
   scripts have drifted from the shared copy in `release-scripts/`.

@@ -2,6 +2,7 @@
 # `fixture` rows are discovered but intentionally not linted as programs.
 program	.github/actions/dotfiles-bootstrap/install.sh
 program	.github/actions/infra-retry/retry.sh
+program	.github/actions/musl-build-prereqs/install.sh
 program	.github/actions/rust-ci-prereqs/install.sh
 program	.github/actions/shell-ci-prereqs/checkrun.sh
 program	.github/actions/shell-ci-prereqs/dotfiles.sh
@@ -19,6 +20,7 @@ program	release-scripts/smoke-release.sh
 program	release-scripts/sync.sh
 program	test/dotfiles-public-deps-test
 program	test/infra-retry-test
+program	test/musl-prereqs-test
 program	test/release-scripts-test
 program	test/shell-ci-prereqs-test
 program	test/shellcheck-action-test

@@ -1,0 +1,17 @@
+name: Install musl build prerequisites
+description: Install the musl linker toolchain, and optionally add the Rust musl target, for Linux musl builds.
+
+inputs:
+  rust-target:
+    description: Optional Rust musl target to add with rustup. Leave empty when the toolchain already installed it.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install musl prerequisites
+      shell: sh
+      env:
+        RUST_TARGET: ${{ inputs.rust-target }}
+      run: "$GITHUB_ACTION_PATH/install.sh"

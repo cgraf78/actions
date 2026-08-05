@@ -209,6 +209,10 @@ jobs:
         shell: bash
         run: test/release-scripts-test
 
+      - name: Test musl build prerequisites
+        shell: bash
+        run: test/musl-prereqs-test
+
       - name: Lint shell inventory
         uses: ./.github/actions/shellcheck-inventory
         with:
