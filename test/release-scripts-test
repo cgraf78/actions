@@ -453,6 +453,9 @@ _assert_exit "smoke: accepts an executable payload file" 0 "$rc"
 fx=$(_fixture smoke-android)
 _cargo_stub "$tmp/smoke-android-bin" tool
 mkdir -p "$tmp/smoke-android-bin"
+# Mirror real readelf output, including the vendor prefix it puts in front of
+# some architectures ("Advanced Micro Devices X86-64"). A stub that prints a
+# bare architecture name hides anchoring bugs in the machine check.
 cat >"$tmp/smoke-android-bin/readelf" <<'READELF'
 #!/usr/bin/env bash
 case "$1" in
@@ -484,10 +487,36 @@ _assert_exit "smoke: android archive passes the ELF checks and skips the hook" 0
 
 rc=0
 (
-  cd "$fx" && env PATH="$tmp/smoke-android-bin:$PATH" FAKE_MACHINE=X86-64 \
+  cd "$fx" && env PATH="$tmp/smoke-android-bin:$PATH" \
+    FAKE_MACHINE='Advanced Micro Devices X86-64' \
     scripts/smoke-release.sh android-aarch64
 ) >/dev/null 2>&1 || rc=$?
 _assert_exit "smoke: android architecture mismatch fails" 1 "$rc"
+
+# android-x86_64 is the case the vendor prefix actually affects: readelf reports
+# "Advanced Micro Devices X86-64", not a bare "X86-64".
+fx=$(_fixture smoke-android-x86)
+_cargo_stub "$tmp/smoke-android-x86-bin" tool
+cp "$tmp/smoke-android-bin/readelf" "$tmp/smoke-android-x86-bin/readelf"
+cd "$fx" && env PATH="$tmp/smoke-android-x86-bin:$PATH" TOOL_BUILD_COMMIT=abcdef123456 \
+  TOOL_BUILD_VERSION=20990208-091011-abcdef12 \
+  scripts/package-release.sh x86_64-linux-android android-x86_64 >/dev/null
+cd "$root" || exit 1
+
+rc=0
+(
+  cd "$fx" && env PATH="$tmp/smoke-android-x86-bin:$PATH" \
+    FAKE_MACHINE='Advanced Micro Devices X86-64' \
+    scripts/smoke-release.sh android-x86_64
+) >/dev/null 2>&1 || rc=$?
+_assert_exit "smoke: android x86_64 accepts the vendor-prefixed machine name" 0 "$rc"
+
+rc=0
+(
+  cd "$fx" && env PATH="$tmp/smoke-android-x86-bin:$PATH" FAKE_MACHINE=AArch64 \
+    scripts/smoke-release.sh android-x86_64
+) >/dev/null 2>&1 || rc=$?
+_assert_exit "smoke: android x86_64 rejects the wrong architecture" 1 "$rc"
 
 rc=0
 (
