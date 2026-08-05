@@ -1,0 +1,665 @@
+#!/usr/bin/env bash
+
+# Contract coverage for the shared release scripts that consumer repositories
+# vendor. These are shell-owned release contracts, so they stay in a shell
+# suite. Every consumer inherits this behavior byte-for-byte, which is why the
+# edge cases live here instead of being re-tested three times downstream.
+
+set -uo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+shared="$root/release-scripts"
+verify="$root/.github/actions/verify-release-scripts/verify.sh"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+echo "=== Shared release scripts ==="
+
+_passes=0
+_failures=0
+
+_pass() {
+  printf 'ok   - %s\n' "$1"
+  _passes=$((_passes + 1))
+}
+
+_fail() {
+  printf 'FAIL - %s\n' "$1" >&2
+  _failures=$((_failures + 1))
+}
+
+_assert_eq() {
+  local name=$1 want=$2 got=$3
+  if [[ "$want" == "$got" ]]; then
+    _pass "$name"
+  else
+    _fail "$name (want '$want', got '$got')"
+  fi
+}
+
+_assert_exit() {
+  local name=$1 want=$2 got=$3
+  if [[ "$want" == "$got" ]]; then
+    _pass "$name"
+  else
+    _fail "$name (want exit $want, got $got)"
+  fi
+}
+
+_assert_file() {
+  local name=$1 path=$2
+  if [[ -f "$path" ]]; then
+    _pass "$name"
+  else
+    _fail "$name (missing $path)"
+  fi
+}
+
+_assert_contains() {
+  local name=$1 needle=$2 haystack=$3
+  if [[ "$haystack" == *"$needle"* ]]; then
+    _pass "$name"
+  else
+    _fail "$name (want substring '$needle' in '$haystack')"
+  fi
+}
+
+# Build a consumer-shaped fixture repo: vendored scripts, a release.conf, the
+# declared payload, and a git history so commit-derived versions resolve.
+_fixture() {
+  local name=$1
+  local dir="$tmp/$name"
+
+  mkdir -p "$dir/scripts" "$dir/man/man1"
+  "$shared/sync.sh" "$dir/scripts" >/dev/null || return 1
+
+  printf '# readme\n' >"$dir/README.md"
+  printf 'license\n' >"$dir/LICENSE"
+  printf '.TH TOOL 1\n' >"$dir/man/man1/tool.1"
+
+  cat >"$dir/scripts/release.conf" <<'CONF'
+# shellcheck shell=bash
+RELEASE_ENV_PREFIX=TOOL
+RELEASE_SLUG=tool
+RELEASE_ASSET_NAME=tool
+RELEASE_BINARY=tool
+RELEASE_PAYLOAD_FILES=(README.md LICENSE man/man1/tool.1)
+CONF
+
+  # core.hooksPath is neutralized so a developer's global hooks do not run
+  # against throwaway fixtures, and the suite behaves the same locally and in
+  # CI. The committer date is pinned because it is the release version prefix.
+  git -C "$dir" init --quiet --template=''
+  git -C "$dir" config core.hooksPath /dev/null
+  GIT_COMMITTER_DATE='2099-02-03T04:05:06 +0000' \
+    git -C "$dir" -c user.email=t@example.com -c user.name=Test \
+    -c commit.gpgsign=false commit --quiet --allow-empty \
+    --date='2099-02-03T04:05:06Z' -m fixture
+
+  printf '%s' "$dir"
+}
+
+# A cargo stub that produces the binary the packaging step expects, so the
+# packaging contract can be tested without a Rust toolchain on the runner.
+_cargo_stub() {
+  local bindir=$1 binary=$2
+  mkdir -p "$bindir"
+  cat >"$bindir/cargo" <<CARGO
+#!/usr/bin/env bash
+set -euo pipefail
+target=
+while ((\$#)); do
+  if [[ \$1 == --target ]]; then
+    target=\$2
+    break
+  fi
+  shift
+done
+out="\${CARGO_TARGET_DIR:-target}/\${target:?}/release"
+mkdir -p "\$out"
+printf '#!/system/bin/sh\n' >"\$out/${binary}"
+chmod +x "\$out/${binary}"
+CARGO
+  chmod +x "$bindir/cargo"
+}
+
+# --- Release identity -------------------------------------------------------
+
+fx=$(_fixture identity)
+
+got=$(
+  cd "$fx" && env TOOL_BUILD_COMMIT=abcdef123456 TOOL_BUILD_TIMESTAMP=20990203-040506 \
+    GITHUB_REF_TYPE=branch GITHUB_REF_NAME=feature scripts/release-tag.sh
+)
+_assert_eq "identity: branch ref uses generated identity" "20990203-040506-abcdef12" "$got"
+
+got=$(
+  cd "$fx" && env TOOL_BUILD_COMMIT=abcdef123456 GITHUB_REF_TYPE=tag \
+    GITHUB_REF_NAME=20990203-040506-abcdef12 scripts/release-tag.sh
+)
+_assert_eq "identity: version tag ref is preserved" "20990203-040506-abcdef12" "$got"
+
+got=$(
+  cd "$fx" && env TOOL_BUILD_COMMIT=abcdef123456 TOOL_BUILD_VERSION=20990204-050607-abcdef12 \
+    GITHUB_REF_TYPE=branch GITHUB_REF_NAME=feature scripts/release-tag.sh
+)
+_assert_eq "identity: explicit build version wins" "20990204-050607-abcdef12" "$got"
+
+# The commit suffix is the traceability guarantee; a mismatch must fail loudly
+# rather than publish an archive labelled with someone else's commit.
+rc=0
+out=$(
+  cd "$fx" && env TOOL_BUILD_COMMIT=abcdef123456 TOOL_BUILD_VERSION=20990204-050607-99999999 \
+    scripts/release-tag.sh 2>&1
+) || rc=$?
+_assert_exit "identity: build version commit mismatch fails" 1 "$rc"
+_assert_contains "identity: mismatch names the offending variable" "TOOL_BUILD_VERSION" "$out"
+
+rc=0
+(
+  cd "$fx" && env TOOL_BUILD_COMMIT=abcdef123456 GITHUB_REF_TYPE=tag \
+    GITHUB_REF_NAME=20990203-040506-99999999 scripts/release-tag.sh
+) >/dev/null 2>&1 || rc=$?
+_assert_exit "identity: tag ref commit mismatch fails" 1 "$rc"
+
+rc=0
+(
+  cd "$fx" && env TOOL_BUILD_COMMIT=abcdef123456 GITHUB_REF_TYPE=tag \
+    GITHUB_REF_NAME=not-a-version scripts/release-tag.sh
+) >/dev/null 2>&1 || rc=$?
+_assert_exit "identity: malformed tag ref fails" 1 "$rc"
+
+rc=0
+(
+  cd "$fx" && env TOOL_BUILD_COMMIT=xyz scripts/release-tag.sh
+) >/dev/null 2>&1 || rc=$?
+_assert_exit "identity: non-hex build commit fails" 1 "$rc"
+
+rc=0
+(
+  cd "$fx" && env TOOL_BUILD_COMMIT=abcdef123456 TOOL_BUILD_TIMESTAMP=nonsense \
+    scripts/release-tag.sh
+) >/dev/null 2>&1 || rc=$?
+_assert_exit "identity: malformed build timestamp fails" 1 "$rc"
+
+# With no explicit timestamp the committer date supplies the prefix, so the same
+# commit always maps to the same release version.
+got=$(cd "$fx" && env -u TOOL_BUILD_TIMESTAMP scripts/release-version.sh)
+_assert_eq "identity: falls back to the UTC committer timestamp" "20990203-040506" "${got%-*}"
+
+# cwd must not change the answer: release commands run from CI steps, wrappers,
+# and interactive shells.
+got=$(cd "$fx/man" && env TOOL_BUILD_COMMIT=abcdef123456 \
+  TOOL_BUILD_TIMESTAMP=20990203-040506 ../scripts/release-tag.sh)
+_assert_eq "identity: resolves the repo root independently of cwd" \
+  "20990203-040506-abcdef12" "$got"
+
+# --- Configuration validation ----------------------------------------------
+
+fx=$(_fixture badconfig)
+
+rm "$fx/scripts/release.conf"
+rc=0
+out=$(cd "$fx" && scripts/release-tag.sh 2>&1) || rc=$?
+_assert_exit "config: missing release.conf fails" 1 "$rc"
+_assert_contains "config: missing release.conf explains itself" "missing release config" "$out"
+
+# The prefix is spliced into variable names by indirect expansion, so anything
+# that is not a shell identifier must be rejected rather than silently misread.
+printf 'RELEASE_ENV_PREFIX=not-an-identifier\nRELEASE_SLUG=tool\nRELEASE_ASSET_NAME=tool\nRELEASE_BINARY=tool\n' \
+  >"$fx/scripts/release.conf"
+rc=0
+out=$(cd "$fx" && scripts/release-tag.sh 2>&1) || rc=$?
+_assert_exit "config: non-identifier env prefix fails" 1 "$rc"
+_assert_contains "config: env prefix error is specific" "RELEASE_ENV_PREFIX" "$out"
+
+printf 'RELEASE_ENV_PREFIX=TOOL\nRELEASE_SLUG="bad slug"\nRELEASE_ASSET_NAME=tool\nRELEASE_BINARY=tool\n' \
+  >"$fx/scripts/release.conf"
+rc=0
+out=$(cd "$fx" && scripts/release-tag.sh 2>&1) || rc=$?
+_assert_exit "config: unsafe slug fails" 1 "$rc"
+_assert_contains "config: unsafe slug error is specific" "RELEASE_SLUG" "$out"
+
+printf 'RELEASE_ENV_PREFIX=TOOL\nRELEASE_SLUG=tool\n' >"$fx/scripts/release.conf"
+rc=0
+out=$(cd "$fx" && scripts/release-tag.sh 2>&1) || rc=$?
+_assert_exit "config: missing required key fails" 1 "$rc"
+_assert_contains "config: missing key names the variable" "RELEASE_ASSET_NAME" "$out"
+
+# --- Packaging --------------------------------------------------------------
+
+fx=$(_fixture package)
+_cargo_stub "$tmp/package-bin" tool
+target_dir="$tmp/package-target"
+
+rc=0
+archive=$(
+  cd "$fx" && env PATH="$tmp/package-bin:$PATH" CARGO_TARGET_DIR="$target_dir" \
+    TOOL_BUILD_COMMIT=abcdef123456 TOOL_BUILD_VERSION=20990208-091011-abcdef12 \
+    scripts/package-release.sh x86_64-unknown-linux-musl linux-x86_64-musl
+) || rc=$?
+_assert_exit "package: succeeds with a declared payload" 0 "$rc"
+_assert_eq "package: prints the archive path" \
+  "dist/tool-20990208-091011-abcdef12-linux-x86_64-musl.tar.gz" "$archive"
+_assert_file "package: writes the archive" "$fx/$archive"
+_assert_file "package: writes the checksum" "$fx/$archive.sha256"
+_assert_file "package: writes the version breadcrumb" "$fx/dist/.tool-release-version"
+
+# CARGO_TARGET_DIR support existed in only one of the three repos before this
+# library; keep it covered so the shared copy cannot regress it.
+if [[ -e "$fx/target" ]]; then
+  _fail "package: keeps Cargo artifacts out of the checkout"
+else
+  _pass "package: keeps Cargo artifacts out of the checkout"
+fi
+
+contents=$(tar -tzf "$fx/$archive")
+for want in ./tool ./README.md ./LICENSE ./man/man1/tool.1 ./.tool-install.json; do
+  _assert_contains "package: archive contains $want" "$want" "$contents"
+done
+
+meta=$(tar -xzOf "$fx/$archive" ./.tool-install.json)
+_assert_contains "package: metadata records the tag" '"tag": "20990208-091011-abcdef12"' "$meta"
+_assert_contains "package: metadata records the platform" '"artifact_platform": "linux-x86_64-musl"' "$meta"
+_assert_contains "package: metadata defaults the repo slug" '"repo": "cgraf78/tool"' "$meta"
+
+rc=0
+(
+  cd "$fx" && env PATH="$tmp/package-bin:$PATH" TOOL_BUILD_COMMIT=abcdef123456 \
+    TOOL_BUILD_VERSION=20990208-091011-abcdef12 \
+    scripts/package-release.sh x86_64-unknown-linux-musl x86_64-unknown-linux-musl
+) >/dev/null 2>&1 || rc=$?
+_assert_exit "package: rejects a Rust target triple as the asset platform" 2 "$rc"
+
+# A payload entry that silently vanishes would ship a broken archive, so a
+# declared file must be a hard error rather than an omission.
+fx=$(_fixture package-missing)
+_cargo_stub "$tmp/package-missing-bin" tool
+rm "$fx/man/man1/tool.1"
+rc=0
+out=$(
+  cd "$fx" && env PATH="$tmp/package-missing-bin:$PATH" TOOL_BUILD_COMMIT=abcdef123456 \
+    TOOL_BUILD_VERSION=20990208-091011-abcdef12 \
+    scripts/package-release.sh x86_64-unknown-linux-musl linux-x86_64-musl 2>&1
+) || rc=$?
+_assert_exit "package: missing declared payload file fails" 1 "$rc"
+_assert_contains "package: names the missing payload file" "man/man1/tool.1" "$out"
+
+# Optional directories are how repos carry generated trees that may not exist
+# yet; their absence must not fail a release.
+fx=$(_fixture package-optional-dirs)
+_cargo_stub "$tmp/package-optional-bin" tool
+printf 'RELEASE_PAYLOAD_DIRS=(completions schemas)\n' >>"$fx/scripts/release.conf"
+mkdir -p "$fx/completions"
+printf '# completion\n' >"$fx/completions/tool.bash"
+rc=0
+archive=$(
+  cd "$fx" && env PATH="$tmp/package-optional-bin:$PATH" TOOL_BUILD_COMMIT=abcdef123456 \
+    TOOL_BUILD_VERSION=20990208-091011-abcdef12 \
+    scripts/package-release.sh x86_64-unknown-linux-musl linux-x86_64-musl
+) || rc=$?
+_assert_exit "package: absent optional payload dir is not an error" 0 "$rc"
+contents=$(tar -tzf "$fx/$archive")
+_assert_contains "package: present optional dir is included" "./completions/tool.bash" "$contents"
+
+# Shipped installers and wrappers must stay executable inside the archive.
+fx=$(_fixture package-modes)
+_cargo_stub "$tmp/package-modes-bin" tool
+printf '#!/usr/bin/env bash\n' >"$fx/install.sh"
+chmod +x "$fx/install.sh"
+printf 'RELEASE_PAYLOAD_FILES+=(install.sh)\n' >>"$fx/scripts/release.conf"
+archive=$(
+  cd "$fx" && env PATH="$tmp/package-modes-bin:$PATH" TOOL_BUILD_COMMIT=abcdef123456 \
+    TOOL_BUILD_VERSION=20990208-091011-abcdef12 \
+    scripts/package-release.sh x86_64-unknown-linux-musl linux-x86_64-musl
+)
+modes=$(tar -tvzf "$fx/$archive" | grep -E ' \./install\.sh$')
+_assert_contains "package: preserves the executable bit on payload files" "rwxr-xr-x" "$modes"
+
+# A bin/ layout is a real difference between consumers, so the destination path
+# has to be configurable rather than assumed.
+fx=$(_fixture package-bindir)
+_cargo_stub "$tmp/package-bindir-bin" tool
+printf 'RELEASE_BINARY_DEST=bin/tool\n' >>"$fx/scripts/release.conf"
+archive=$(
+  cd "$fx" && env PATH="$tmp/package-bindir-bin:$PATH" TOOL_BUILD_COMMIT=abcdef123456 \
+    TOOL_BUILD_VERSION=20990208-091011-abcdef12 \
+    scripts/package-release.sh x86_64-unknown-linux-musl linux-x86_64-musl
+)
+contents=$(tar -tzf "$fx/$archive")
+_assert_contains "package: honors a bin/ binary destination" "./bin/tool" "$contents"
+
+# --- Smoke validation -------------------------------------------------------
+
+fx=$(_fixture smoke)
+_cargo_stub "$tmp/smoke-bin" tool
+cd "$fx" && env PATH="$tmp/smoke-bin:$PATH" TOOL_BUILD_COMMIT=abcdef123456 \
+  TOOL_BUILD_VERSION=20990208-091011-abcdef12 \
+  scripts/package-release.sh x86_64-unknown-linux-musl linux-x86_64-musl >/dev/null
+cd "$root" || exit 1
+
+rc=0
+(cd "$fx" && scripts/smoke-release.sh linux-x86_64-musl) >/dev/null 2>&1 || rc=$?
+_assert_exit "smoke: accepts a well-formed archive" 0 "$rc"
+
+rc=0
+(cd "$fx" && scripts/smoke-release.sh x86_64-unknown-linux-musl) >/dev/null 2>&1 || rc=$?
+_assert_exit "smoke: rejects a Rust target triple as the asset platform" 2 "$rc"
+
+rc=0
+out=$(cd "$fx" && scripts/smoke-release.sh linux-aarch64-musl 2>&1) || rc=$?
+_assert_exit "smoke: missing archive fails" 1 "$rc"
+_assert_contains "smoke: missing archive names the path" "release archive not found" "$out"
+
+# Local package+smoke loops are not anchored by a pushed tag, so smoke must fall
+# back to the version the package step actually recorded.
+rc=0
+(
+  cd "$fx" && env GITHUB_REF_TYPE=tag GITHUB_REF_NAME=20990209-000000-abcdef12 \
+    TOOL_BUILD_COMMIT=abcdef123456 scripts/smoke-release.sh linux-x86_64-musl
+) >/dev/null 2>&1 || rc=$?
+_assert_exit "smoke: falls back to the recorded package version" 0 "$rc"
+
+# The repo-specific hook is where runtime assertions live; it must actually run
+# and its failure must fail the smoke test.
+cat >"$fx/scripts/release-smoke-hook.sh" <<'HOOK'
+# shellcheck shell=bash
+release_smoke_check() {
+  printf 'hook ran for %s\n' "$2"
+  return 0
+}
+HOOK
+out=$(cd "$fx" && scripts/smoke-release.sh linux-x86_64-musl 2>&1)
+_assert_contains "smoke: invokes the repo smoke hook" "hook ran for linux-x86_64-musl" "$out"
+
+cat >"$fx/scripts/release-smoke-hook.sh" <<'HOOK'
+# shellcheck shell=bash
+release_smoke_check() {
+  return 1
+}
+HOOK
+rc=0
+(cd "$fx" && scripts/smoke-release.sh linux-x86_64-musl) >/dev/null 2>&1 || rc=$?
+_assert_exit "smoke: hook failure fails the smoke test" 1 "$rc"
+rm "$fx/scripts/release-smoke-hook.sh"
+
+# A payload entry dropped from the archive but still declared is exactly the
+# packaging mistake this gate exists to catch.
+fx=$(_fixture smoke-missing)
+_cargo_stub "$tmp/smoke-missing-bin" tool
+cd "$fx" && env PATH="$tmp/smoke-missing-bin:$PATH" TOOL_BUILD_COMMIT=abcdef123456 \
+  TOOL_BUILD_VERSION=20990208-091011-abcdef12 \
+  scripts/package-release.sh x86_64-unknown-linux-musl linux-x86_64-musl >/dev/null
+cd "$root" || exit 1
+printf 'RELEASE_PAYLOAD_FILES+=(CHANGELOG.md)\n' >>"$fx/scripts/release.conf"
+rc=0
+out=$(cd "$fx" && scripts/smoke-release.sh linux-x86_64-musl 2>&1) || rc=$?
+_assert_exit "smoke: detects a payload file missing from the archive" 1 "$rc"
+_assert_contains "smoke: names the missing archive entry" "CHANGELOG.md" "$out"
+
+# Android artifacts are cross-built and cannot be executed on the runner, so the
+# only meaningful check is the ELF machine and loader.
+fx=$(_fixture smoke-android)
+_cargo_stub "$tmp/smoke-android-bin" tool
+mkdir -p "$tmp/smoke-android-bin"
+cat >"$tmp/smoke-android-bin/readelf" <<'READELF'
+#!/usr/bin/env bash
+case "$1" in
+  -h) printf '  Machine:                           %s\n' "${FAKE_MACHINE:-AArch64}" ;;
+  -l) printf '      [Requesting program interpreter: %s]\n' "${FAKE_LOADER:-/system/bin/linker64}" ;;
+esac
+READELF
+chmod +x "$tmp/smoke-android-bin/readelf"
+
+cd "$fx" && env PATH="$tmp/smoke-android-bin:$PATH" TOOL_BUILD_COMMIT=abcdef123456 \
+  TOOL_BUILD_VERSION=20990208-091011-abcdef12 \
+  scripts/package-release.sh aarch64-linux-android android-aarch64 >/dev/null
+cd "$root" || exit 1
+
+# The hook must be skipped on Android: the binary cannot run on the host.
+cat >"$fx/scripts/release-smoke-hook.sh" <<'HOOK'
+# shellcheck shell=bash
+release_smoke_check() {
+  printf 'hook must not run on android\n' >&2
+  return 1
+}
+HOOK
+
+rc=0
+(
+  cd "$fx" && env PATH="$tmp/smoke-android-bin:$PATH" scripts/smoke-release.sh android-aarch64
+) >/dev/null 2>&1 || rc=$?
+_assert_exit "smoke: android archive passes the ELF checks and skips the hook" 0 "$rc"
+
+rc=0
+(
+  cd "$fx" && env PATH="$tmp/smoke-android-bin:$PATH" FAKE_MACHINE=X86-64 \
+    scripts/smoke-release.sh android-aarch64
+) >/dev/null 2>&1 || rc=$?
+_assert_exit "smoke: android architecture mismatch fails" 1 "$rc"
+
+rc=0
+(
+  cd "$fx" && env PATH="$tmp/smoke-android-bin:$PATH" FAKE_LOADER=/lib64/ld-linux-x86-64.so.2 \
+    scripts/smoke-release.sh android-aarch64
+) >/dev/null 2>&1 || rc=$?
+_assert_exit "smoke: non-Bionic loader fails" 1 "$rc"
+
+# --- Local release cutting --------------------------------------------------
+
+# release.sh never runs in CI, so this suite is its only coverage. Build a
+# fixture with a real origin so tag creation and pushing can be observed.
+_release_repo() {
+  local name=$1
+  local dir="$tmp/$name" origin="$tmp/$name-origin.git"
+
+  git init --quiet --bare --template='' "$origin"
+  # A global core.hooksPath would otherwise win over the origin's own hooks dir,
+  # which both leaks the developer's hooks into fixtures and silently disables
+  # the pre-receive hook the failed-push case installs.
+  mkdir -p "$origin/hooks"
+  git -C "$origin" config core.hooksPath "$origin/hooks"
+  mkdir -p "$dir"
+  git init --quiet -b main --template='' "$dir"
+  git -C "$dir" config core.hooksPath /dev/null
+  git -C "$dir" config user.email t@example.com
+  git -C "$dir" config user.name Test
+  git -C "$dir" config commit.gpgsign false
+
+  mkdir -p "$dir/scripts"
+  "$shared/sync.sh" "$dir/scripts" >/dev/null
+  printf 'RELEASE_ENV_PREFIX=TOOL\nRELEASE_SLUG=tool\nRELEASE_ASSET_NAME=tool\nRELEASE_BINARY=tool\n' \
+    >"$dir/scripts/release.conf"
+
+  git -C "$dir" add scripts >/dev/null
+  GIT_AUTHOR_DATE='2099-02-05T06:07:08 +0000' \
+    GIT_COMMITTER_DATE='2099-02-05T06:07:08 +0000' \
+    git -C "$dir" commit --quiet -m init
+  git -C "$dir" remote add origin "$origin"
+  git -C "$dir" push --quiet origin main
+  # Drop the remote-tracking ref so the fetch inside release.sh is exercised.
+  git -C "$dir" update-ref -d refs/remotes/origin/main
+
+  printf '%s' "$dir"
+}
+
+fx=$(_release_repo cut)
+commit=$(git -C "$fx" rev-parse HEAD)
+want_tag="20990205-060708-${commit:0:8}"
+
+# A release cut must publish the verified local HEAD regardless of whatever
+# build environment happens to be exported in the maintainer's shell.
+out=$(
+  cd "$fx" && env TOOL_BUILD_VERSION=20000101-010101-deadbeef \
+    TOOL_BUILD_COMMIT=deadbeef12345678 TOOL_BUILD_TIMESTAMP=20000101-010101 \
+    GITHUB_REF_TYPE=tag GITHUB_REF_NAME=20000101-010101-deadbeef \
+    GITHUB_REF=refs/tags/20000101-010101-deadbeef GITHUB_SHA=deadbeef12345678 \
+    scripts/release.sh --push --dry-run
+)
+_assert_contains "cut: dry-run ignores ambient build env" "release: tag $want_tag" "$out"
+_assert_contains "cut: dry-run prints the push plan" \
+  "would push main and refs/tags/$want_tag to origin" "$out"
+
+if git -C "$fx" rev-parse -q --verify refs/remotes/origin/main >/dev/null; then
+  _pass "cut: dry-run recreates the missing remote-tracking branch"
+else
+  _fail "cut: dry-run recreates the missing remote-tracking branch"
+fi
+if git -C "$fx" rev-parse -q --verify "refs/tags/$want_tag" >/dev/null; then
+  _fail "cut: dry-run creates no local tag"
+else
+  _pass "cut: dry-run creates no local tag"
+fi
+
+rc=0
+out=$(cd "$fx" && scripts/release.sh --help 2>&1) || rc=$?
+_assert_exit "cut: --help succeeds" 0 "$rc"
+_assert_contains "cut: --help documents the flags" "--dry-run" "$out"
+
+rc=0
+(cd "$fx" && scripts/release.sh --bogus) >/dev/null 2>&1 || rc=$?
+_assert_exit "cut: an unknown flag is a usage error" 2 "$rc"
+
+# Releasing from a dirty or diverged worktree would publish a tag that does not
+# match what CI will build.
+printf 'dirty\n' >"$fx/untracked-change"
+git -C "$fx" add untracked-change >/dev/null
+rc=0
+out=$(cd "$fx" && scripts/release.sh 2>&1) || rc=$?
+_assert_exit "cut: refuses a dirty worktree" 1 "$rc"
+_assert_contains "cut: dirty worktree error is specific" "worktree must be clean" "$out"
+git -C "$fx" reset --quiet --hard HEAD >/dev/null
+rm -f "$fx/untracked-change"
+
+git -C "$fx" checkout --quiet -b side
+rc=0
+out=$(cd "$fx" && scripts/release.sh 2>&1) || rc=$?
+_assert_exit "cut: refuses a non-release branch" 1 "$rc"
+_assert_contains "cut: branch error names the release branch" "run from main" "$out"
+git -C "$fx" checkout --quiet main
+
+GIT_AUTHOR_DATE='2099-02-06T06:07:08 +0000' \
+  GIT_COMMITTER_DATE='2099-02-06T06:07:08 +0000' \
+  git -C "$fx" commit --quiet --allow-empty -m ahead
+rc=0
+out=$(cd "$fx" && scripts/release.sh 2>&1) || rc=$?
+_assert_exit "cut: refuses when local main is ahead of origin" 1 "$rc"
+_assert_contains "cut: divergence error names both commits" "does not match origin/main" "$out"
+git -C "$fx" reset --quiet --hard HEAD~1
+
+out=$(cd "$fx" && scripts/release.sh --push)
+_assert_contains "cut: creates the tag" "release: created tag $want_tag" "$out"
+_assert_contains "cut: pushes the tag" "release: pushed tag $want_tag" "$out"
+if git ls-remote --exit-code --tags "$tmp/cut-origin.git" "refs/tags/$want_tag" >/dev/null 2>&1; then
+  _pass "cut: the tag reaches the remote"
+else
+  _fail "cut: the tag reaches the remote"
+fi
+
+# Re-cutting the same commit must not quietly re-publish an existing release.
+rc=0
+out=$(cd "$fx" && scripts/release.sh --push 2>&1) || rc=$?
+_assert_exit "cut: refuses when the remote already has the tag" 1 "$rc"
+_assert_contains "cut: existing-tag error is specific" "already has tag $want_tag" "$out"
+
+# A tag left over from a failed push must not be silently reused for a
+# different commit.
+fx=$(_release_repo cut-stale)
+GIT_AUTHOR_DATE='2099-02-07T06:07:08 +0000' \
+  GIT_COMMITTER_DATE='2099-02-07T06:07:08 +0000' \
+  git -C "$fx" commit --quiet --allow-empty -m moved
+git -C "$fx" push --quiet origin main
+# The tag release.sh will compute for HEAD already exists, but points at the
+# previous commit: exactly the leftover a partially failed cut can produce.
+commit=$(git -C "$fx" rev-parse HEAD)
+want_tag="20990207-060708-${commit:0:8}"
+git -C "$fx" tag "$want_tag" HEAD~1
+rc=0
+out=$(cd "$fx" && scripts/release.sh 2>&1) || rc=$?
+_assert_exit "cut: refuses a local tag pointing at another commit" 1 "$rc"
+_assert_contains "cut: stale-tag error names the mismatch" "not HEAD" "$out"
+
+# An annotated tag would change the SHA CI sees for the tag push.
+fx=$(_release_repo cut-annotated)
+commit=$(git -C "$fx" rev-parse HEAD)
+want_tag="20990205-060708-${commit:0:8}"
+git -C "$fx" tag -a "$want_tag" -m annotated
+rc=0
+out=$(cd "$fx" && scripts/release.sh 2>&1) || rc=$?
+_assert_exit "cut: refuses an annotated release tag" 1 "$rc"
+_assert_contains "cut: annotated-tag error explains the rule" "must be lightweight" "$out"
+
+# A failed push must not leave a local tag behind that blocks the next attempt.
+fx=$(_release_repo cut-failed-push)
+commit=$(git -C "$fx" rev-parse HEAD)
+want_tag="20990205-060708-${commit:0:8}"
+# Reject the push at the remote rather than breaking the repo, so the fetch and
+# tag creation still succeed and the cleanup path is the thing under test.
+printf '#!/bin/sh\nexit 1\n' >"$tmp/cut-failed-push-origin.git/hooks/pre-receive"
+chmod +x "$tmp/cut-failed-push-origin.git/hooks/pre-receive"
+rc=0
+(cd "$fx" && scripts/release.sh --push) >/dev/null 2>&1 || rc=$?
+if [[ "$rc" -eq 0 ]]; then
+  _fail "cut: a rejected push fails"
+else
+  _pass "cut: a rejected push fails"
+fi
+if git -C "$fx" rev-parse -q --verify "refs/tags/$want_tag" >/dev/null; then
+  _fail "cut: cleans up the tag after a failed push"
+else
+  _pass "cut: cleans up the tag after a failed push"
+fi
+
+# --- Vendored-copy verification ---------------------------------------------
+
+fx=$(_fixture verify)
+rc=0
+out=$(cd "$fx" && env GITHUB_ACTION_PATH="$root/.github/actions/verify-release-scripts" \
+  SCRIPTS_DIR=scripts "$verify" 2>&1) || rc=$?
+_assert_exit "verify: a freshly synced copy passes" 0 "$rc"
+
+printf '# local edit\n' >>"$fx/scripts/release-lib.sh"
+rc=0
+out=$(cd "$fx" && env GITHUB_ACTION_PATH="$root/.github/actions/verify-release-scripts" \
+  SCRIPTS_DIR=scripts "$verify" 2>&1) || rc=$?
+_assert_exit "verify: an edited vendored copy fails" 1 "$rc"
+_assert_contains "verify: reports the drifted file" "release-lib.sh differs" "$out"
+_assert_contains "verify: tells the maintainer how to resync" "release-scripts/sync.sh" "$out"
+
+rm "$fx/scripts/release.sh"
+rc=0
+out=$(cd "$fx" && env GITHUB_ACTION_PATH="$root/.github/actions/verify-release-scripts" \
+  SCRIPTS_DIR=scripts "$verify" 2>&1) || rc=$?
+_assert_exit "verify: a deleted vendored copy fails" 1 "$rc"
+_assert_contains "verify: reports the missing file" "missing vendored script" "$out"
+
+# A vendored entry point that loses its executable bit fails at release time
+# with a confusing error, so the gate checks modes as well as content.
+fx=$(_fixture verify-modes)
+chmod -x "$fx/scripts/release.sh"
+rc=0
+out=$(cd "$fx" && env GITHUB_ACTION_PATH="$root/.github/actions/verify-release-scripts" \
+  SCRIPTS_DIR=scripts "$verify" 2>&1) || rc=$?
+_assert_exit "verify: a non-executable entry point fails" 1 "$rc"
+_assert_contains "verify: reports the lost executable bit" "must be executable" "$out"
+
+fx=$(_fixture verify-lib-mode)
+chmod +x "$fx/scripts/release-lib.sh"
+rc=0
+out=$(cd "$fx" && env GITHUB_ACTION_PATH="$root/.github/actions/verify-release-scripts" \
+  SCRIPTS_DIR=scripts "$verify" 2>&1) || rc=$?
+_assert_exit "verify: an executable sourced library fails" 1 "$rc"
+_assert_contains "verify: reports the unexpected executable bit" "must not be executable" "$out"
+
+# release.conf and the smoke hook are repo-owned and must not be flagged.
+fx=$(_fixture verify-repo-owned)
+printf '# shellcheck shell=bash\nrelease_smoke_check() { return 0; }\n' \
+  >"$fx/scripts/release-smoke-hook.sh"
+rc=0
+(cd "$fx" && env GITHUB_ACTION_PATH="$root/.github/actions/verify-release-scripts" \
+  SCRIPTS_DIR=scripts "$verify") >/dev/null 2>&1 || rc=$?
+_assert_exit "verify: ignores repo-owned scripts alongside the vendored set" 0 "$rc"
+
+printf '\n%d passed, %d failed\n' "$_passes" "$_failures"
+[[ "$_failures" -eq 0 ]]

@@ -154,6 +154,15 @@ exact expected Git tag. The release matrix exposes Rust compiler triples through
 `RUST_TARGET` and installer-facing archive labels through `ASSET_PLATFORM`; use
 the latter for public asset names.
 
+## Release scripts
+
+The workflow owns release mechanics; the scripts it invokes are shared
+separately. [`release-scripts/`](release-scripts/README.md) holds the single
+implementation of release identity, packaging, and smoke validation that the
+`cgraf78` Rust repos vendor into their own `scripts/` directory, so each repo
+declares only its payload in `scripts/release.conf`. The
+`verify-release-scripts` action keeps those vendored copies from drifting.
+
 ## Layout
 
 The public workflows delegate to internal workers, while steps shared by more
@@ -190,6 +199,11 @@ than one worker are split into first-party composite actions:
   fragments are standalone programs.
 - `.github/actions/dotfiles-bootstrap/` owns `dot update`, `mise install`, and
   `dot doctor`.
+- `.github/actions/verify-release-scripts/` fails a consumer whose vendored
+  release scripts no longer match `release-scripts/`.
+- `release-scripts/` owns the shared release identity, packaging, and smoke
+  logic. It sits outside `.github/` because consumers vendor it into their own
+  repositories rather than calling it as an action.
 
 Callers pin reusable workflows to reviewed commit SHAs and use dependency PRs to
 roll shared fixes across the fleet. Internal workflows likewise pin first-party

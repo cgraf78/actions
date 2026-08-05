@@ -1,0 +1,17 @@
+name: Verify vendored release scripts
+description: Fail when a consumer repository's vendored release scripts differ from the shared copy in cgraf78/actions.
+
+inputs:
+  scripts-dir:
+    description: Repository-relative directory holding the consumer's vendored release scripts.
+    required: false
+    default: scripts
+
+runs:
+  using: composite
+  steps:
+    - name: Compare vendored release scripts
+      shell: bash
+      env:
+        SCRIPTS_DIR: ${{ inputs.scripts-dir }}
+      run: "$GITHUB_ACTION_PATH/verify.sh"

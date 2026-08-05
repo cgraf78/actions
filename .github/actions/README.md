@@ -14,6 +14,8 @@ this repo and by other `cgraf78` repositories.
 - `rust-ci-prereqs` installs Rust CI prerequisites that are not handled by
   `dtolnay/rust-toolchain`.
 - `dotfiles-bootstrap` runs the dotfiles bootstrap/update/doctor flow in CI.
+- `verify-release-scripts` fails a consumer repository whose vendored release
+  scripts have drifted from the shared copy in `release-scripts/`.
 
 Keep composite actions narrow and reusable. If behavior is only needed by a
 single reusable workflow, prefer keeping it in that workflow until a second

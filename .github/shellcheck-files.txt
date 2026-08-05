@@ -9,8 +9,17 @@ program	.github/actions/shell-ci-prereqs/install.sh
 program	.github/actions/shell-ci-prereqs/lib.sh
 program	.github/actions/shell-ci-prereqs/profiles.sh
 program	.github/actions/shellcheck-inventory/run.sh
+program	.github/actions/verify-release-scripts/verify.sh
+program	release-scripts/package-release.sh
+program	release-scripts/release-lib.sh
+program	release-scripts/release-tag.sh
+program	release-scripts/release-version.sh
+program	release-scripts/release.sh
+program	release-scripts/smoke-release.sh
+program	release-scripts/sync.sh
 program	test/dotfiles-public-deps-test
 program	test/infra-retry-test
+program	test/release-scripts-test
 program	test/shell-ci-prereqs-test
 program	test/shellcheck-action-test
 program	test/workflow-contract-test
