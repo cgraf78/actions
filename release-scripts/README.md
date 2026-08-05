@@ -99,9 +99,13 @@ For runtime coverage, add `scripts/release-smoke-hook.sh` defining
 # shellcheck shell=bash
 release_smoke_check() {
   local root=$1
-  "$root/hm" --version
+  "$root/hm" --version || return 1
 }
 ```
+
+Check return codes explicitly. The hook is sourced, so its result would
+otherwise depend on the caller's `set -e` and on which command happens to run
+last — a hook can report success after a command it ran has already failed.
 
 ### CI wiring
 
