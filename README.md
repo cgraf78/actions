@@ -191,6 +191,8 @@ than one worker are split into first-party composite actions:
   workflows should consume the same action instead of copying platform JSON.
 - `.github/actions/rust-ci-prereqs/` owns Rust-CI pre-checkout OS package
   installation for cargo builds on each platform.
+- `.github/actions/musl-build-prereqs/` owns the musl linker toolchain install
+  shared by Rust CI package smoke and Rust release packaging.
 - `.github/actions/shell-ci-prereqs/` owns shell-CI pre-checkout OS package
   installation. It is split into profile packages, checkrun prereqs, and the
   exact dotfiles bootstrap package list.

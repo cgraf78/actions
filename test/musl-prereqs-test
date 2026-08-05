@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+
+# Coverage for the shared musl build prerequisites action.
+#
+# The real work is package installation, so the commands it drives are stubbed
+# and the test asserts on what it tried to run. That is the part consumers
+# depend on: which packages, whether sudo is used, and when rustup is involved.
+
+set -uo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+install_sh="$root/.github/actions/musl-build-prereqs/install.sh"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+echo "=== musl build prerequisites ==="
+
+_passes=0
+_failures=0
+
+_pass() {
+  printf 'ok   - %s\n' "$1"
+  _passes=$((_passes + 1))
+}
+
+_fail() {
+  printf 'FAIL - %s\n' "$1" >&2
+  _failures=$((_failures + 1))
+}
+
+_assert_contains() {
+  local name=$1 needle=$2 haystack=$3
+  if [[ "$haystack" == *"$needle"* ]]; then
+    _pass "$name"
+  else
+    _fail "$name (want '$needle' in '$haystack')"
+  fi
+}
+
+_assert_missing() {
+  local name=$1 needle=$2 haystack=$3
+  if [[ "$haystack" != *"$needle"* ]]; then
+    _pass "$name"
+  else
+    _fail "$name (unexpected '$needle' in '$haystack')"
+  fi
+}
+
+# Build a PATH of stubs that record their invocations instead of running.
+# `with_sudo=0` drops the sudo stub so the container case (root, no sudo) is
+# exercised rather than assumed.
+_stub_bin() {
+  local dir=$1 with_sudo=$2 cmd
+  mkdir -p "$dir"
+  # The stub dir is the entire PATH, so the no-sudo case really has no sudo
+  # rather than falling through to the host's. Only `sh` has to be real.
+  ln -sf "$(command -v sh)" "$dir/sh"
+  for cmd in apt-get rustup sudo; do
+    [[ "$cmd" == sudo && "$with_sudo" == 0 ]] && continue
+    # Absolute shebang: the stub PATH deliberately has no `env`.
+    cat >"$dir/$cmd" <<STUB
+#!/bin/sh
+printf '%s %s\n' "$cmd" "\$*" >>"\$STUB_LOG"
+STUB
+    chmod +x "$dir/$cmd"
+  done
+}
+
+_run() {
+  # usage: _run <log> <with_sudo> [env assignments...]
+  local log=$1 with_sudo=$2
+  shift 2
+  local bin
+  bin="$tmp/bin-$(basename "$log")"
+  _stub_bin "$bin" "$with_sudo"
+  : >"$log"
+  env -i PATH="$bin" STUB_LOG="$log" "$@" sh "$install_sh" >>"$log" 2>&1
+}
+
+# --- Linux, no explicit target ----------------------------------------------
+
+log="$tmp/linux.log"
+_run "$log" 1 RUNNER_OS=Linux
+out=$(<"$log")
+_assert_contains "linux: refreshes the package index" "apt-get update" "$out"
+_assert_contains "linux: installs musl-tools" "musl-tools" "$out"
+_assert_contains "linux: installs without recommends" "--no-install-recommends" "$out"
+# The release matrix already installs its target through the toolchain action,
+# so an unset RUST_TARGET must not trigger a redundant rustup call.
+_assert_missing "linux: skips rustup when no target is given" "rustup" "$out"
+_assert_contains "linux: escalates with sudo on hosted runners" "sudo apt-get" "$out"
+
+# --- Linux with an explicit target ------------------------------------------
+
+log="$tmp/target.log"
+_run "$log" 1 RUNNER_OS=Linux RUST_TARGET=x86_64-unknown-linux-musl
+out=$(<"$log")
+_assert_contains "target: adds the requested rust target" \
+  "rustup target add x86_64-unknown-linux-musl" "$out"
+_assert_contains "target: still installs musl-tools" "musl-tools" "$out"
+
+# --- Container runners have no sudo -----------------------------------------
+
+log="$tmp/nosudo.log"
+_run "$log" 0 RUNNER_OS=Linux
+out=$(<"$log")
+_assert_contains "no sudo: still installs musl-tools" "apt-get install" "$out"
+_assert_missing "no sudo: does not invoke sudo" "sudo " "$out"
+
+# --- Non-Linux is a no-op ---------------------------------------------------
+
+# musl targets only exist on Linux. The action stays safe to call from a matrix
+# row that also covers macOS.
+log="$tmp/macos.log"
+_run "$log" 1 RUNNER_OS=macOS
+out=$(<"$log")
+_assert_missing "macos: installs nothing" "apt-get" "$out"
+_assert_contains "macos: says why it skipped" "skipping on macOS" "$out"
+
+printf '\n%d passed, %d failed\n' "$_passes" "$_failures"
+[[ "$_failures" -eq 0 ]]
