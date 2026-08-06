@@ -13,8 +13,35 @@ let each update run the caller's normal CI, and review it before merge. This kee
 shared fixes moving across `cgraf78` repositories without changing the workflow
 code executed by an unchanged caller commit.
 
-Examples use `FULL_COMMIT_SHA` as a placeholder. Callers must substitute a
-reviewed commit whose `actions` CI suite passed.
+Examples use `FULL_COMMIT_SHA` only as a drafting placeholder. For initial
+adoption, add the example and then run `consumer-ci/sync.sh` from a reviewed
+`actions` commit whose CI passed. The command writes the lock and substitutes
+all runtime refs together; maintainers should not hand-edit several independent
+SHA literals.
+
+## Consumer version lock
+
+GitHub requires a literal ref after `uses:` and resolves reusable workflows
+before any job can read repository files. A caller therefore cannot interpolate
+a lock value directly into workflow YAML. Each `cgraf78` consumer instead keeps
+one authoritative commit in `.github/cgraf78-actions.lock` and treats all YAML
+refs plus vendored release scripts as generated views of that value.
+
+From a clean `actions` checkout at the reviewed commit, run:
+
+```bash
+consumer-ci/sync.sh <consumer-repository>
+```
+
+Consumers run the zero-input `verify-consumer-sync` action after checking out
+their repository in normal CI. It verifies its own ref and every tracked
+`cgraf78/actions` use in a workflow or composite action. When the repository
+tracks `scripts/release.conf` and its generated managed manifest, it
+automatically verifies the release-script set too; CI requires those two markers
+together so deleting only the config cannot orphan formerly managed bytes. This
+mirrors the sync command without a separate path knob that could accidentally
+bypass the check. A Dependabot update to only a literal SHA therefore fails
+closed until a maintainer synchronizes the lock and derived bytes.
 
 ## Required Check Contract
 
@@ -31,7 +58,11 @@ The Shell aggregate always requires its conventional Platforms and real Termux
 runtime. When `shellcheck-inventory-path` is configured, it also requires the
 single Ubuntu ShellCheck job; that leaf may be skipped only when the input is
 empty. The Rust aggregate always requires Platforms, Quality, Android package,
-and real Termux runtime. Neither family accepts a skipped Android/Termux result.
+and real Termux runtime. On scheduled or manual runs with a nonempty
+`audit-command`, it also requires the RustSec advisory audit; when disabled or
+on other events that leaf must be skipped. This event-aware rule keeps one
+stable required context while still making a failed recurring audit blocking.
+Neither family accepts a skipped Android/Termux result.
 
 Dependabot-triggered workflows receive a read-only token and only secrets stored
 for Dependabot. After reviewing the proposed workflow commit, callers that
@@ -317,6 +348,8 @@ Ubuntu quality gate.
 | ----------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | `concurrency-scope`           | `default`                                                           | Stable identity for this call. Must differ between multiple Rust calls.                                             |
 | `rust-toolchain`              | `stable`                                                            | Toolchain passed to `dtolnay/rust-toolchain`.                                                                       |
+| `msrv-toolchain`              | `""`                                                                | Optional minimum supported Rust toolchain. Empty disables the MSRV steps.                                           |
+| `msrv-command`                | `cargo check --locked --all-targets --all-features`                 | Command run with the MSRV toolchain after all stable quality steps. Empty disables the check.                       |
 | `matrix-set`                  | `auto`                                                              | Platform matrix policy. See [Matrix Sets](#matrix-sets).                                                            |
 | `working-directory`           | `.`                                                                 | Directory where command hooks run.                                                                                  |
 | `setup-command`               | `""`                                                                | Optional caller-owned setup command run before tests and quality commands.                                          |
@@ -324,7 +357,8 @@ Ubuntu quality gate.
 | `fmt-command`                 | `cargo fmt --check`                                                 | Ubuntu quality formatting command. Empty disables the step.                                                         |
 | `clippy-command`              | `cargo clippy --locked --all-targets --all-features -- -D warnings` | Ubuntu quality lint command. Empty disables the step.                                                               |
 | `build-command`               | `cargo build --release --locked`                                    | Ubuntu quality build command. Empty disables the step.                                                              |
-| `doc-command`                 | `cargo doc --locked --no-deps`                                      | Ubuntu quality docs command. Empty disables the step.                                                               |
+| `doc-command`                 | `RUSTDOCFLAGS='-D missing-docs' cargo doc --locked --no-deps`       | Ubuntu quality docs command. Empty disables the step.                                                               |
+| `audit-command`               | `cargo audit --file Cargo.lock`                                     | Scheduled/manual RustSec command. Empty disables the advisory job.                                                  |
 | `package-smoke-musl-target`   | `""`                                                                | Rust musl target to prepare before package smoke. Installs the musl linker toolchain and adds the target. Empty disables it. |
 | `package-smoke-setup-command` | `""`                                                                | Optional setup command run immediately before package smoke.                                                        |
 | `package-smoke-command`       | `""`                                                                | Optional caller-owned command that builds and validates a representative release artifact. Empty disables the step. |
@@ -337,6 +371,25 @@ Ubuntu quality gate.
 Rust defaults use `--locked` because CI should exercise the checked-in dependency
 graph. Library repositories or unusual workspaces that intentionally do not
 commit `Cargo.lock` must override the relevant commands.
+
+The default docs command also denies missing public documentation. This policy
+used to be repeated by callers, where it could drift independently from the
+locked default. Repositories that publish an intentionally undocumented API can
+override it explicitly.
+
+The optional MSRV check is part of the existing Ubuntu quality job and runs
+last because installing that toolchain changes the default compiler for later
+steps. This ordering lets branch protection continue to require only
+`rust / Required`; it does not add a separate check name to administer.
+
+### RustSec advisory audit
+
+Advisory data changes independently of source commits, so RustSec runs only on
+scheduled and manually dispatched workflows rather than making pull-request
+results depend on the network's current database state. `cargo-audit` itself is
+installed at an immutable reviewed version with `--locked`; its database refresh
+is the intentional moving input. The result is included in the `Required`
+aggregate whenever the audit is enabled for that event.
 
 ### Package Smoke
 
@@ -493,7 +546,8 @@ Consumers that vendor those scripts should add the drift gate to their normal
 CI so a divergent copy fails on pull requests rather than at release time:
 
 ```yaml
-- uses: cgraf78/actions/.github/actions/verify-release-scripts@FULL_COMMIT_SHA
+- uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
   with:
-    scripts-dir: scripts
+    persist-credentials: false
+- uses: cgraf78/actions/.github/actions/verify-consumer-sync@FULL_COMMIT_SHA
 ```

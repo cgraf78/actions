@@ -62,6 +62,15 @@ _assert_file() {
   fi
 }
 
+_assert_not_file() {
+  local name=$1 path=$2
+  if [[ ! -e "$path" && ! -L "$path" ]]; then
+    _pass "$name"
+  else
+    _fail "$name (unexpected $path)"
+  fi
+}
+
 _assert_contains() {
   local name=$1 needle=$2 haystack=$3
   if [[ "$haystack" == *"$needle"* ]]; then
@@ -732,6 +741,8 @@ fi
 # --- Vendored-copy verification ---------------------------------------------
 
 fx=$(_fixture verify)
+_assert_file "sync: records the managed filename set" \
+  "$fx/scripts/.release-scripts.manifest"
 rc=0
 out=$(cd "$fx" && env GITHUB_ACTION_PATH="$root/.github/actions/verify-release-scripts" \
   SCRIPTS_DIR=scripts "$verify" 2>&1) || rc=$?
@@ -743,7 +754,67 @@ out=$(cd "$fx" && env GITHUB_ACTION_PATH="$root/.github/actions/verify-release-s
   SCRIPTS_DIR=scripts "$verify" 2>&1) || rc=$?
 _assert_exit "verify: an edited vendored copy fails" 1 "$rc"
 _assert_contains "verify: reports the drifted file" "release-lib.sh differs" "$out"
-_assert_contains "verify: tells the maintainer how to resync" "release-scripts/sync.sh" "$out"
+_assert_contains "verify: tells the maintainer how to resync" "consumer-ci/sync.sh" "$out"
+
+# The manifest distinguishes formerly shared files from repo-owned neighbors.
+# Without it, removing or renaming a shared script upstream leaves executable
+# stale code in every consumer even though all current files compare cleanly.
+fx=$(_fixture sync-removes-stale)
+printf 'obsolete-release.sh\n' >>"$fx/scripts/.release-scripts.manifest"
+printf '#!/usr/bin/env bash\n' >"$fx/scripts/obsolete-release.sh"
+chmod +x "$fx/scripts/obsolete-release.sh"
+"$shared/sync.sh" "$fx/scripts" >/dev/null
+_assert_not_file "sync: removes a formerly managed script" \
+  "$fx/scripts/obsolete-release.sh"
+if grep -Fxq obsolete-release.sh "$fx/scripts/.release-scripts.manifest"; then
+  _fail "sync: removes stale names from the managed manifest"
+else
+  _pass "sync: removes stale names from the managed manifest"
+fi
+
+# Validate the complete old ownership list before deleting anything. A corrupt
+# later record must not turn a failed synchronization into a partial cleanup.
+fx=$(_fixture sync-invalid-manifest)
+printf 'obsolete-release.sh\n../invalid\n' \
+  >"$fx/scripts/.release-scripts.manifest"
+printf '#!/usr/bin/env bash\n' >"$fx/scripts/obsolete-release.sh"
+chmod +x "$fx/scripts/obsolete-release.sh"
+rc=0
+out=$("$shared/sync.sh" "$fx/scripts" 2>&1) || rc=$?
+_assert_exit "sync: rejects an invalid managed filename" 1 "$rc"
+_assert_file "sync: validates all names before removing stale files" \
+  "$fx/scripts/obsolete-release.sh"
+
+fx=$(_fixture sync-stale-directory)
+printf 'obsolete-a.sh\nobsolete-b.sh\n' \
+  >"$fx/scripts/.release-scripts.manifest"
+printf '#!/usr/bin/env bash\n' >"$fx/scripts/obsolete-a.sh"
+mkdir "$fx/scripts/obsolete-b.sh"
+rc=0
+out=$("$shared/sync.sh" "$fx/scripts" 2>&1) || rc=$?
+_assert_exit "sync: rejects a stale managed path that became a directory" 1 "$rc"
+_assert_file "sync: checks all stale path types before removing files" \
+  "$fx/scripts/obsolete-a.sh"
+
+fx=$(_fixture verify-stale)
+printf 'obsolete-release.sh\n' >>"$fx/scripts/.release-scripts.manifest"
+printf '#!/usr/bin/env bash\n' >"$fx/scripts/obsolete-release.sh"
+chmod +x "$fx/scripts/obsolete-release.sh"
+rc=0
+out=$(cd "$fx" && env GITHUB_ACTION_PATH="$root/.github/actions/verify-release-scripts" \
+  SCRIPTS_DIR=scripts "$verify" 2>&1) || rc=$?
+_assert_exit "verify: a stale managed script fails" 1 "$rc"
+_assert_contains "verify: reports the stale managed filename" \
+  "obsolete-release.sh" "$out"
+
+fx=$(_fixture verify-manifest-mode)
+chmod +x "$fx/scripts/.release-scripts.manifest"
+rc=0
+out=$(cd "$fx" && env GITHUB_ACTION_PATH="$root/.github/actions/verify-release-scripts" \
+  SCRIPTS_DIR=scripts "$verify" 2>&1) || rc=$?
+_assert_exit "verify: an executable managed manifest fails" 1 "$rc"
+_assert_contains "verify: reports the executable managed manifest" \
+  "manifest must not be executable" "$out"
 
 rm "$fx/scripts/release.sh"
 rc=0
@@ -751,6 +822,25 @@ out=$(cd "$fx" && env GITHUB_ACTION_PATH="$root/.github/actions/verify-release-s
   SCRIPTS_DIR=scripts "$verify" 2>&1) || rc=$?
 _assert_exit "verify: a deleted vendored copy fails" 1 "$rc"
 _assert_contains "verify: reports the missing file" "missing vendored script" "$out"
+
+fx=$(_fixture verify-script-symlink)
+rm "$fx/scripts/release.sh"
+ln -s "$shared/release.sh" "$fx/scripts/release.sh"
+rc=0
+out=$(cd "$fx" && env GITHUB_ACTION_PATH="$root/.github/actions/verify-release-scripts" \
+  SCRIPTS_DIR=scripts "$verify" 2>&1) || rc=$?
+_assert_exit "verify: a symlinked vendored script fails" 1 "$rc"
+_assert_contains "verify: reports the symlinked script" "regular non-symlink" "$out"
+
+fx=$(_fixture verify-scripts-dir-symlink)
+mv "$fx/scripts" "$fx/scripts-real"
+ln -s scripts-real "$fx/scripts"
+rc=0
+out=$(cd "$fx" && env GITHUB_ACTION_PATH="$root/.github/actions/verify-release-scripts" \
+  SCRIPTS_DIR=scripts "$verify" 2>&1) || rc=$?
+_assert_exit "verify: a symlinked scripts directory fails" 1 "$rc"
+_assert_contains "verify: reports the symlinked scripts directory" \
+  "regular directory, not a symlink" "$out"
 
 # A vendored entry point that loses its executable bit fails at release time
 # with a confusing error, so the gate checks modes as well as content.

@@ -16,8 +16,12 @@ this repo and by other `cgraf78` repositories.
 - `musl-build-prereqs` installs the musl linker toolchain, and optionally adds
   the Rust musl target, for repos whose crates link C code.
 - `dotfiles-bootstrap` runs the dotfiles bootstrap/update/doctor flow in CI.
-- `verify-release-scripts` fails a consumer repository whose vendored release
-  scripts have drifted from the shared copy in `release-scripts/`.
+- `verify-release-scripts` is the narrow byte, mode, and managed-file-set check
+  for vendored release scripts.
+- `verify-consumer-sync` is the consumer-facing gate: it requires every
+  `cgraf78/actions` ref and the verifier's own ref to match the repository lock,
+  then runs `verify-release-scripts` for the same checked-out actions commit
+  when the consumer tracks `scripts/release.conf`.
 
 Keep composite actions narrow and reusable. If behavior is only needed by a
 single reusable workflow, prefer keeping it in that workflow until a second

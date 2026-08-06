@@ -14,9 +14,11 @@ and smoke scripts run on release runners before any dependency bootstrap. Both
 argue against pulling this code over the network on the release path.
 
 Vendoring keeps the release path self-contained while the
-`verify-release-scripts` action makes the copies a derived artifact rather than
+`verify-consumer-sync` action makes the copies a derived artifact rather than
 three independently maintained forks: any divergence fails the consumer's CI
-with the diff and the resync command. A submodule would avoid the duplicated
+with the resync command. The managed manifest also detects scripts removed or
+renamed upstream; comparing only current filenames would leave an obsolete
+executable behind forever. A submodule would avoid the duplicated
 bytes but adds `--recurse-submodules` friction to every clone, worktree, and
 checkout step for release-critical tooling.
 
@@ -30,7 +32,8 @@ checkout step for release-critical tooling.
 | `release.sh` | Local release cutter: validates state, creates and pushes the tag. |
 | `package-release.sh` | Builds the archive and checksum for one Rust target. |
 | `smoke-release.sh` | Extracts and validates a packaged archive. |
-| `sync.sh` | Maintainer tool that copies the above into a consumer repo. Not vendored. |
+| `.release-scripts.manifest` | Consumer-generated list of files owned by the sync contract; it is not a source file here. |
+| `sync.sh` | Low-level maintainer tool used by consumer synchronization. Not vendored. |
 
 ## Release identity
 
@@ -50,10 +53,11 @@ Resolution order, highest priority first:
 
 ## Consumer setup
 
-Sync the scripts and add a config:
+Add a config, then synchronize the repository from a clean `actions` checkout
+at the reviewed commit it should pin:
 
 ```bash
-release-scripts/sync.sh ~/git/hive-memory/scripts
+consumer-ci/sync.sh ~/git/hive-memory
 ```
 
 `scripts/release.conf`:
@@ -113,16 +117,18 @@ Add the drift gate to the consumer's normal CI so divergence is caught on every
 pull request rather than at release time:
 
 ```yaml
-- uses: cgraf78/actions/.github/actions/verify-release-scripts@FULL_COMMIT_SHA
+- uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
   with:
-    scripts-dir: scripts
+    persist-credentials: false
+- uses: cgraf78/actions/.github/actions/verify-consumer-sync@FULL_COMMIT_SHA
 ```
 
 ## Changing the shared scripts
 
 1. Edit here, extend `test/release-scripts-test`, and land the change.
-2. In each consumer, bump the pinned `actions` SHA and run `sync.sh` in the
-   same commit.
+2. Check out that commit and run `consumer-ci/sync.sh <consumer-repo>` for each
+   consumer. Commit the lock, generated workflow refs, manifest, and scripts
+   together.
 
 Dependabot bumps the pinned SHA but cannot resync the vendored files, so its
 pull requests fail the drift gate until step 2 is applied. That failure is the

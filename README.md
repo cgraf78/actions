@@ -8,6 +8,13 @@ membership can evolve here without protection changes in every caller. The
 detailed result contract is documented in
 [`docs/workflow-api.md`](docs/workflow-api.md).
 
+Consumer repositories make one version decision in
+`.github/cgraf78-actions.lock`; `consumer-ci/sync.sh` generates the literal
+workflow refs GitHub requires and, when configured, refreshes vendored release
+scripts from that same commit. See
+[`consumer-ci/README.md`](consumer-ci/README.md) for the update and verification
+contract.
+
 ## Workflows
 
 For the full caller-facing API, see
@@ -24,8 +31,10 @@ full matrix.
 Callers should pin a reviewed full commit SHA so an unchanged caller commit
 always executes the same workflow code. Enable weekly GitHub Actions Dependabot
 updates in the caller repository so shared fixes arrive as ordinary dependency
-PRs and run through the caller's CI before merge. Replace `FULL_COMMIT_SHA` in
-the examples below with a reviewed `actions` commit that passed its own CI.
+PRs and run through the caller's CI before merge. `FULL_COMMIT_SHA` is a drafting
+placeholder in the examples below. Before committing a consumer change, run
+`consumer-ci/sync.sh` from the reviewed `actions` checkout; it writes the one
+lock value and substitutes every runtime placeholder or older ref together.
 
 Dependabot-triggered workflows receive only Dependabot secrets. After reviewing
 the proposed workflow commit, a caller whose CI requires sensitive repository
@@ -73,7 +82,10 @@ jobs:
 Runs Rust test suites across the same shared platform matrix. Push and pull
 request runs cover the high-signal subset; scheduled and manual runs cover the
 full matrix. A separate Ubuntu quality gate preserves common Rust checks without
-running formatting, clippy, and docs redundantly on every OS.
+running formatting, Clippy, and docs redundantly on every OS. By default,
+scheduled and manual runs also perform the shared RustSec audit; its result
+flows through the same `Required` aggregate rather than creating another
+branch-protection context. Callers can disable it with an empty `audit-command`.
 
 ```yaml
 jobs:
@@ -90,8 +102,12 @@ jobs:
         target/x86_64-linux-android/debug/my-tool --version
 ```
 
-Repos with stricter policies can override the quality-gate commands, or pass an
-empty string to disable a command. Repos that need generated files, extra
+The docs default checks missing public documentation and, like the other Cargo
+defaults, uses the committed lockfile. Repos with genuinely different policies
+can override quality-gate commands or pass an empty string to disable one.
+Repos with a declared MSRV can set `msrv-toolchain`; the shared quality gate
+runs the locked all-targets/all-features check last so it cannot change the
+compiler used by the stable checks. Repos that need generated files, extra
 tooling, or a nested crate path can use `setup-command` and
 `working-directory` without forking the shared workflow. Binary repos can use
 `build-command`, `package-smoke-setup-command`, and `package-smoke-command` to
@@ -160,8 +176,9 @@ The workflow owns release mechanics; the scripts it invokes are shared
 separately. [`release-scripts/`](release-scripts/README.md) holds the single
 implementation of release identity, packaging, and smoke validation that the
 `cgraf78` Rust repos vendor into their own `scripts/` directory, so each repo
-declares only its payload in `scripts/release.conf`. The
-`verify-release-scripts` action keeps those vendored copies from drifting.
+declares only its payload in `scripts/release.conf`. The broader
+`verify-consumer-sync` action checks the repository lock, every literal
+`cgraf78/actions` ref, and the complete managed set of vendored scripts.
 
 ## Layout
 
@@ -203,14 +220,20 @@ than one worker are split into first-party composite actions:
   `dot doctor`.
 - `.github/actions/verify-release-scripts/` fails a consumer whose vendored
   release scripts no longer match `release-scripts/`.
+- `.github/actions/verify-consumer-sync/` enforces one consumer lock across all
+  workflow/action refs and, when `scripts/release.conf` is tracked, delegates
+  to the release-script verifier.
+- `consumer-ci/` owns the maintainer command that regenerates a consumer from
+  one clean, reviewed `actions` checkout.
 - `release-scripts/` owns the shared release identity, packaging, and smoke
   logic. It sits outside `.github/` because consumers vendor it into their own
   repositories rather than calling it as an action.
 
-Callers pin reusable workflows to reviewed commit SHAs and use dependency PRs to
-roll shared fixes across the fleet. Internal workflows likewise pin first-party
-composite actions to reviewed commits so every workflow dependency is explicit
-and reproducible.
+Callers pin reusable workflows to reviewed commit SHAs and use dependency PRs
+to roll shared fixes across the fleet. Consumer lock verification prevents a
+partial bump from mixing revisions. Internal self-pins remain an explicit
+bootstrap exception because a commit cannot contain its own hash; they point to
+earlier reviewed commits and are covered by this repository's tests.
 
 ## License
 

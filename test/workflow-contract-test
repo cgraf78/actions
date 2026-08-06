@@ -92,16 +92,18 @@ contracts() {
 
   check '.jobs.required.name == "Required"' rust-ci.yml
   check '.jobs.required.if == "${{ always() }}"' rust-ci.yml
-  check '.jobs.required.needs | join(",") == "platforms,quality,android-package,termux"' rust-ci.yml
+  check '.jobs.required.needs | join(",") == "platforms,quality,rustsec,android-package,termux"' rust-ci.yml
   check '.jobs.required.env.PLATFORMS_RESULT == "${{ needs.platforms.result }}"' rust-ci.yml
   check '.jobs.required.env.QUALITY_RESULT == "${{ needs.quality.result }}"' rust-ci.yml
+  check '.jobs.required.env.RUSTSEC_ENABLED == "${{ inputs.audit-command != '"'"''"'"' && (github.event_name == '"'"'schedule'"'"' || github.event_name == '"'"'workflow_dispatch'"'"') }}"' rust-ci.yml
+  check '.jobs.required.env.RUSTSEC_RESULT == "${{ needs.rustsec.result }}"' rust-ci.yml
   check '.jobs.required.env.ANDROID_PACKAGE_RESULT == "${{ needs.android-package.result }}"' rust-ci.yml
   check '.jobs.required.env.TERMUX_RESULT == "${{ needs.termux.result }}"' rust-ci.yml
   check '.jobs.required.steps[0].run | contains("test \"$PLATFORMS_RESULT\" = success")' rust-ci.yml
   check '.jobs.required.steps[0].run | contains("test \"$QUALITY_RESULT\" = success")' rust-ci.yml
+  check '.jobs.required.steps[0].run | contains("if [[ \"$RUSTSEC_ENABLED\" == true ]]; then\n  test \"$RUSTSEC_RESULT\" = success\nelse\n  test \"$RUSTSEC_RESULT\" = skipped\nfi")' rust-ci.yml
   check '.jobs.required.steps[0].run | contains("test \"$ANDROID_PACKAGE_RESULT\" = success")' rust-ci.yml
   check '.jobs.required.steps[0].run | contains("test \"$TERMUX_RESULT\" = success")' rust-ci.yml
-  check '.jobs.required.steps[0].run | contains("skipped") | not' rust-ci.yml
   check '.on.workflow_call.inputs.android-package-smoke-command.required == true' rust-ci.yml
   check '.on.workflow_call.inputs.termux-command.required == true' rust-ci.yml
   check '.jobs.android-package.if == null' rust-ci.yml
@@ -115,6 +117,20 @@ contracts() {
   check '.on.workflow_call.inputs.package-smoke-musl-target.default == ""' rust-ci.yml
   check '.on.workflow_call.inputs.package-smoke-musl-target.required == false' rust-ci.yml
   check '.on.workflow_call.inputs.package-smoke-musl-target.type == "string"' rust-ci.yml
+  check '.on.workflow_call.inputs.doc-command.default == "RUSTDOCFLAGS='"'"'-D missing-docs'"'"' cargo doc --locked --no-deps"' rust-ci.yml
+  check '.on.workflow_call.inputs.audit-command.default == "cargo audit --file Cargo.lock"' rust-ci.yml
+  check '.on.workflow_call.inputs.msrv-toolchain.default == ""' rust-ci.yml
+  check '.on.workflow_call.inputs.msrv-toolchain.required == false' rust-ci.yml
+  check '.on.workflow_call.inputs.msrv-toolchain.type == "string"' rust-ci.yml
+  check '.on.workflow_call.inputs.msrv-command.default == "cargo check --locked --all-targets --all-features"' rust-ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Install minimum supported Rust").if == "inputs.msrv-toolchain != '"'"''"'"' && inputs.msrv-command != '"'"''"'"'"' rust-ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Install minimum supported Rust").with.toolchain == "${{ inputs.msrv-toolchain }}"' rust-ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Check minimum supported Rust").if == "inputs.msrv-toolchain != '"'"''"'"' && inputs.msrv-command != '"'"''"'"'"' rust-ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Check minimum supported Rust").env.MSRV_COMMAND == "${{ inputs.msrv-command }}"' rust-ci.yml
+  check '.jobs.rustsec.name == "RustSec advisory audit"' rust-ci.yml
+  check '.jobs.rustsec.if == "inputs.audit-command != '"'"''"'"' && (github.event_name == '"'"'schedule'"'"' || github.event_name == '"'"'workflow_dispatch'"'"')"' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Install cargo-audit").run == "cargo install cargo-audit --version 0.22.2 --locked"' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Audit the committed dependency graph").env.AUDIT_COMMAND == "${{ inputs.audit-command }}"' rust-ci.yml
   check '.jobs.quality.steps[] | select(.name == "Prepare musl package smoke target").if == "inputs.package-smoke-command != '"'"''"'"' && inputs.package-smoke-musl-target != '"'"''"'"'"' rust-ci.yml
   check '.jobs.quality.steps[] | select(.name == "Prepare musl package smoke target").with."rust-target" == "${{ inputs.package-smoke-musl-target }}"' rust-ci.yml
 
@@ -140,6 +156,7 @@ contracts() {
   check '.jobs.shell-smoke.with.termux-command | contains("curl --version >/dev/null")' ci.yml
   check '.jobs.shell-smoke.with.shellcheck-inventory-path == ".github/shellcheck-files.txt"' ci.yml
   check '.jobs.quality.steps[] | select(.name == "Test shared ShellCheck inventory action").run == "test/shellcheck-action-test"' ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Test consumer synchronization").run == "test/consumer-sync-test"' ci.yml
   check '.jobs.quality.steps[] | select(.name == "Install actionlint").run | contains("--retry 3 --retry-all-errors --retry-delay 1")' ci.yml
   check '.jobs.quality.steps[] | select(.name == "Install zizmor").env.ZIZMOR_VERSION == "1.29.0"' ci.yml
   check '.jobs.quality.steps[] | select(.name == "Lint shell inventory").uses == "./.github/actions/shellcheck-inventory"' ci.yml
@@ -162,6 +179,17 @@ contracts() {
   check '.jobs.required.steps[0].run | contains("test \"$MATRIX_CONTRACT_RESULT\" = success")' ci.yml
   check '.jobs.required.steps[0].run | contains("test \"$ANDROID_TOOLCHAIN_RESULT\" = success")' ci.yml
   check '.jobs.required.steps[0].run | contains("test \"$QUALITY_RESULT\" = success")' ci.yml
+
+  # The consumer gate intentionally has no configurable paths: one canonical
+  # lock plus release.conf auto-detection gives the fleet a smaller contract
+  # and removes a caller-controlled bypass for vendored-script verification.
+  yq -e '.inputs == null and
+    .runs.steps[0].env.ACTION_REF == "${{ github.action_ref }}" and
+    .runs.steps[0].run == "$GITHUB_ACTION_PATH/verify.sh"' \
+    "$root/.github/actions/verify-consumer-sync/action.yml" >/dev/null || {
+    echo 'workflow contract failed: verify-consumer-sync must stay zero-input and self-identifying' >&2
+    return 1
+  }
 
   for workflow in _shell-platforms.yml _rust-platforms.yml _termux-ci.yml; do
     check '.jobs.required == null' "$workflow"
