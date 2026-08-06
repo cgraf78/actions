@@ -27,9 +27,9 @@ fi
 sudo_if_available apt-get update
 sudo_if_available apt-get install -y --no-install-recommends musl-tools
 
-# The release matrix installs its target through the toolchain action, but the
-# CI package smoke builds a musl archive on a host whose toolchain was installed
-# for the native target only. Adding it here is idempotent either way.
+# Direct action callers may ask this helper to add a target as well as the host
+# linker. The reusable CI and release workflows normally install their targets
+# separately, so they leave RUST_TARGET empty and use only the linker behavior.
 if [ -n "${RUST_TARGET:-}" ]; then
   rustup target add "$RUST_TARGET"
 fi
