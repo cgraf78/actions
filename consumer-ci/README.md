@@ -37,13 +37,27 @@ and every other `cgraf78/actions` ref must agree with the lock. A tracked
 contract; the sync command creates the paired managed manifest, and CI rejects
 deletion of only one marker. Repositories with neither marker get only the
 universal version-lock check.
-The verification job must check out the consumer before invoking the action:
+Run the verifier in a dedicated job named `cgraf78/actions sync`, and require
+that check on the consumer's protected default branch. Keeping one stable name
+across repositories makes the protection rule recognizable, while keeping the
+job separate from product CI makes its narrow ownership clear: it checks only
+that generated references still match the reviewed lock. The job must check out
+the consumer before invoking the action:
 
 ```yaml
-- uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-  with:
-    persist-credentials: false
-- uses: cgraf78/actions/.github/actions/verify-consumer-sync@FULL_COMMIT_SHA
+jobs:
+  actions-sync:
+    name: cgraf78/actions sync
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      # GitHub cannot read the lock before resolving `uses:`, so this action
+      # proves every cgraf78/actions literal still matches the reviewed lock.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cgraf78/actions/.github/actions/verify-consumer-sync@FULL_COMMIT_SHA
 ```
 
 Dependabot cannot update the custom lock or vendored files, so an ordinary
