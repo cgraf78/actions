@@ -111,12 +111,15 @@ contracts() {
   check '.jobs.termux.with.profiles == "runtime"' rust-ci.yml
   check '.on.workflow_call.inputs.concurrency-scope.default == "default"' rust-ci.yml
 
-  # musl prerequisites are opt-in in both workflows. A default that turned them
-  # on would add an apt round trip to every consumer, including the ones whose
-  # crates link musl without a musl linker.
+  # Installing a Rust target is common to every package smoke. Installing the
+  # host musl linker remains a separate opt-in so pure-Rust consumers do not
+  # pay for an apt round trip they cannot use.
   check '.on.workflow_call.inputs.package-smoke-musl-target.default == ""' rust-ci.yml
   check '.on.workflow_call.inputs.package-smoke-musl-target.required == false' rust-ci.yml
   check '.on.workflow_call.inputs.package-smoke-musl-target.type == "string"' rust-ci.yml
+  check '.on.workflow_call.inputs.package-smoke-install-musl-tools.default == false' rust-ci.yml
+  check '.on.workflow_call.inputs.package-smoke-install-musl-tools.required == false' rust-ci.yml
+  check '.on.workflow_call.inputs.package-smoke-install-musl-tools.type == "boolean"' rust-ci.yml
   check '.on.workflow_call.inputs.doc-command.default == "RUSTDOCFLAGS='"'"'-D missing-docs'"'"' cargo doc --locked --no-deps"' rust-ci.yml
   check '.on.workflow_call.inputs.audit-command.default == "cargo audit --file Cargo.lock"' rust-ci.yml
   check '.on.workflow_call.inputs.msrv-toolchain.default == ""' rust-ci.yml
@@ -131,8 +134,12 @@ contracts() {
   check '.jobs.rustsec.if == "inputs.audit-command != '"'"''"'"' && (github.event_name == '"'"'schedule'"'"' || github.event_name == '"'"'workflow_dispatch'"'"')"' rust-ci.yml
   check '.jobs.rustsec.steps[] | select(.name == "Install cargo-audit").run == "cargo install cargo-audit --version 0.22.2 --locked"' rust-ci.yml
   check '.jobs.rustsec.steps[] | select(.name == "Audit the committed dependency graph").env.AUDIT_COMMAND == "${{ inputs.audit-command }}"' rust-ci.yml
-  check '.jobs.quality.steps[] | select(.name == "Prepare musl package smoke target").if == "inputs.package-smoke-command != '"'"''"'"' && inputs.package-smoke-musl-target != '"'"''"'"'"' rust-ci.yml
-  check '.jobs.quality.steps[] | select(.name == "Prepare musl package smoke target").with."rust-target" == "${{ inputs.package-smoke-musl-target }}"' rust-ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Add package smoke Rust target").if == "inputs.package-smoke-command != '"'"''"'"' && inputs.package-smoke-musl-target != '"'"''"'"'"' rust-ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Add package smoke Rust target").env.PACKAGE_SMOKE_MUSL_TARGET == "${{ inputs.package-smoke-musl-target }}"' rust-ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Add package smoke Rust target").run == "rustup target add \"$PACKAGE_SMOKE_MUSL_TARGET\""' rust-ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Install package smoke musl linker").if == "inputs.package-smoke-command != '"'"''"'"' && inputs.package-smoke-musl-target != '"'"''"'"' && inputs.package-smoke-install-musl-tools"' rust-ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Install package smoke musl linker").uses == "cgraf78/actions/.github/actions/musl-build-prereqs@19065e7ecf3edda7386b6d867482d7ee179b875d"' rust-ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Smoke release package").env.RUST_TARGET == "${{ inputs.package-smoke-musl-target }}"' rust-ci.yml
 
   check '.on.workflow_call.inputs.install-musl-tools.default == false' rust-release.yml
   check '.on.workflow_call.inputs.install-musl-tools.required == false' rust-release.yml
@@ -167,6 +174,9 @@ contracts() {
   check '.jobs.shell-smoke.with.matrix-set == "auto"' ci.yml
   check '.jobs.rust-smoke.with.matrix-set == "auto"' ci.yml
   check '.jobs.rust-smoke.with.android-package-smoke-command != null' ci.yml
+  check '.jobs.rust-smoke.with.package-smoke-musl-target == "x86_64-unknown-linux-musl"' ci.yml
+  check '.jobs.rust-smoke.with.package-smoke-command | contains("cargo build --release --locked --target \"$RUST_TARGET\"")' ci.yml
+  check '.jobs.rust-smoke.with | has("package-smoke-install-musl-tools") | not' ci.yml
   check '.jobs.rust-smoke.with.termux-host-command != null' ci.yml
   check '.jobs.rust-smoke.with.termux-host-command | contains("--target-dir \"$RUNNER_TEMP/actions-rust-smoke-target\"")' ci.yml
   check '.jobs.rust-smoke.with.termux-command != null' ci.yml

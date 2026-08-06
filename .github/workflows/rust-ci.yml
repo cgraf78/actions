@@ -72,10 +72,15 @@ on:
         type: string
         default: cargo audit --file Cargo.lock
       package-smoke-musl-target:
-        description: Rust musl target to prepare before package-smoke-command. Installs the musl linker toolchain and adds the target. Empty disables it.
+        description: Rust musl target to add before package-smoke-command. Empty disables target preparation.
         required: false
         type: string
         default: ""
+      package-smoke-install-musl-tools:
+        description: Install the host musl linker for package smoke. Needed only when a crate links native code.
+        required: false
+        type: boolean
+        default: false
       package-smoke-setup-command:
         description: Optional setup command to run before package-smoke-command on the Ubuntu quality gate.
         required: false
@@ -202,14 +207,19 @@ jobs:
           cd "$WORKING_DIRECTORY"
           eval "$BUILD_COMMAND"
 
-      # The quality gate installs the host toolchain only, so a musl package
-      # smoke needs its target added here. Consumers were each carrying this
-      # plus the musl linker install inline.
-      - name: Prepare musl package smoke target
+      # Every cross-build needs the Rust target, but pure-Rust crates use Rust's
+      # bundled musl support and do not need a host linker package. Keep those
+      # concerns separate so only native-code consumers pay for an apt install.
+      - name: Add package smoke Rust target
         if: inputs.package-smoke-command != '' && inputs.package-smoke-musl-target != ''
+        shell: bash
+        env:
+          PACKAGE_SMOKE_MUSL_TARGET: ${{ inputs.package-smoke-musl-target }}
+        run: rustup target add "$PACKAGE_SMOKE_MUSL_TARGET"
+
+      - name: Install package smoke musl linker
+        if: inputs.package-smoke-command != '' && inputs.package-smoke-musl-target != '' && inputs.package-smoke-install-musl-tools
         uses: cgraf78/actions/.github/actions/musl-build-prereqs@19065e7ecf3edda7386b6d867482d7ee179b875d
-        with:
-          rust-target: ${{ inputs.package-smoke-musl-target }}
 
       - name: Prepare package smoke
         if: inputs.package-smoke-command != '' && inputs.package-smoke-setup-command != ''
@@ -221,7 +231,7 @@ jobs:
           WORKING_DIRECTORY: ${{ inputs.working-directory }}
         # Keep package-specific prerequisites caller-owned. The shared workflow
         # provides a stable execution point but does not know whether a repo
-        # needs musl tools, signing tools, fixture data, or nothing at all.
+        # needs signing tools, generated fixture data, or nothing at all.
         run: |
           cd "$WORKING_DIRECTORY"
           eval "$PACKAGE_SMOKE_SETUP_COMMAND"
@@ -233,6 +243,7 @@ jobs:
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
           PACKAGE_SMOKE_COMMAND: ${{ inputs.package-smoke-command }}
+          RUST_TARGET: ${{ inputs.package-smoke-musl-target }}
           WORKING_DIRECTORY: ${{ inputs.working-directory }}
         # This is deliberately a command hook rather than a shared packager.
         # Archive layout, binary names, metadata, signatures, and install smoke

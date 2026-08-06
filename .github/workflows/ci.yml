@@ -41,6 +41,13 @@ jobs:
         binary="target/$RUST_TARGET/debug/actions-rust-smoke"
         readelf -h "$binary" | grep -Fq AArch64
         readelf -l "$binary" | grep -Fq /system/bin/linker64
+      # Exercise the pure-Rust path deliberately: the target should be added,
+      # while the host musl linker package remains skipped.
+      package-smoke-musl-target: x86_64-unknown-linux-musl
+      package-smoke-command: |
+        cargo build --release --locked --target "$RUST_TARGET"
+        readelf -h "target/$RUST_TARGET/release/actions-rust-smoke" |
+          grep -Fq 'UNIX - System V'
       termux-host-command: |
         cargo build --locked --target "$RUST_TARGET" \
           --target-dir "$RUNNER_TEMP/actions-rust-smoke-target"

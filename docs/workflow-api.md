@@ -359,7 +359,8 @@ Ubuntu quality gate.
 | `build-command`               | `cargo build --release --locked`                                    | Ubuntu quality build command. Empty disables the step.                                                              |
 | `doc-command`                 | `RUSTDOCFLAGS='-D missing-docs' cargo doc --locked --no-deps`       | Ubuntu quality docs command. Empty disables the step.                                                               |
 | `audit-command`               | `cargo audit --file Cargo.lock`                                     | Scheduled/manual RustSec command. Empty disables the advisory job.                                                  |
-| `package-smoke-musl-target`   | `""`                                                                | Rust musl target to prepare before package smoke. Installs the musl linker toolchain and adds the target. Empty disables it. |
+| `package-smoke-musl-target`   | `""`                                                                | Rust musl target to add before package smoke. Empty disables target preparation.                                               |
+| `package-smoke-install-musl-tools` | `false`                                                        | Install the host musl linker before package smoke. Needed only for crates that link native code.                               |
 | `package-smoke-setup-command` | `""`                                                                | Optional setup command run immediately before package smoke.                                                        |
 | `package-smoke-command`       | `""`                                                                | Optional caller-owned command that builds and validates a representative release artifact. Empty disables the step. |
 | `android-package-smoke-command` | required                                                          | Caller-owned command that cross-builds and validates the Android aarch64 release artifact.                           |
@@ -393,7 +394,7 @@ aggregate whenever the audit is enabled for that event.
 
 ### Package Smoke
 
-### musl prerequisites
+#### musl prerequisites
 
 Rust ships the musl libc, but a crate with a C dependency still needs a musl
 linker. Both workflows expose that install as an opt-in rather than doing it
@@ -401,8 +402,9 @@ automatically, because repos whose crates are pure Rust link musl targets
 without it and should not pay for an apt round trip.
 
 - `rust-ci.yml`: set `package-smoke-musl-target` to the target the package
-  smoke builds. The quality gate installs the host toolchain only, so this also
-  adds the target with rustup.
+  smoke builds. The quality gate installs the host toolchain only, so this adds
+  the target with rustup. Set `package-smoke-install-musl-tools: true` only
+  when the crate links native code.
 - `rust-release.yml`: set `install-musl-tools: true`. The release matrix already
   installs each row's target, so only the linker is missing, and the step is
   skipped on non-musl rows.
@@ -410,20 +412,14 @@ without it and should not pay for an apt round trip.
 `package-smoke-command` is a generic execution point, not a shared packaging
 implementation. Release archive names, binary names, metadata, checksums,
 signing, install scripts, and smoke assertions belong in the caller repository.
+When `package-smoke-musl-target` is set, the workflow exposes that same value
+to the command as `RUST_TARGET`; callers should use the environment value
+instead of repeating the target literal.
 
-Use `package-smoke-setup-command` for prerequisites such as extra Rust targets,
-system linkers, or signing tools:
-
-```yaml
-with:
-  package-smoke-setup-command: |
-    rustup target add x86_64-unknown-linux-musl
-    sudo apt-get update
-    sudo apt-get install -y musl-tools
-  package-smoke-command: |
-    scripts/package-release.sh x86_64-unknown-linux-musl linux-x86_64-musl
-    scripts/smoke-release.sh linux-x86_64-musl
-```
+Use `package-smoke-setup-command` only for product-specific prerequisites such
+as generated fixture data or signing tools. Rust-target installation and the
+optional musl linker belong to the dedicated inputs above; repeating either in
+the setup hook would create a second policy copy.
 
 Use `android-package-smoke-command` to continuously validate the Android/Bionic
 archive. The shared workflow installs `aarch64-linux-android`, configures the

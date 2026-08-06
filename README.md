@@ -110,9 +110,12 @@ runs the locked all-targets/all-features check last so it cannot change the
 compiler used by the stable checks. Repos that need generated files, extra
 tooling, or a nested crate path can use `setup-command` and
 `working-directory` without forking the shared workflow. Binary repos can use
-`build-command`, `package-smoke-setup-command`, and `package-smoke-command` to
+`build-command`, `package-smoke-musl-target`, and `package-smoke-command` to
 validate release artifacts while keeping package layout and smoke assertions in
-the product repository. `termux-command` overrides the mandatory Shell
+the product repository. Native-code crates can additionally opt into
+`package-smoke-install-musl-tools`; pure-Rust crates should not pay for that
+host package. `package-smoke-setup-command` remains available for unrelated
+product prerequisites. `termux-command` overrides the mandatory Shell
 Android runtime command when needed. Shell callers can use `termux-profiles` to
 override Android prerequisites without changing conventional platforms. Start
 with `base` when tests need Git or curl, or `runtime` for lightweight commands
