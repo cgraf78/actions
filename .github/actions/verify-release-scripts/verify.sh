@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Match the sync command's cross-platform manifest ordering regardless of the
+# runner's configured locale.
+export LC_ALL=C
+
 # Verify that a consumer repository's vendored release scripts still match the
 # shared copy shipped with this action.
 #
@@ -20,25 +24,32 @@ if [[ ! -d "$shared_dir" ]]; then
 fi
 
 scripts_dir=${SCRIPTS_DIR:-scripts}
-if [[ ! -d "$scripts_dir" ]]; then
-  printf 'verify-release-scripts: consumer scripts dir not found: %s\n' "$scripts_dir" >&2
+if [[ ! -d "$scripts_dir" || -L "$scripts_dir" ]]; then
+  printf 'verify-release-scripts: consumer scripts dir must be a regular directory, not a symlink: %s\n' \
+    "$scripts_dir" >&2
   exit 1
 fi
 
 status=0
 checked=0
+manifest_name=.release-scripts.manifest
+consumer_manifest="$scripts_dir/$manifest_name"
+expected_manifest=$(mktemp)
+trap 'rm -f "$expected_manifest"' EXIT
 
 shopt -s nullglob
 for shared in "$shared_dir"/*.sh; do
   name=$(basename "$shared")
   # sync.sh is maintainer tooling for the actions repo, never vendored.
   [[ "$name" == sync.sh ]] && continue
+  printf '%s\n' "$name" >>"$expected_manifest"
 
   vendored="$scripts_dir/$name"
   checked=$((checked + 1))
 
-  if [[ ! -f "$vendored" ]]; then
-    printf 'verify-release-scripts: missing vendored script: %s\n' "$vendored" >&2
+  if [[ ! -f "$vendored" || -L "$vendored" ]]; then
+    printf 'verify-release-scripts: missing vendored script or not a regular non-symlink file: %s\n' \
+      "$vendored" >&2
     status=1
     continue
   fi
@@ -65,15 +76,37 @@ if [[ "$checked" -eq 0 ]]; then
   exit 1
 fi
 
+# Content comparison proves today's files match; the managed manifest also
+# proves a file removed upstream did not survive indefinitely in the consumer.
+# Repo-owned neighbors remain outside the manifest and are intentionally
+# ignored, so this check does not guess ownership from a broad filename glob.
+if [[ ! -f "$consumer_manifest" || -L "$consumer_manifest" ]]; then
+  printf 'verify-release-scripts: missing managed manifest: %s\n' \
+    "$consumer_manifest" >&2
+  status=1
+elif [[ -x "$consumer_manifest" ]]; then
+  printf 'verify-release-scripts: managed manifest must not be executable: %s\n' \
+    "$consumer_manifest" >&2
+  status=1
+elif ! diff -u "$expected_manifest" "$consumer_manifest" >/dev/null 2>&1; then
+  printf 'verify-release-scripts: managed filename set differs: %s\n' \
+    "$consumer_manifest" >&2
+  diff -u --label shared/managed-files --label "$consumer_manifest" \
+    "$expected_manifest" "$consumer_manifest" >&2 || true
+  status=1
+fi
+
 if [[ "$status" -ne 0 ]]; then
   cat >&2 <<EOF
 
 Vendored release scripts are out of date. From a cgraf78/actions checkout at the
 commit this repository pins, run:
 
-  release-scripts/sync.sh <this-repo>/$scripts_dir
+  consumer-ci/sync.sh <this-repo>
 
-then commit the result alongside the pinned-SHA bump.
+That one command keeps the repository's lock, literal workflow references, and
+vendored release scripts on the same reviewed actions commit. Commit all of its
+output alongside the dependency bump.
 EOF
   exit 1
 fi

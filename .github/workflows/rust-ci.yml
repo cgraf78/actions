@@ -13,6 +13,16 @@ on:
         required: false
         type: string
         default: stable
+      msrv-toolchain:
+        description: Minimum supported Rust toolchain to check after stable quality checks. Empty disables it.
+        required: false
+        type: string
+        default: ""
+      msrv-command:
+        description: Cargo command for the optional minimum-supported-Rust check. Empty disables it.
+        required: false
+        type: string
+        default: cargo check --locked --all-targets --all-features
       matrix-set:
         description: Platform matrix to run. Supported values are auto, core, and full.
         required: false
@@ -52,7 +62,15 @@ on:
         description: Documentation command for the Ubuntu quality gate. Empty disables it.
         required: false
         type: string
-        default: cargo doc --locked --no-deps
+        # All current Rust consumers treat undocumented public APIs as CI
+        # failures. Keeping that fleet policy here prevents one caller from
+        # silently losing the lint when its local command override drifts.
+        default: RUSTDOCFLAGS='-D missing-docs' cargo doc --locked --no-deps
+      audit-command:
+        description: Scheduled/manual RustSec command. Empty disables advisory auditing.
+        required: false
+        type: string
+        default: cargo audit --file Cargo.lock
       package-smoke-musl-target:
         description: Rust musl target to prepare before package-smoke-command. Installs the musl linker toolchain and adds the target. Empty disables it.
         required: false
@@ -235,6 +253,61 @@ jobs:
           cd "$WORKING_DIRECTORY"
           eval "$DOC_COMMAND"
 
+      # Keep the MSRV switch last: rust-toolchain changes the default compiler
+      # for later steps. Running it after stable fmt, Clippy, packaging, and
+      # docs gives callers one optional compatibility check without duplicating
+      # the entire quality job or weakening the existing required check.
+      - name: Install minimum supported Rust
+        if: inputs.msrv-toolchain != '' && inputs.msrv-command != ''
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: ${{ inputs.msrv-toolchain }}
+
+      - name: Check minimum supported Rust
+        if: inputs.msrv-toolchain != '' && inputs.msrv-command != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          MSRV_COMMAND: ${{ inputs.msrv-command }}
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        run: |-
+          cd "$WORKING_DIRECTORY"
+          eval "$MSRV_COMMAND"
+
+  rustsec:
+    name: RustSec advisory audit
+    # Advisory data changes independently of a pull request. Restrict this
+    # network-drift check to scheduled/manual runs so ordinary PR results stay
+    # tied to the committed lockfile, while every Rust consumer still gets the
+    # same recurring vulnerability signal without copying a custom job.
+    if: inputs.audit-command != '' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: ${{ inputs.rust-toolchain }}
+
+      # Crates.io releases are immutable. Pinning the tool keeps the runner
+      # behavior reproducible while `cargo audit` deliberately refreshes the
+      # advisory database that this scheduled job exists to observe.
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
+      - name: Audit the committed dependency graph
+        shell: bash
+        env:
+          AUDIT_COMMAND: ${{ inputs.audit-command }}
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        run: |-
+          cd "$WORKING_DIRECTORY"
+          eval "$AUDIT_COMMAND"
+
   android-package:
     name: Package / Android aarch64
     runs-on: ubuntu-24.04
@@ -280,12 +353,17 @@ jobs:
   required:
     name: Required
     if: ${{ always() }}
-    needs: [platforms, quality, android-package, termux]
+    needs: [platforms, quality, rustsec, android-package, termux]
     runs-on: ubuntu-24.04
     env:
       ANDROID_PACKAGE_RESULT: ${{ needs.android-package.result }}
       PLATFORMS_RESULT: ${{ needs.platforms.result }}
       QUALITY_RESULT: ${{ needs.quality.result }}
+      # A deliberately disabled optional job is healthy only when skipped; an
+      # enabled advisory audit is healthy only when successful. Encode that
+      # distinction here so consumers keep one stable required-check context.
+      RUSTSEC_ENABLED: ${{ inputs.audit-command != '' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+      RUSTSEC_RESULT: ${{ needs.rustsec.result }}
       TERMUX_RESULT: ${{ needs.termux.result }}
     steps:
       - name: Require successful Rust CI
@@ -293,10 +371,17 @@ jobs:
         run: |-
           printf 'Platforms: %s\n' "$PLATFORMS_RESULT"
           printf 'Quality: %s\n' "$QUALITY_RESULT"
+          printf 'RustSec advisory audit: %s (enabled: %s)\n' \
+            "$RUSTSEC_RESULT" "$RUSTSEC_ENABLED"
           printf 'Android package: %s\n' "$ANDROID_PACKAGE_RESULT"
           printf 'Termux runtime: %s\n' "$TERMUX_RESULT"
 
           test "$PLATFORMS_RESULT" = success
           test "$QUALITY_RESULT" = success
+          if [[ "$RUSTSEC_ENABLED" == true ]]; then
+            test "$RUSTSEC_RESULT" = success
+          else
+            test "$RUSTSEC_RESULT" = skipped
+          fi
           test "$ANDROID_PACKAGE_RESULT" = success
           test "$TERMUX_RESULT" = success

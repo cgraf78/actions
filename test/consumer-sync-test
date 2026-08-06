@@ -1,0 +1,300 @@
+#!/usr/bin/env bash
+
+set -uo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() {
+  printf 'consumer-sync-test: %s\n' "$1" >&2
+  exit 1
+}
+
+# Exercise the command from a clean, committed provider checkout. The commit is
+# the dependency identity written into the consumer lock; using this fixture
+# also lets the suite prove that dirty provider bytes are rejected later.
+actions_source="$tmp/actions"
+mkdir -p "$actions_source/.github/actions"
+cp -R "$root/consumer-ci" "$actions_source/consumer-ci"
+cp -R "$root/release-scripts" "$actions_source/release-scripts"
+cp -R "$root/.github/actions/verify-consumer-sync" \
+  "$actions_source/.github/actions/verify-consumer-sync"
+cp -R "$root/.github/actions/verify-release-scripts" \
+  "$actions_source/.github/actions/verify-release-scripts"
+git -C "$actions_source" init --quiet --template=''
+git -C "$actions_source" config core.hooksPath /dev/null
+git -C "$actions_source" add .
+git -C "$actions_source" -c user.email=t@example.com -c user.name=Test \
+  -c commit.gpgsign=false commit --quiet -m fixture
+
+sync="$actions_source/consumer-ci/sync.sh"
+verify="$actions_source/.github/actions/verify-consumer-sync/verify.sh"
+
+consumer="$tmp/consumer"
+mkdir -p "$consumer/.github/workflows" "$consumer/scripts" \
+  "$consumer/tools/example-action"
+git -C "$consumer" init --quiet --template=''
+git -C "$consumer" config core.hooksPath /dev/null
+
+cat >"$consumer/.github/workflows/ci.yml" <<'YAML'
+jobs:
+  rust:
+    uses: cgraf78/actions/.github/workflows/rust-ci.yml@1111111111111111111111111111111111111111
+  shell:
+    uses: cgraf78/actions/.github/workflows/shell-ci.yml@main
+  sync:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: cgraf78/actions/.github/actions/verify-consumer-sync@2222222222222222222222222222222222222222
+  flow-style:
+    runs-on: ubuntu-24.04
+    steps: [{uses: cgraf78/actions/one@4444444444444444444444444444444444444444}, {uses: cgraf78/actions/two@5555555555555555555555555555555555555555}]
+  flow-with:
+    runs-on: ubuntu-24.04
+    steps: [{uses: cgraf78/actions/three@9999999999999999999999999999999999999999, with: {flag: true}}]
+YAML
+cat >"$consumer/.github/workflows/quoted.yml" <<'YAML'
+jobs:
+  quoted:
+    uses: "cgraf78/actions/.github/workflows/shell-ci.yml@6666666666666666666666666666666666666666,evil"
+YAML
+cat >"$consumer/tools/example-action/action.yml" <<'YAML'
+name: Example
+runs:
+  using: composite
+  steps:
+    - uses: 'cgraf78/actions/.github/actions/example@7777777777777777777777777777777777777777'
+YAML
+printf 'stale\n' >"$consumer/scripts/package-release.sh"
+printf 'RELEASE_ENV_PREFIX=TOOL\n' >"$consumer/scripts/release.conf"
+git -C "$consumer" add .
+
+"$sync" "$consumer" >/dev/null ||
+  fail "sync command failed"
+
+want=$(git -C "$actions_source" rev-parse HEAD)
+got=$(tr -d '\n' <"$consumer/.github/cgraf78-actions.lock")
+[[ "$got" == "$want" ]] ||
+  fail "lock contains $got, want $want"
+
+if git -C "$consumer" grep -n 'cgraf78/actions/' -- . |
+  grep -Fv "@$want" >/dev/null; then
+  fail "sync left a cgraf78/actions reference at another ref"
+fi
+if grep -Fq ',evil' "$consumer/.github/workflows/quoted.yml"; then
+  fail "sync left a suffix inside a quoted actions ref"
+fi
+if ! grep -Fq "@$want, with:" "$consumer/.github/workflows/ci.yml"; then
+  fail "sync damaged the comma after a flow-style uses value"
+fi
+
+diff -u "$actions_source/release-scripts/package-release.sh" \
+  "$consumer/scripts/package-release.sh" >/dev/null ||
+  fail "sync did not refresh release scripts"
+
+git -C "$consumer" add .
+GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
+  GITHUB_WORKSPACE="$consumer" \
+  ACTION_REF="$want" \
+  "$verify" >/dev/null ||
+  fail "freshly synchronized consumer did not verify"
+
+chmod +x "$consumer/.github/cgraf78-actions.lock"
+git -C "$consumer" add .
+if GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
+  GITHUB_WORKSPACE="$consumer" \
+  ACTION_REF="$want" \
+  "$verify" >/dev/null 2>&1; then
+  fail "executable consumer lock unexpectedly verified"
+fi
+"$sync" "$consumer" >/dev/null ||
+  fail "sync did not restore the consumer lock mode"
+git -C "$consumer" add .
+
+mv "$consumer/.github/cgraf78-actions.lock" \
+  "$consumer/.github/cgraf78-actions.lock-target"
+ln -s cgraf78-actions.lock-target \
+  "$consumer/.github/cgraf78-actions.lock"
+git -C "$consumer" add .
+if GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
+  GITHUB_WORKSPACE="$consumer" \
+  ACTION_REF="$want" \
+  "$verify" >/dev/null 2>&1; then
+  fail "symlinked consumer lock unexpectedly verified"
+fi
+rm "$consumer/.github/cgraf78-actions.lock" \
+  "$consumer/.github/cgraf78-actions.lock-target"
+"$sync" "$consumer" >/dev/null ||
+  fail "sync did not restore a regular consumer lock"
+git -C "$consumer" add .
+
+# Quoted YAML values can legally contain punctuation that is not a flow-style
+# delimiter. The verifier must inspect through the matching quote, and sync
+# must replace the whole ref rather than only a matching SHA prefix.
+sed "s/@${want}\"/@${want},evil\"/" \
+  "$consumer/.github/workflows/quoted.yml" \
+  >"$consumer/.github/workflows/quoted.yml.tmp"
+mv "$consumer/.github/workflows/quoted.yml.tmp" \
+  "$consumer/.github/workflows/quoted.yml"
+if GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
+  GITHUB_WORKSPACE="$consumer" \
+  ACTION_REF="$want" \
+  "$verify" >/dev/null 2>&1; then
+  fail "quoted actions ref with a suffix unexpectedly verified"
+fi
+"$sync" "$consumer" >/dev/null ||
+  fail "sync did not repair the complete quoted actions ref"
+if grep -Fq ',evil' "$consumer/.github/workflows/quoted.yml"; then
+  fail "quoted actions ref repair left its old suffix"
+fi
+git -C "$consumer" add .
+
+out=$(GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
+  GITHUB_WORKSPACE="$consumer" \
+  "$verify" 2>&1) &&
+  fail "missing verifier ref unexpectedly passed"
+if [[ "$out" != *"missing action ref"* ]]; then
+  fail "missing verifier ref did not explain the failure"
+fi
+
+# A flow-style sequence can contain multiple step mappings on one physical
+# line. Drift in the second use must not hide behind a matching first use.
+sed "s/@${want}}]/@8888888888888888888888888888888888888888}]/" \
+  "$consumer/.github/workflows/ci.yml" \
+  >"$consumer/.github/workflows/ci.yml.tmp"
+mv "$consumer/.github/workflows/ci.yml.tmp" \
+  "$consumer/.github/workflows/ci.yml"
+if GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
+  GITHUB_WORKSPACE="$consumer" \
+  ACTION_REF="$want" \
+  "$verify" >/dev/null 2>&1; then
+  fail "second mixed reference on one line unexpectedly verified"
+fi
+"$sync" "$consumer" >/dev/null ||
+  fail "sync did not repair the second reference on one line"
+git -C "$consumer" add .
+
+out=$(GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
+  GITHUB_WORKSPACE="$consumer" \
+  ACTION_REF=4444444444444444444444444444444444444444 \
+  "$verify" 2>&1) &&
+  fail "verifier ref differing from the lock unexpectedly passed"
+if [[ "$out" != *"consumer-ci/sync.sh"* ]]; then
+  fail "verifier-ref mismatch omitted the synchronization command"
+fi
+
+sed \
+  '/rust-ci\.yml/s/@[0-9a-f]\{40\}$/@3333333333333333333333333333333333333333/' \
+  "$consumer/.github/workflows/ci.yml" >"$consumer/.github/workflows/ci.yml.tmp"
+mv "$consumer/.github/workflows/ci.yml.tmp" \
+  "$consumer/.github/workflows/ci.yml"
+if GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
+  GITHUB_WORKSPACE="$consumer" \
+  ACTION_REF="$want" \
+  "$verify" >/dev/null 2>&1; then
+  fail "mixed workflow pins unexpectedly verified"
+fi
+
+# Shared workflows are useful outside release-producing repositories. The
+# absence of a tracked release.conf must leave the universal version-lock check
+# enabled without inventing a release-script requirement.
+plain_consumer="$tmp/plain-consumer"
+mkdir -p "$plain_consumer/.github/workflows"
+git -C "$plain_consumer" init --quiet --template=''
+cat >"$plain_consumer/.github/workflows/ci.yml" <<'YAML'
+jobs:
+  shell:
+    uses: cgraf78/actions/.github/workflows/shell-ci.yml@main
+YAML
+git -C "$plain_consumer" add .
+"$sync" "$plain_consumer" >/dev/null ||
+  fail "consumer without release scripts did not synchronize"
+git -C "$plain_consumer" add .
+GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
+  GITHUB_WORKSPACE="$plain_consumer" \
+  ACTION_REF="$want" \
+  "$verify" >/dev/null ||
+  fail "consumer without release scripts did not verify"
+
+sed '/uses:/s/$/,evil/' "$plain_consumer/.github/workflows/ci.yml" \
+  >"$plain_consumer/.github/workflows/ci.yml.tmp"
+mv "$plain_consumer/.github/workflows/ci.yml.tmp" \
+  "$plain_consumer/.github/workflows/ci.yml"
+if GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
+  GITHUB_WORKSPACE="$plain_consumer" \
+  ACTION_REF="$want" \
+  "$verify" >/dev/null 2>&1; then
+  fail "ambiguous comma suffix in an unquoted block ref unexpectedly verified"
+fi
+sed '/uses:/s/,evil$//' "$plain_consumer/.github/workflows/ci.yml" \
+  >"$plain_consumer/.github/workflows/ci.yml.tmp"
+mv "$plain_consumer/.github/workflows/ci.yml.tmp" \
+  "$plain_consumer/.github/workflows/ci.yml"
+git -C "$plain_consumer" add .
+
+mkdir -p "$plain_consumer/scripts"
+printf 'release.sh\n' >"$plain_consumer/scripts/.release-scripts.manifest"
+git -C "$plain_consumer" add .
+out=$(GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
+  GITHUB_WORKSPACE="$plain_consumer" \
+  ACTION_REF="$want" \
+  "$verify" 2>&1) &&
+  fail "orphaned release manifest unexpectedly verified"
+if [[ "$out" != *"inconsistent release markers"* ]]; then
+  fail "orphaned release manifest did not explain its marker mismatch"
+fi
+if "$sync" "$plain_consumer" >/dev/null 2>&1; then
+  fail "sync accepted a release manifest without release.conf"
+fi
+
+# Preflight the consumer before writing its lock. A typo that points at a repo
+# with no actions dependency should fail without leaving a misleading partial
+# synchronization behind.
+empty_consumer="$tmp/empty-consumer"
+mkdir -p "$empty_consumer/.github/workflows"
+git -C "$empty_consumer" init --quiet --template=''
+printf 'name: unrelated\n' >"$empty_consumer/.github/workflows/ci.yml"
+git -C "$empty_consumer" add .
+if "$sync" "$empty_consumer" >/dev/null 2>&1; then
+  fail "consumer without cgraf78/actions references unexpectedly synchronized"
+fi
+if [[ -e "$empty_consumer/.github/cgraf78-actions.lock" ]]; then
+  fail "failed preflight left a partial consumer lock"
+fi
+
+ambiguous_consumer="$tmp/ambiguous-consumer"
+mkdir -p "$ambiguous_consumer/.github/workflows"
+git -C "$ambiguous_consumer" init --quiet --template=''
+cat >"$ambiguous_consumer/.github/workflows/ci.yml" <<'YAML'
+jobs:
+  ambiguous:
+    uses: cgraf78/actions/.github/workflows/shell-ci.yml@main,evil
+YAML
+git -C "$ambiguous_consumer" add .
+if "$sync" "$ambiguous_consumer" >/dev/null 2>&1; then
+  fail "ambiguous comma in an unquoted block ref unexpectedly synchronized"
+fi
+if [[ -e "$ambiguous_consumer/.github/cgraf78-actions.lock" ]]; then
+  fail "ambiguous ref preflight left a partial consumer lock"
+fi
+
+# Ignored bytes are absent from the provider commit just as surely as ordinary
+# untracked bytes. They must never enter a consumer whose lock names that commit.
+mkdir -p "$actions_source/.git/info"
+printf '/release-scripts/ignored-provider.sh\n' \
+  >>"$actions_source/.git/info/exclude"
+printf '#!/usr/bin/env bash\n' \
+  >"$actions_source/release-scripts/ignored-provider.sh"
+if "$sync" "$consumer" >/dev/null 2>&1; then
+  fail "ignored provider script unexpectedly synchronized under HEAD lock"
+fi
+rm "$actions_source/release-scripts/ignored-provider.sh"
+
+printf '\n# uncommitted provider edit\n' >>"$actions_source/consumer-ci/README.md"
+if "$sync" "$consumer" >/dev/null 2>&1; then
+  fail "dirty actions checkout unexpectedly synchronized a consumer"
+fi
+
+printf 'consumer-sync-test: ok\n'

@@ -9,8 +9,9 @@ local organization.
 - `shell-ci.yml` runs shell project tests across the shared platform matrix
   and in the official Termux app.
 - `bash32-ci.yml` runs Bash 3.2 compatibility checks.
-- `rust-ci.yml` runs Rust checks, tests, docs, clippy, builds, an Android
-  package smoke, and a real Termux runtime smoke.
+- `rust-ci.yml` runs Rust checks, tests, docs, Clippy, builds, optional MSRV
+  validation, an Android package smoke, a real Termux runtime smoke, and a
+  default-on scheduled/manual RustSec audit.
 - `termux-ci.yml` is the stable caller contract for running commands inside the
   official Termux app on an Android emulator.
 - `rust-release.yml` builds and publishes Rust release artifacts.

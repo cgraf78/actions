@@ -1,0 +1,11 @@
+name: Verify consumer synchronization
+description: Verify that every cgraf78/actions use and any vendored release scripts come from one locked commit.
+
+runs:
+  using: composite
+  steps:
+    - name: Verify consumer lock and derived files
+      shell: bash
+      env:
+        ACTION_REF: ${{ github.action_ref }}
+      run: "$GITHUB_ACTION_PATH/verify.sh"
