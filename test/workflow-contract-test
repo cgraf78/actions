@@ -132,7 +132,28 @@ contracts() {
   check '.jobs.quality.steps[] | select(.name == "Check minimum supported Rust").env.MSRV_COMMAND == "${{ inputs.msrv-command }}"' rust-ci.yml
   check '.jobs.rustsec.name == "RustSec advisory audit"' rust-ci.yml
   check '.jobs.rustsec.if == "inputs.audit-command != '"'"''"'"' && (github.event_name == '"'"'schedule'"'"' || github.event_name == '"'"'workflow_dispatch'"'"')"' rust-ci.yml
-  check '.jobs.rustsec.steps[] | select(.name == "Install cargo-audit").run == "cargo install cargo-audit --version 0.22.2 --locked"' rust-ci.yml
+  check '.jobs.rustsec.env.CARGO_AUDIT_VERSION == "0.22.2"' rust-ci.yml
+  check '[.jobs.rustsec.steps[] | select((.uses // "") | test("^actions/cache/(restore|save)@"))] | length == 2' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Restore pinned cargo-audit").uses == "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Restore pinned cargo-audit").id == "cargo-audit-cache"' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Restore pinned cargo-audit")."continue-on-error" == true' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Restore pinned cargo-audit").with.path == "~/.cargo/bin/cargo-audit"' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Restore pinned cargo-audit").with.key == "cargo-audit-bin-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.CARGO_AUDIT_VERSION }}"' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Install cargo-audit").if == "steps.cargo-audit-cache.outputs.cache-hit != '\''true'\''"' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Install cargo-audit").run | contains("rm -f \"$HOME/.cargo/bin/cargo-audit\"")' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Install cargo-audit").run | contains("cd \"$RUNNER_TEMP\"")' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Install cargo-audit").run | contains("cargo install cargo-audit --version \"$CARGO_AUDIT_VERSION\" --locked")' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Verify cargo-audit").run | contains("expected=\"cargo-audit $CARGO_AUDIT_VERSION\"")' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Verify cargo-audit").run | contains("actual=$(\"$HOME/.cargo/bin/cargo-audit\" --version)")' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Verify cargo-audit").run | contains("if [[ \"$actual\" != \"$expected\" ]]; then")' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Verify cargo-audit").run | contains("exit 1")' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Save pinned cargo-audit").uses == "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Save pinned cargo-audit").if == "steps.cargo-audit-cache.outputs.cache-hit != '\''true'\''"' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Save pinned cargo-audit").with.path == "~/.cargo/bin/cargo-audit"' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Save pinned cargo-audit").with.key == "cargo-audit-bin-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.CARGO_AUDIT_VERSION }}"' rust-ci.yml
+  # Save the verified executable before running caller policy. A legitimate
+  # advisory failure must not discard the expensive, policy-independent tool.
+  check '((.jobs.rustsec.steps | to_entries | .[] | select(.value.name == "Verify cargo-audit").key) < (.jobs.rustsec.steps | to_entries | .[] | select(.value.name == "Save pinned cargo-audit").key)) and ((.jobs.rustsec.steps | to_entries | .[] | select(.value.name == "Save pinned cargo-audit").key) < (.jobs.rustsec.steps | to_entries | .[] | select(.value.name == "Audit the committed dependency graph").key))' rust-ci.yml
   check '.jobs.rustsec.steps[] | select(.name == "Audit the committed dependency graph").env.AUDIT_COMMAND == "${{ inputs.audit-command }}"' rust-ci.yml
   check '.jobs.quality.steps[] | select(.name == "Add package smoke Rust target").if == "inputs.package-smoke-command != '"'"''"'"' && inputs.package-smoke-musl-target != '"'"''"'"'"' rust-ci.yml
   check '.jobs.quality.steps[] | select(.name == "Add package smoke Rust target").env.PACKAGE_SMOKE_MUSL_TARGET == "${{ inputs.package-smoke-musl-target }}"' rust-ci.yml
