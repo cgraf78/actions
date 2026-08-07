@@ -67,7 +67,7 @@ on:
         # silently losing the lint when its local command override drifts.
         default: RUSTDOCFLAGS='-D missing-docs' cargo doc --locked --no-deps
       audit-command:
-        description: Scheduled/manual RustSec command. Empty disables advisory auditing.
+        description: RustSec command run on every CI event. Empty disables advisory auditing.
         required: false
         type: string
         default: cargo audit --file Cargo.lock
@@ -288,11 +288,11 @@ jobs:
 
   rustsec:
     name: RustSec advisory audit
-    # Advisory data changes independently of a pull request. Restrict this
-    # network-drift check to scheduled/manual runs so ordinary PR results stay
-    # tied to the committed lockfile, while every Rust consumer still gets the
-    # same recurring vulnerability signal without copying a custom job.
-    if: inputs.audit-command != '' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    # Audit every committed lockfile before it can merge. Advisory data changes
+    # independently of source, but allowing a known-vulnerable graph through a
+    # PR and waiting for the nightly signal leaves main unnecessarily exposed.
+    # Callers with an exceptional policy can still disable this explicitly.
+    if: inputs.audit-command != ''
     runs-on: ubuntu-24.04
     env:
       CARGO_AUDIT_VERSION: 0.22.2
@@ -314,8 +314,8 @@ jobs:
       #
       # Do not add a restore prefix. The OS, architecture, exact immutable crate
       # release, and explicit cache epoch must all match before code is reused.
-      # Scheduled runs execute from the default branch; manually dispatched
-      # feature branches cannot populate a cache that the default branch reads.
+      # Pull requests may restore the default branch's exact cache. They do not
+      # save misses below, avoiding a duplicate cache scoped to a short-lived PR.
       - name: Restore pinned cargo-audit
         id: cargo-audit-cache
         # Cache availability is an optimization, not an audit prerequisite.
@@ -329,7 +329,7 @@ jobs:
       # Crates.io releases are immutable and --locked fixes the tool's own
       # dependency graph. Build outside the checkout so a consumer's local
       # Cargo configuration cannot influence the executable shared with future
-      # scheduled runs. A miss remains the complete source-build fallback, so
+      # runs. A miss remains the complete source-build fallback, so
       # cache service trouble costs time rather than weakening the audit.
       - name: Install cargo-audit
         if: steps.cargo-audit-cache.outputs.cache-hit != 'true'
@@ -357,7 +357,13 @@ jobs:
       # newly discovered advisory should fail the audit below without throwing
       # away the verified tool and forcing another three-minute build tomorrow.
       - name: Save pinned cargo-audit
-        if: steps.cargo-audit-cache.outputs.cache-hit != 'true'
+        if: >-
+          steps.cargo-audit-cache.outputs.cache-hit != 'true' &&
+          (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+          github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        # Cache availability is an optimization. A service or upload failure
+        # must not discard the verified source build or skip the audit below.
+        continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cargo/bin/cargo-audit
@@ -428,7 +434,7 @@ jobs:
       # A deliberately disabled optional job is healthy only when skipped; an
       # enabled advisory audit is healthy only when successful. Encode that
       # distinction here so consumers keep one stable required-check context.
-      RUSTSEC_ENABLED: ${{ inputs.audit-command != '' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+      RUSTSEC_ENABLED: ${{ inputs.audit-command != '' }}
       RUSTSEC_RESULT: ${{ needs.rustsec.result }}
       TERMUX_RESULT: ${{ needs.termux.result }}
     steps:

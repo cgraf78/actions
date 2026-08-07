@@ -58,10 +58,10 @@ The Shell aggregate always requires its conventional Platforms and real Termux
 runtime. When `shellcheck-inventory-path` is configured, it also requires the
 single Ubuntu ShellCheck job; that leaf may be skipped only when the input is
 empty. The Rust aggregate always requires Platforms, Quality, Android package,
-and real Termux runtime. On scheduled or manual runs with a nonempty
-`audit-command`, it also requires the RustSec advisory audit; when disabled or
-on other events that leaf must be skipped. This event-aware rule keeps one
-stable required context while still making a failed recurring audit blocking.
+and real Termux runtime. With a nonempty `audit-command`, it also requires the
+RustSec advisory audit on every event; only an explicitly disabled audit may be
+skipped. This rule keeps one stable required context while preventing a known
+vulnerable dependency graph from passing pull-request checks.
 Neither family accepts a skipped Android/Termux result.
 
 Dependabot-triggered workflows receive a read-only token and only secrets stored
@@ -358,7 +358,7 @@ Ubuntu quality gate.
 | `clippy-command`              | `cargo clippy --locked --all-targets --all-features -- -D warnings` | Ubuntu quality lint command. Empty disables the step.                                                               |
 | `build-command`               | `cargo build --release --locked`                                    | Ubuntu quality build command. Empty disables the step.                                                              |
 | `doc-command`                 | `RUSTDOCFLAGS='-D missing-docs' cargo doc --locked --no-deps`       | Ubuntu quality docs command. Empty disables the step.                                                               |
-| `audit-command`               | `cargo audit --file Cargo.lock`                                     | Scheduled/manual RustSec command. Empty disables the advisory job.                                                  |
+| `audit-command`               | `cargo audit --file Cargo.lock`                                     | RustSec command run on every CI event. Empty disables the advisory job.                                             |
 | `package-smoke-musl-target`   | `""`                                                                | Rust musl target to add before package smoke. Empty disables target preparation.                                               |
 | `package-smoke-install-musl-tools` | `false`                                                        | Install the host musl linker before package smoke. Needed only for crates that link native code.                               |
 | `package-smoke-setup-command` | `""`                                                                | Optional setup command run immediately before package smoke.                                                        |
@@ -385,12 +385,20 @@ steps. This ordering lets branch protection continue to require only
 
 ### RustSec advisory audit
 
-Advisory data changes independently of source commits, so RustSec runs only on
-scheduled and manually dispatched workflows rather than making pull-request
-results depend on the network's current database state. `cargo-audit` itself is
-installed at an immutable reviewed version with `--locked`; its database refresh
-is the intentional moving input. The result is included in the `Required`
-aggregate whenever the audit is enabled for that event.
+Advisory data changes independently of source commits, and that moving security
+signal is intentionally enforced on pull requests, pushes, schedules, and manual
+runs. This prevents a lockfile with a known advisory from reaching the default
+branch and also lets an unrelated pull request expose a newly published advisory
+before merge. `cargo-audit` itself is installed at an immutable reviewed version
+with `--locked`; only its advisory database refresh is a moving input. The result
+is included in the `Required` aggregate whenever the audit is configured.
+
+Pull requests and feature branches may restore the default branch's exact
+immutable `cargo-audit` binary cache but never save misses. Only trusted
+default-branch pushes, schedules, and manual runs produce the cache, and cache
+service failures remain advisory. This avoids accumulating short-lived or
+unusable ref-scoped copies; the audit still builds from pinned source when no
+trusted cache is available.
 
 ### Package Smoke
 

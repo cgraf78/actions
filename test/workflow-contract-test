@@ -95,7 +95,7 @@ contracts() {
   check '.jobs.required.needs | join(",") == "platforms,quality,rustsec,android-package,termux"' rust-ci.yml
   check '.jobs.required.env.PLATFORMS_RESULT == "${{ needs.platforms.result }}"' rust-ci.yml
   check '.jobs.required.env.QUALITY_RESULT == "${{ needs.quality.result }}"' rust-ci.yml
-  check '.jobs.required.env.RUSTSEC_ENABLED == "${{ inputs.audit-command != '"'"''"'"' && (github.event_name == '"'"'schedule'"'"' || github.event_name == '"'"'workflow_dispatch'"'"') }}"' rust-ci.yml
+  check '.jobs.required.env.RUSTSEC_ENABLED == "${{ inputs.audit-command != '"'"''"'"' }}"' rust-ci.yml
   check '.jobs.required.env.RUSTSEC_RESULT == "${{ needs.rustsec.result }}"' rust-ci.yml
   check '.jobs.required.env.ANDROID_PACKAGE_RESULT == "${{ needs.android-package.result }}"' rust-ci.yml
   check '.jobs.required.env.TERMUX_RESULT == "${{ needs.termux.result }}"' rust-ci.yml
@@ -131,7 +131,7 @@ contracts() {
   check '.jobs.quality.steps[] | select(.name == "Check minimum supported Rust").if == "inputs.msrv-toolchain != '"'"''"'"' && inputs.msrv-command != '"'"''"'"'"' rust-ci.yml
   check '.jobs.quality.steps[] | select(.name == "Check minimum supported Rust").env.MSRV_COMMAND == "${{ inputs.msrv-command }}"' rust-ci.yml
   check '.jobs.rustsec.name == "RustSec advisory audit"' rust-ci.yml
-  check '.jobs.rustsec.if == "inputs.audit-command != '"'"''"'"' && (github.event_name == '"'"'schedule'"'"' || github.event_name == '"'"'workflow_dispatch'"'"')"' rust-ci.yml
+  check '.jobs.rustsec.if == "inputs.audit-command != '"'"''"'"'"' rust-ci.yml
   check '.jobs.rustsec.env.CARGO_AUDIT_VERSION == "0.22.2"' rust-ci.yml
   check '[.jobs.rustsec.steps[] | select((.uses // "") | test("^actions/cache/(restore|save)@"))] | length == 2' rust-ci.yml
   check '.jobs.rustsec.steps[] | select(.name == "Restore pinned cargo-audit").uses == "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"' rust-ci.yml
@@ -148,7 +148,8 @@ contracts() {
   check '.jobs.rustsec.steps[] | select(.name == "Verify cargo-audit").run | contains("if [[ \"$actual\" != \"$expected\" ]]; then")' rust-ci.yml
   check '.jobs.rustsec.steps[] | select(.name == "Verify cargo-audit").run | contains("exit 1")' rust-ci.yml
   check '.jobs.rustsec.steps[] | select(.name == "Save pinned cargo-audit").uses == "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"' rust-ci.yml
-  check '.jobs.rustsec.steps[] | select(.name == "Save pinned cargo-audit").if == "steps.cargo-audit-cache.outputs.cache-hit != '\''true'\''"' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Save pinned cargo-audit").if == "steps.cargo-audit-cache.outputs.cache-hit != '\''true'\'' && (github.event_name == '\''push'\'' || github.event_name == '\''schedule'\'' || github.event_name == '\''workflow_dispatch'\'') && github.ref == format('\''refs/heads/{0}'\'', github.event.repository.default_branch)"' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Save pinned cargo-audit")."continue-on-error" == true' rust-ci.yml
   check '.jobs.rustsec.steps[] | select(.name == "Save pinned cargo-audit").with.path == "~/.cargo/bin/cargo-audit"' rust-ci.yml
   check '.jobs.rustsec.steps[] | select(.name == "Save pinned cargo-audit").with.key == "cargo-audit-bin-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.CARGO_AUDIT_VERSION }}"' rust-ci.yml
   # Save the verified executable before running caller policy. A legitimate
