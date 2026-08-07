@@ -83,9 +83,9 @@ Runs Rust test suites across the same shared platform matrix. Push and pull
 request runs cover the high-signal subset; scheduled and manual runs cover the
 full matrix. A separate Ubuntu quality gate preserves common Rust checks without
 running formatting, Clippy, and docs redundantly on every OS. By default,
-scheduled and manual runs also perform the shared RustSec audit; its result
-flows through the same `Required` aggregate rather than creating another
-branch-protection context. Callers can disable it with an empty `audit-command`.
+every event also performs the shared RustSec audit; its result flows through the
+same `Required` aggregate rather than creating another branch-protection
+context. Callers can disable it with an empty `audit-command`.
 
 ```yaml
 jobs:
