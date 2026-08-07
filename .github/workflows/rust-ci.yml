@@ -294,6 +294,8 @@ jobs:
     # same recurring vulnerability signal without copying a custom job.
     if: inputs.audit-command != '' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
+    env:
+      CARGO_AUDIT_VERSION: 0.22.2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -304,11 +306,64 @@ jobs:
         with:
           toolchain: ${{ inputs.rust-toolchain }}
 
-      # Crates.io releases are immutable. Pinning the tool keeps the runner
-      # behavior reproducible while `cargo audit` deliberately refreshes the
-      # advisory database that this scheduled job exists to observe.
+      # Compiling this pinned tool consumed about three minutes in each daily
+      # consumer run, while the audit itself took only a few seconds. Cache only
+      # the resulting executable: caching Cargo's registry or build tree would
+      # consume substantially more storage and create broader invalidation
+      # concerns without improving the warm path.
+      #
+      # Do not add a restore prefix. The OS, architecture, exact immutable crate
+      # release, and explicit cache epoch must all match before code is reused.
+      # Scheduled runs execute from the default branch; manually dispatched
+      # feature branches cannot populate a cache that the default branch reads.
+      - name: Restore pinned cargo-audit
+        id: cargo-audit-cache
+        # Cache availability is an optimization, not an audit prerequisite.
+        # Fall through to the source build on service or extraction failures.
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: cargo-audit-bin-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.CARGO_AUDIT_VERSION }}
+
+      # Crates.io releases are immutable and --locked fixes the tool's own
+      # dependency graph. Build outside the checkout so a consumer's local
+      # Cargo configuration cannot influence the executable shared with future
+      # scheduled runs. A miss remains the complete source-build fallback, so
+      # cache service trouble costs time rather than weakening the audit.
       - name: Install cargo-audit
-        run: cargo install cargo-audit --version 0.22.2 --locked
+        if: steps.cargo-audit-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          rm -f "$HOME/.cargo/bin/cargo-audit"
+          cd "$RUNNER_TEMP"
+          cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked
+
+      # Cache scope and the exact key above establish which trusted run produced
+      # the bytes. This check catches a missing, unusable, or wrong-version
+      # executable on both paths; increment the cache epoch to retire one.
+      - name: Verify cargo-audit
+        shell: bash
+        run: |
+          expected="cargo-audit $CARGO_AUDIT_VERSION"
+          actual=$("$HOME/.cargo/bin/cargo-audit" --version)
+          if [[ "$actual" != "$expected" ]]; then
+            printf 'unexpected cargo-audit version: expected %s, got %s\n' \
+              "$expected" "$actual" >&2
+            exit 1
+          fi
+
+      # Save immediately after verification rather than in a post-job hook. A
+      # newly discovered advisory should fail the audit below without throwing
+      # away the verified tool and forcing another three-minute build tomorrow.
+      - name: Save pinned cargo-audit
+        if: steps.cargo-audit-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          # Repeat the exact key so even a restore action that fails before
+          # publishing outputs cannot prevent the source-build fallback.
+          key: cargo-audit-bin-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.CARGO_AUDIT_VERSION }}
 
       - name: Audit the committed dependency graph
         shell: bash
