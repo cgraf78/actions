@@ -1,0 +1,37 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Scheduled and manual runs expand the reusable workflow's full matrix.
+    - cron: "17 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # FULL_COMMIT_SHA is a drafting marker. consumer-ci/sync.sh replaces every
+    # marker and writes the single reviewed lock before this workflow is used.
+    uses: cgraf78/actions/.github/workflows/shell-ci.yml@FULL_COMMIT_SHA
+    with:
+      profiles: base
+      shellcheck-inventory-path: .github/shellcheck-files.txt
+      test-command: test/example-test
+
+  actions-sync:
+    name: cgraf78/actions sync
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # GitHub resolves a literal uses ref before jobs can read the lock. This
+      # action proves that every generated ref still matches that one decision.
+      - uses: cgraf78/actions/.github/actions/verify-consumer-sync@FULL_COMMIT_SHA
