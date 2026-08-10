@@ -1,5 +1,5 @@
 name: Verify consumer synchronization
-description: Verify that every cgraf78/actions use and any vendored release scripts come from one locked commit.
+description: Verify that Actions refs, release scripts, and any generated installer come from one locked commit.
 
 runs:
   using: composite

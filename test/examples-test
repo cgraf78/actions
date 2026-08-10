@@ -78,6 +78,7 @@ actions_source="$tmp/actions"
 mkdir -p "$actions_source/.github/actions"
 cp -R "$root/consumer-ci" "$actions_source/consumer-ci"
 cp -R "$root/release-scripts" "$actions_source/release-scripts"
+cp -R "$root/release-installer" "$actions_source/release-installer"
 cp -R "$root/.github/actions/verify-consumer-sync" \
   "$actions_source/.github/actions/verify-consumer-sync"
 cp -R "$root/.github/actions/verify-release-scripts" \
@@ -135,6 +136,8 @@ stage_consumer() {
       fail "Rust example did not opt into managed release scripts"
     [[ -x "$consumer/scripts/package-release.sh" ]] ||
       fail "Rust example did not receive executable release tooling"
+    [[ -x "$consumer/install.sh" && ! -L "$consumer/install.sh" ]] ||
+      fail "Rust example did not receive its opted-in standalone installer"
   fi
 }
 

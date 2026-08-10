@@ -14,7 +14,8 @@ usage: consumer-ci/sync.sh <consumer-repository>
 
 Run this command from the cgraf78/actions checkout at the commit the consumer
 should pin. It writes the consumer lock, updates every tracked workflow/action
-reference, and refreshes vendored release scripts when release.conf is present.
+reference, refreshes vendored release scripts, and regenerates an opted-in
+standalone installer when release.conf is present.
 EOF
 }
 
@@ -58,6 +59,18 @@ for provider_script in "$source_root"/release-scripts/*.sh; do
     ! git -C "$source_root" ls-files --error-unmatch -- \
       "$provider_relative" >/dev/null 2>&1; then
     printf 'consumer-sync: provider script is not a tracked regular file: %s\n' \
+      "$provider_relative" >&2
+    exit 1
+  fi
+done
+for provider_installer in \
+  "$source_root/release-installer/render.sh" \
+  "$source_root/release-installer/install.sh.in"; do
+  provider_relative=${provider_installer#"$source_root"/}
+  if [[ ! -f "$provider_installer" || -L "$provider_installer" ]] ||
+    ! git -C "$source_root" ls-files --error-unmatch -- \
+      "$provider_relative" >/dev/null 2>&1; then
+    printf 'consumer-sync: installer provider is not a tracked regular file: %s\n' \
       "$provider_relative" >&2
     exit 1
   fi
@@ -192,6 +205,7 @@ done <"$reference_list"
 
 if [[ "$release_enabled" == true ]]; then
   "$source_root/release-scripts/sync.sh" "$consumer/scripts"
+  "$source_root/release-installer/render.sh" "$consumer"
 fi
 
 printf 'consumer-sync: locked %d reference file(s) to %s\n' \

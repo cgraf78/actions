@@ -32,7 +32,10 @@ examples/dependabot.yml             -> .github/dependabot.yml
 examples/release.conf               -> scripts/release.conf
 ```
 
-Replace `example-tool` with the Cargo binary name. The CI example explicitly
+Replace `example-tool` with the Cargo binary name. The example opts into the
+standard generated top-level installer; remove
+`RELEASE_STANDALONE_INSTALLER=true` if the product already owns a specialized
+installer. The CI example explicitly
 shows both mandatory Android contracts: an aarch64 package smoke and an x86_64
 host cross-build executed under Termux. The release config contains only
 consumer-specific payload policy; the synchronization command vendors the
@@ -48,8 +51,9 @@ consumer-ci/sync.sh /path/to/consumer
 ```
 
 That command writes `.github/cgraf78-actions.lock`, replaces every
-`FULL_COMMIT_SHA`, and vendors release scripts when `scripts/release.conf`
-exists. Commit all generated changes together. The dedicated
+`FULL_COMMIT_SHA`, vendors release scripts when `scripts/release.conf` exists,
+and generates the opted-in top-level installer. Commit all generated changes
+together. The dedicated
 `cgraf78/actions sync` job then verifies the inverse contract in CI.
 
 The infrastructure retry controller is optional. Keep its `workflows: [Tests]`
