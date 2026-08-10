@@ -1,0 +1,47 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: cgraf78/actions/.github/workflows/rust-ci.yml@FULL_COMMIT_SHA
+    with:
+      test-command: cargo test --locked
+
+      # The public Rust workflow requires both Android contracts. The first
+      # proves an aarch64 package can be built; the second cross-builds x86_64
+      # on the host and then executes it inside the real Termux app sandbox.
+      android-package-smoke-command: |
+        cargo build --release --locked --target "$RUST_TARGET"
+        test -x "target/$RUST_TARGET/release/example-tool"
+      termux-host-command: |
+        cargo build --release --locked --target "$RUST_TARGET"
+      termux-command: |
+        target/x86_64-linux-android/release/example-tool --version
+
+      # A representative musl package smoke catches archive/layout drift on
+      # every pull request without rebuilding the entire release matrix.
+      package-smoke-musl-target: x86_64-unknown-linux-musl
+      package-smoke-command: |
+        scripts/package-release.sh "$RUST_TARGET" linux-x86_64-musl
+        scripts/smoke-release.sh linux-x86_64-musl
+
+  actions-sync:
+    name: cgraf78/actions sync
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cgraf78/actions/.github/actions/verify-consumer-sync@FULL_COMMIT_SHA

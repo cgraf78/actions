@@ -1,0 +1,20 @@
+name: Release
+
+on:
+  push:
+    tags: ["*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    # The called workflow narrows write access to release creation and upload
+    # steps. The caller still must grant contents:write across this job boundary.
+    permissions:
+      contents: write
+    uses: cgraf78/actions/.github/workflows/rust-release.yml@FULL_COMMIT_SHA
+    with:
+      tag-command: scripts/release-tag.sh
+      package-command: scripts/package-release.sh "$RUST_TARGET" "$ASSET_PLATFORM"
+      smoke-command: scripts/smoke-release.sh "$ASSET_PLATFORM"

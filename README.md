@@ -15,6 +15,11 @@ scripts from that same commit. See
 [`consumer-ci/README.md`](consumer-ci/README.md) for the update and verification
 contract.
 
+[`examples/`](examples/) contains tested, copyable shell CI, Rust CI/release,
+infrastructure retry, Dependabot, ShellCheck inventory, and release-policy
+templates. The examples are staged as real consumer repositories in tests and
+must pass the production synchronizer and verifier.
+
 ## Workflows
 
 For the full caller-facing API, see

@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# Validate copyable consumer templates through the real sync/verify lifecycle.
+
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+examples="$root/examples"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() {
+  printf 'examples-test: %s\n' "$1" >&2
+  exit 1
+}
+
+for example in \
+  README.md \
+  dependabot.yml \
+  retry-infrastructure.yml \
+  rust-ci.yml \
+  rust-release.yml \
+  shell-ci.yml \
+  shellcheck-files.txt \
+  release.conf; do
+  [[ -f "$examples/$example" ]] || fail "missing examples/$example"
+done
+
+# Workflow syntax is the first contract. actionlint also checks reusable-call
+# keys, expression contexts, permissions placement, and workflow_run spelling.
+actionlint \
+  "$examples/shell-ci.yml" \
+  "$examples/rust-ci.yml" \
+  "$examples/rust-release.yml" \
+  "$examples/retry-infrastructure.yml"
+
+yq -e '
+  .permissions.contents == "read" and (.permissions | length) == 1 and
+  .jobs.test.uses == "cgraf78/actions/.github/workflows/shell-ci.yml@FULL_COMMIT_SHA" and
+  .jobs.test.with."shellcheck-inventory-path" == ".github/shellcheck-files.txt" and
+  .jobs."actions-sync".name == "cgraf78/actions sync"
+' "$examples/shell-ci.yml" >/dev/null
+
+yq -e '
+  .permissions.contents == "read" and (.permissions | length) == 1 and
+  .jobs.test.uses == "cgraf78/actions/.github/workflows/rust-ci.yml@FULL_COMMIT_SHA" and
+  .jobs.test.with."android-package-smoke-command" != null and
+  .jobs.test.with."termux-host-command" != null and
+  .jobs.test.with."termux-command" != null and
+  .jobs."actions-sync".name == "cgraf78/actions sync"
+' "$examples/rust-ci.yml" >/dev/null
+
+yq -e '
+  .permissions.contents == "read" and (.permissions | length) == 1 and
+  .jobs.release.permissions.contents == "write" and
+  (.jobs.release.permissions | length) == 1 and
+  .jobs.release.uses == "cgraf78/actions/.github/workflows/rust-release.yml@FULL_COMMIT_SHA" and
+  .jobs.release.with."tag-command" == "scripts/release-tag.sh"
+' "$examples/rust-release.yml" >/dev/null
+
+yq -e '
+  (.permissions | length) == 0 and
+  .jobs.retry.permissions.actions == "write" and
+  .jobs.retry.permissions.contents == "read" and
+  (.jobs.retry.permissions | length) == 2 and
+  .jobs.retry.steps[0].uses == "cgraf78/actions/.github/actions/infra-retry@FULL_COMMIT_SHA"
+' "$examples/retry-infrastructure.yml" >/dev/null
+
+yq -e '
+  .version == 2 and
+  .updates[0]."package-ecosystem" == "github-actions" and
+  .updates[0].schedule.interval == "weekly"
+' "$examples/dependabot.yml" >/dev/null
+
+# Commit a minimal provider fixture because consumer-ci/sync.sh deliberately
+# rejects dirty or uncommitted provider bytes. Its HEAD becomes the exact lock
+# value used by both example consumers below.
+actions_source="$tmp/actions"
+mkdir -p "$actions_source/.github/actions"
+cp -R "$root/consumer-ci" "$actions_source/consumer-ci"
+cp -R "$root/release-scripts" "$actions_source/release-scripts"
+cp -R "$root/.github/actions/verify-consumer-sync" \
+  "$actions_source/.github/actions/verify-consumer-sync"
+cp -R "$root/.github/actions/verify-release-scripts" \
+  "$actions_source/.github/actions/verify-release-scripts"
+git -C "$actions_source" init --quiet --template=''
+git -C "$actions_source" config core.hooksPath /dev/null
+git -C "$actions_source" add .
+git -C "$actions_source" -c user.email=example@example.com -c user.name=Example \
+  -c commit.gpgsign=false commit --quiet -m fixture
+
+sync="$actions_source/consumer-ci/sync.sh"
+verify="$actions_source/.github/actions/verify-consumer-sync/verify.sh"
+want=$(git -C "$actions_source" rev-parse HEAD)
+
+stage_consumer() {
+  local kind=$1 consumer="$tmp/$1-consumer"
+
+  mkdir -p "$consumer/.github/workflows"
+  cp "$examples/$kind-ci.yml" "$consumer/.github/workflows/test.yml"
+  cp "$examples/retry-infrastructure.yml" \
+    "$consumer/.github/workflows/retry-infrastructure.yml"
+  cp "$examples/dependabot.yml" "$consumer/.github/dependabot.yml"
+  if [[ "$kind" == shell ]]; then
+    cp "$examples/shellcheck-files.txt" "$consumer/.github/shellcheck-files.txt"
+  else
+    cp "$examples/rust-release.yml" "$consumer/.github/workflows/release.yml"
+    mkdir -p "$consumer/scripts"
+    cp "$examples/release.conf" "$consumer/scripts/release.conf"
+  fi
+
+  git -C "$consumer" init --quiet --template=''
+  git -C "$consumer" config core.hooksPath /dev/null
+  git -C "$consumer" add .
+
+  "$sync" "$consumer" >/dev/null
+  git -C "$consumer" add .
+
+  [[ "$(tr -d '\n' <"$consumer/.github/cgraf78-actions.lock")" == "$want" ]] ||
+    fail "$kind example lock does not match provider"
+  if git -C "$consumer" grep -n '@FULL_COMMIT_SHA' -- . >/dev/null; then
+    fail "$kind example retained a drafting placeholder"
+  fi
+  if git -C "$consumer" grep -n 'cgraf78/actions/' -- . |
+    awk -v sha="$want" 'index($0, "@" sha) == 0 {found=1} END {exit !found}'; then
+    fail "$kind example contains a ref outside the generated lock"
+  fi
+
+  GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
+    GITHUB_WORKSPACE="$consumer" \
+    ACTION_REF="$want" \
+    "$verify" >/dev/null
+
+  if [[ "$kind" == rust ]]; then
+    [[ -f "$consumer/scripts/.release-scripts.manifest" ]] ||
+      fail "Rust example did not opt into managed release scripts"
+    [[ -x "$consumer/scripts/package-release.sh" ]] ||
+      fail "Rust example did not receive executable release tooling"
+  fi
+}
+
+stage_consumer shell
+stage_consumer rust
+
+printf 'examples-test: ok\n'

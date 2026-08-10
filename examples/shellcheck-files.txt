@@ -1,0 +1,2 @@
+# type<TAB>repository-relative path
+program	test/example-test
