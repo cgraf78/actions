@@ -17,10 +17,13 @@ jobs:
     name: Shell smoke
     uses: ./.github/workflows/shell-ci.yml
     with:
-      matrix-set: auto
-      profiles: base
+      matrix-set: full
+      profiles: base,procps
       shellcheck-inventory-path: .github/shellcheck-files.txt
-      test-command: test -f .github/workflows/shell-ci.yml
+      test-command: |
+        test -f .github/workflows/shell-ci.yml
+        test -f .github/workflows/_termux-ci.yml
+        bash test/checkout-installer-test
       termux-command: |
         test "$(uname -o)" = Android
         test "$PREFIX" = /data/data/com.termux/files/usr
@@ -28,6 +31,8 @@ jobs:
         curl --version >/dev/null
         test -f .github/workflows/shell-ci.yml
         test -f .github/workflows/_termux-ci.yml
+        bash test/checkout-installer-test
+      termux-profiles: base,procps
 
   rust-smoke:
     name: Rust smoke

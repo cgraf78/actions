@@ -87,6 +87,7 @@ contracts() {
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("if has_profile base; then\n  packages+=(git curl)\nelif ! has_profile runtime; then")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("termux-exec")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("LD_PRELOAD")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("bash -euo pipefail \"$TMPDIR/termux-ci-command\"")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("[[ \"$setup\" == none ]]") | not' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Download official Termux APK").run | contains("--retry 3 --retry-all-errors --retry-delay 1")' _termux-ci.yml
 
@@ -182,7 +183,14 @@ contracts() {
   check '.jobs.build.steps[] | select(.name == "Configure Android NDK toolchain").with."rust-target" == "${{ matrix.rust-target }}"' rust-release.yml
 
   check '.jobs.shell-smoke.with.termux-command != null' ci.yml
+  check '.jobs.shell-smoke.with.termux-command | contains("test \"$(uname -o)\" = Android")' ci.yml
+  check '.jobs.shell-smoke.with.termux-command | contains("test \"$PREFIX\" = /data/data/com.termux/files/usr")' ci.yml
+  check '.jobs.shell-smoke.with.termux-command | contains("test -x \"$PREFIX/bin/bash\"")' ci.yml
   check '.jobs.shell-smoke.with.termux-command | contains("curl --version >/dev/null")' ci.yml
+  check '.jobs.shell-smoke.with.termux-command | contains("bash test/checkout-installer-test")' ci.yml
+  check '.jobs.shell-smoke.with.profiles == "base,procps"' ci.yml
+  check '.jobs.shell-smoke.with.termux-profiles == "base,procps"' ci.yml
+  check '.jobs.shell-smoke.with.test-command | contains("bash test/checkout-installer-test")' ci.yml
   check '.jobs.shell-smoke.with.shellcheck-inventory-path == ".github/shellcheck-files.txt"' ci.yml
   check '.jobs.quality.steps[] | select(.name == "Test shared ShellCheck inventory action").run == "test/shellcheck-action-test"' ci.yml
   check '.jobs.quality.steps[] | select(.name == "Test consumer synchronization").run == "test/consumer-sync-test"' ci.yml
@@ -201,7 +209,7 @@ contracts() {
   check '[.jobs.quality.steps[] | select(.name == "Lint shell scripts")] | length == 0' ci.yml
   check '.on.schedule[0].cron == "7 7 * * *"' ci.yml
   check '.on | has("workflow_dispatch")' ci.yml
-  check '.jobs.shell-smoke.with.matrix-set == "auto"' ci.yml
+  check '.jobs.shell-smoke.with.matrix-set == "full"' ci.yml
   check '.jobs.rust-smoke.with.matrix-set == "auto"' ci.yml
   check '.jobs.rust-smoke.with.android-package-smoke-command != null' ci.yml
   check '.jobs.rust-smoke.with.package-smoke-musl-target == "x86_64-unknown-linux-musl"' ci.yml

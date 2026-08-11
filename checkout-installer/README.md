@@ -97,6 +97,7 @@ Git remotes. It covers direct delegation, piped clone and update behavior,
 argument and environment forwarding, exit status propagation, renderer drift,
 truncated input, dirty and foreign destination refusal, missing and migrating
 delegates, concurrent installs, signal forwarding, Git-environment isolation,
-failed and interrupted update transactions, publication races, stale-lock
-recovery, and failed-clone cleanup. The suite is portable to macOS system Bash
-3.2.
+hard-link rejection fallback, failed and interrupted update transactions,
+publication races, stale-lock recovery, and failed-clone cleanup. CI runs the
+suite across the full shared Linux/macOS matrix, real Android/Termux, and macOS
+system Bash 3.2.

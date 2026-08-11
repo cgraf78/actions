@@ -133,7 +133,11 @@ if [[ "$check" == true ]]; then
       "$CHECKOUT_INSTALLER_DELEGATE" >/dev/null 2>&1 ||
       die "checkout installer delegate is not tracked: $delegate"
   fi
-  if ! cmp -s "$tmp" "$output"; then
+  # Git is already part of the checkout-installer contract. Its no-index diff
+  # keeps drift verification exact without adding a hidden diffutils/cmp
+  # dependency on minimal Arch, Fedora, or Alpine environments.
+  if ! command git diff --no-index --quiet --no-ext-diff --no-textconv -- \
+    "$tmp" "$output"; then
     die "generated installer differs; run checkout-installer/render.sh $consumer"
   fi
   rm -f "$tmp"
