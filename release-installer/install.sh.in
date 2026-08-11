@@ -75,6 +75,23 @@ die() {
   exit 1
 }
 
+sha256_file() {
+  local file=$1 output
+
+  # SHA-256 is already part of the archive trust boundary, so reuse it for
+  # idempotence instead of adding a hidden dependency on diffutils' `cmp`.
+  # Minimal Arch and other bootstrap environments may provide one checksum
+  # implementation but no general-purpose byte-comparison utility.
+  if command -v sha256sum >/dev/null 2>&1; then
+    output=$(sha256sum "$file") || die "cannot hash file: $file"
+  else
+    command -v shasum >/dev/null 2>&1 ||
+      die 'neither sha256sum nor shasum is available'
+    output=$(shasum -a 256 "$file") || die "cannot hash file: $file"
+  fi
+  printf '%s\n' "${output%% *}"
+}
+
 usage() {
   cat <<EOF
 usage: install.sh [options]
@@ -372,14 +389,7 @@ if [[ "$archive_is_private" -eq 0 ]]; then
     die "archive changed while creating a private snapshot: $archive_source"
 fi
 
-if command -v sha256sum >/dev/null 2>&1; then
-  actual_sha=$(sha256sum "$archive")
-else
-  command -v shasum >/dev/null 2>&1 ||
-    die 'neither sha256sum nor shasum is available'
-  actual_sha=$(shasum -a 256 "$archive")
-fi
-actual_sha=${actual_sha%% *}
+actual_sha=$(sha256_file "$archive")
 [[ "$actual_sha" == "$expected_sha" ]] ||
   die "checksum mismatch for $archive_name"
 
@@ -565,7 +575,9 @@ if [[ -e "$release_dir" || -L "$release_dir" ]]; then
     printf '%s\n' "$relative" >>"$existing_normalized"
   done < <(cd "$release_dir" && find . -mindepth 1 -print)
   sort "$existing_normalized" >"$existing_sorted"
-  cmp -s "$archive_sorted" "$existing_sorted" ||
+  archive_digest=$(sha256_file "$archive_sorted")
+  existing_digest=$(sha256_file "$existing_sorted")
+  [[ "$archive_digest" == "$existing_digest" ]] ||
     die "existing release tree has missing or extra entries: $release_dir"
   while IFS= read -r entry || [[ -n "$entry" ]]; do
     case "$entry" in
@@ -582,7 +594,9 @@ if [[ -e "$release_dir" || -L "$release_dir" ]]; then
     else
       [[ -f "$existing_entry" && ! -L "$existing_entry" ]] ||
         die "existing release tree differs at $relative"
-      cmp -s "$extracted_entry" "$existing_entry" ||
+      extracted_digest=$(sha256_file "$extracted_entry")
+      existing_digest=$(sha256_file "$existing_entry")
+      [[ "$extracted_digest" == "$existing_digest" ]] ||
         die "existing release tree differs at $relative"
       if [[ -x "$extracted_entry" && ! -x "$existing_entry" ]] ||
         [[ ! -x "$extracted_entry" && -x "$existing_entry" ]]; then
