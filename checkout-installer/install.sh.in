@@ -275,11 +275,15 @@
 
   # shellcheck disable=SC2329 # Installed as the signal traps below.
   forward_signal() {
-    local signal=$1 status=$2
+    local signal=$1 status=$2 child_signal=$1
 
     trap - HUP INT TERM
     if [[ -n "$active_child_pid" ]]; then
-      signal_process_tree "$active_child_pid" "$signal"
+      # Non-job-control Bash starts asynchronous children with SIGINT ignored.
+      # Use a catchable termination signal for those owned children while the
+      # bootstrap still reports the conventional interrupt status to callers.
+      [[ "$signal" == INT ]] && child_signal=TERM
+      signal_process_tree "$active_child_pid" "$child_signal"
       wait "$active_child_pid" 2>/dev/null || true
       active_child_pid=
     fi

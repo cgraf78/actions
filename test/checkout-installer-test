@@ -11,6 +11,7 @@ signal_release=
 signal_delegate_child_file=
 network_signal_pid=
 network_signal_release=
+interrupt_killer_pid=
 
 cleanup() {
   if [[ -n "$blocking_release" ]]; then
@@ -36,6 +37,10 @@ cleanup() {
   if [[ -n "$network_signal_pid" ]]; then
     wait "$network_signal_pid" 2>/dev/null || true
   fi
+  if [[ -n "$interrupt_killer_pid" ]]; then
+    kill -TERM "$interrupt_killer_pid" 2>/dev/null || true
+    wait "$interrupt_killer_pid" 2>/dev/null || true
+  fi
   rm -rf "$tmp"
 }
 
@@ -44,6 +49,34 @@ trap cleanup EXIT
 fail() {
   printf 'checkout-installer-test: %s\n' "$1" >&2
   exit 1
+}
+
+interrupt_parent_of_ready_child() {
+  local ready=$1 timeout_marker=$2 child parent
+
+  for _ in {1..100}; do
+    [[ -e "$ready" ]] && break
+    sleep 0.05
+  done
+  [[ -e "$ready" ]] || return 1
+  child=$(sed -n '1p' "$ready")
+  parent=$(ps -o ppid= -p "$child" 2>/dev/null || true)
+  parent=${parent//[[:space:]]/}
+  if [[ -z "$parent" ]]; then
+    : >"$timeout_marker"
+    kill -TERM "$child" 2>/dev/null || true
+    return 1
+  fi
+
+  kill -INT "$parent"
+  for _ in {1..100}; do
+    ! kill -0 "$parent" 2>/dev/null && return 0
+    sleep 0.05
+  done
+
+  : >"$timeout_marker"
+  kill -TERM "$child" 2>/dev/null || true
+  kill -TERM "$parent" 2>/dev/null || true
 }
 
 write_delegate() {
@@ -503,6 +536,42 @@ signal_delegate_child_file=
 [[ ! -e "$tmp/managed/.example-tool.install.lock" ]] ||
   fail "bootstrap left its lock after TERM"
 
+signal_ready="$tmp/signal-int.ready"
+signal_release="$tmp/signal-int.release"
+signal_delegate_child_file="$tmp/signal-int.delegate-child"
+signal_timeout="$tmp/signal-int.timeout"
+interrupt_parent_of_ready_child "$signal_ready" "$signal_timeout" &
+interrupt_killer_pid=$!
+set +e
+CHECKOUT_TEST_LOG="$tmp/signal-int.log" \
+  CHECKOUT_TEST_BLOCK_READY="$signal_ready" \
+  CHECKOUT_TEST_BLOCK_RELEASE="$signal_release" \
+  CHECKOUT_TEST_BLOCK_CHILD_FILE="$signal_delegate_child_file" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
+  /bin/bash -s <"$source_work/install.sh" >"$tmp/signal-int.out" 2>&1
+signal_status=$?
+wait "$interrupt_killer_pid"
+interrupt_killer_status=$?
+set -e
+interrupt_killer_pid=
+[[ "$interrupt_killer_status" -eq 0 && ! -e "$signal_timeout" ]] ||
+  fail "bootstrap did not cancel its active delegate after INT"
+[[ -e "$signal_ready" && -e "$signal_delegate_child_file" ]] ||
+  fail "INT-forwarding delegate did not start"
+signal_delegate_pid=$(sed -n '1p' "$signal_ready")
+signal_delegate_child=$(sed -n '1p' "$signal_delegate_child_file")
+[[ "$signal_status" -eq 130 ]] ||
+  fail "INT did not produce bootstrap status 130"
+signal_release=
+! kill -0 "$signal_delegate_pid" 2>/dev/null ||
+  fail "bootstrap left its delegate running after INT"
+! kill -0 "$signal_delegate_child" 2>/dev/null ||
+  fail "bootstrap left a delegate child running after INT"
+signal_delegate_child_file=
+[[ ! -e "$tmp/managed/.example-tool.install.lock" ]] ||
+  fail "bootstrap left its lock after INT"
+
 network_signal_bin="$tmp/network-signal-bin"
 network_signal_ready="$tmp/network-signal.ready"
 network_signal_release="$tmp/network-signal.release"
@@ -568,6 +637,47 @@ network_signal_release=
 if compgen -G \
   "$tmp/network-signal-managed/.example-tool.clone.*" >/dev/null; then
   fail "TERM during clone left a staging checkout"
+fi
+
+network_signal_ready="$tmp/network-signal-int.ready"
+network_signal_release="$tmp/network-signal-int.release"
+network_signal_managed="$tmp/network-signal-int-managed/example-tool"
+network_signal_timeout="$tmp/network-signal-int.timeout"
+interrupt_parent_of_ready_child \
+  "$network_signal_ready" "$network_signal_timeout" &
+interrupt_killer_pid=$!
+set +e
+PATH="$network_signal_bin:$PATH" \
+  CHECKOUT_TEST_REAL_GIT="$real_git" \
+  CHECKOUT_TEST_NETWORK_SIGNAL_READY="$network_signal_ready" \
+  CHECKOUT_TEST_NETWORK_SIGNAL_RELEASE="$network_signal_release" \
+  CHECKOUT_TEST_LOG="$tmp/network-signal-int.log" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$network_signal_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
+  /bin/bash -s <"$source_work/install.sh" \
+  >"$tmp/network-signal-int.out" 2>&1
+network_signal_status=$?
+wait "$interrupt_killer_pid"
+interrupt_killer_status=$?
+set -e
+interrupt_killer_pid=
+[[ "$interrupt_killer_status" -eq 0 && ! -e "$network_signal_timeout" ]] ||
+  fail "bootstrap did not cancel active network Git after INT"
+[[ -e "$network_signal_ready" ]] ||
+  fail "network INT fixture did not reach Git clone"
+network_git_pid=$(sed -n '1p' "$network_signal_ready")
+[[ "$network_signal_status" -eq 130 ]] ||
+  fail "INT during network Git did not produce status 130"
+network_signal_release=
+! kill -0 "$network_git_pid" 2>/dev/null ||
+  fail "bootstrap left network Git running after INT"
+[[ ! -e "$network_signal_managed" && ! -L "$network_signal_managed" ]] ||
+  fail "INT during clone published a managed checkout"
+[[ ! -e "$tmp/network-signal-int-managed/.example-tool.install.lock" ]] ||
+  fail "INT during clone left its install lock"
+if compgen -G \
+  "$tmp/network-signal-int-managed/.example-tool.clone.*" >/dev/null; then
+  fail "INT during clone left a staging checkout"
 fi
 
 poison="$tmp/poison"
