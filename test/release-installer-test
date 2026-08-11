@@ -56,10 +56,19 @@ help=$(/bin/bash "$consumer/install.sh" --help) ||
 [[ "$help" == *'example/example-tool'* ]] ||
   fail "generated installer help omitted its release repository"
 
-"$root/release-installer/render.sh" --check "$consumer" >/dev/null ||
+no_cmp_bin="$tmp/no-cmp-bin"
+mkdir -p "$no_cmp_bin"
+cat >"$no_cmp_bin/cmp" <<'EOF'
+#!/usr/bin/env bash
+exit 99
+EOF
+chmod 0755 "$no_cmp_bin/cmp"
+PATH="$no_cmp_bin:$PATH" \
+  "$root/release-installer/render.sh" --check "$consumer" >/dev/null ||
   fail "freshly generated installer did not pass the render check"
 printf '\n# local drift\n' >>"$consumer/install.sh"
-if "$root/release-installer/render.sh" --check "$consumer" \
+if PATH="$no_cmp_bin:$PATH" \
+  "$root/release-installer/render.sh" --check "$consumer" \
   >/dev/null 2>&1; then
   fail "drifted generated installer unexpectedly passed the render check"
 fi

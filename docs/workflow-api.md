@@ -459,8 +459,9 @@ architecture.
 `termux-ci.yml` is the stable public contract for a real Android/Termux runtime
 check. It forwards typed inputs to the internal `_termux-ci.yml` worker, which
 installs the checksum-pinned official Termux APK, copies the caller checkout to
-`$HOME/project`, and runs the caller's command under Termux Bash. Callers do not
-depend on the emulator, bootstrap, or sandbox-transport implementation.
+`$HOME/project`, and runs the caller's command under Termux Bash with `errexit`,
+`nounset`, and `pipefail` enabled. Callers do not depend on the emulator,
+bootstrap, or sandbox-transport implementation.
 
 | Input               | Default  | Contract                                                              |
 | ------------------- | -------- | --------------------------------------------------------------------- |

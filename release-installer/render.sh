@@ -128,7 +128,11 @@ if [[ "$check" == true ]]; then
     ! git -C "$consumer" ls-files --error-unmatch install.sh >/dev/null 2>&1; then
     die "generated installer is not tracked: $output"
   fi
-  if ! cmp -s "$tmp" "$output"; then
+  # Every release consumer is a Git checkout. Use Git's exact no-index diff so
+  # verification does not gain an undeclared diffutils/cmp dependency on
+  # minimal platform images.
+  if ! command git diff --no-index --quiet --no-ext-diff --no-textconv -- \
+    "$tmp" "$output"; then
     die "generated installer differs; run release-installer/render.sh $consumer"
   fi
   rm -f "$tmp"

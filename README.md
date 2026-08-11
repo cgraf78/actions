@@ -133,9 +133,10 @@ AArch64 cross-build rather than replacing it.
 
 ### `termux-ci.yml`
 
-Runs a caller-owned Bash command inside the official Termux application sandbox
-on a hardware-accelerated Android x86_64 emulator. The caller checkout is copied
-into `$HOME/project`, with Termux's real `HOME`, `PREFIX`, `TMPDIR`, and `PATH`.
+Runs a caller-owned Bash command with `errexit`, `nounset`, and `pipefail` inside
+the official Termux application sandbox on a hardware-accelerated Android x86_64
+emulator. The caller checkout is copied into `$HOME/project`, with Termux's real
+`HOME`, `PREFIX`, `TMPDIR`, and `PATH`.
 
 ```yaml
 jobs:

@@ -51,6 +51,27 @@ fail() {
   exit 1
 }
 
+assert_process_gone() {
+  local pid=$1 description=$2
+
+  if kill -0 "$pid" 2>/dev/null; then
+    command ps -o pid=,ppid=,stat=,comm= -p "$pid" >&2 || true
+    fail "$description"
+  fi
+}
+
+active_bash=$BASH
+case ${PREFIX:-} in
+  /data/data/com.termux/files/usr)
+    platform_tool_path=$PREFIX/bin
+    ;;
+  *)
+    platform_tool_path=/usr/bin:/bin
+    ;;
+esac
+[[ -x "$active_bash" ]] ||
+  fail "active Bash is not executable: $active_bash"
+
 interrupt_parent_of_ready_child() {
   local ready=$1 timeout_marker=$2 child parent
 
@@ -114,9 +135,26 @@ checkout_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 if [[ -n ${CHECKOUT_TEST_BLOCK_READY:-} ]]; then
   printf '%s\n' "$$" >"$CHECKOUT_TEST_BLOCK_READY"
   if [[ -n ${CHECKOUT_TEST_BLOCK_CHILD_FILE:-} ]]; then
-    sleep 86400 &
+    if [[ ${CHECKOUT_TEST_BLOCK_DELAYED_TERM:-0} == 1 ]]; then
+      block_child_script=$CHECKOUT_TEST_BLOCK_CHILD_FILE.script
+      cat >"$block_child_script" <<'CHILD'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+trap 'sleep 0.2; exit 0' TERM
+printf '%s\n' "$$" >"$1"
+while :; do :; done
+CHILD
+      chmod 0755 "$block_child_script"
+      "$BASH" "$block_child_script" "$CHECKOUT_TEST_BLOCK_CHILD_FILE" &
+    else
+      sleep 86400 &
+    fi
     block_child_pid=$!
-    printf '%s\n' "$block_child_pid" >"$CHECKOUT_TEST_BLOCK_CHILD_FILE"
+    if [[ ${CHECKOUT_TEST_BLOCK_DELAYED_TERM:-0} != 1 ]]; then
+      printf '%s\n' "$block_child_pid" >"$CHECKOUT_TEST_BLOCK_CHILD_FILE"
+    fi
     wait "$block_child_pid"
   else
     while [[ ! -e ${CHECKOUT_TEST_BLOCK_RELEASE:?} ]]; do
@@ -186,7 +224,7 @@ git -C "$consumer" commit --quiet -m 'direct fixture'
 
 safe_git_bin="$tmp/safe-git-bin"
 safe_git_log="$tmp/safe-git.log"
-safe_real_git=$(PATH=/usr/bin:/bin command -v git)
+safe_real_git=$(PATH="$platform_tool_path" command -v git)
 mkdir -p "$safe_git_bin"
 cat >"$safe_git_bin/git" <<'EOF'
 #!/usr/bin/env bash
@@ -212,11 +250,12 @@ direct_log="$tmp/direct.log"
 (
   umask 0027
   CHECKOUT_TEST_LOG="$direct_log" PREFIX="$tmp/direct-prefix" \
-    BIN_DIR="$tmp/direct-bin" LC_ALL=POSIX PATH="$safe_git_bin:$PATH" \
+    BIN_DIR="$tmp/direct-bin" LC_ALL=POSIX \
+    PATH="$safe_git_bin:$platform_tool_path" \
     CHECKOUT_TEST_REAL_GIT="$safe_real_git" \
     CHECKOUT_TEST_SAFE_DIRECTORY="$(cd "$consumer" && pwd -P)" \
     CHECKOUT_TEST_SAFE_GIT_LOG="$safe_git_log" \
-    /bin/bash "$consumer/install.sh" \
+    "$active_bash" "$consumer/install.sh" \
     first 'two words' >/dev/null
 ) ||
   fail "direct checkout install did not delegate"
@@ -248,16 +287,25 @@ grep -Fqx "bash=$alternate_bash" "$alternate_direct_log" ||
 
 set +e
 CHECKOUT_TEST_LOG="$direct_log" CHECKOUT_TEST_EXIT=23 \
-  /bin/bash "$consumer/install.sh" >/dev/null 2>&1
+  "$active_bash" "$consumer/install.sh" >/dev/null 2>&1
 direct_status=$?
 set -e
 [[ "$direct_status" -eq 23 ]] ||
   fail "direct checkout install did not preserve delegate status"
 
-"$root/checkout-installer/render.sh" --check "$consumer" >/dev/null ||
+no_cmp_bin="$tmp/no-cmp-bin"
+mkdir -p "$no_cmp_bin"
+cat >"$no_cmp_bin/cmp" <<'EOF'
+#!/usr/bin/env bash
+exit 99
+EOF
+chmod 0755 "$no_cmp_bin/cmp"
+PATH="$no_cmp_bin:$PATH" \
+  "$root/checkout-installer/render.sh" --check "$consumer" >/dev/null ||
   fail "freshly generated installer did not pass the render check"
 printf '\n# local drift\n' >>"$consumer/install.sh"
-if "$root/checkout-installer/render.sh" --check "$consumer" \
+if PATH="$no_cmp_bin:$PATH" \
+  "$root/checkout-installer/render.sh" --check "$consumer" \
   >/dev/null 2>&1; then
   fail "drifted generated installer unexpectedly passed the render check"
 fi
@@ -274,7 +322,7 @@ if "$root/checkout-installer/render.sh" "$owned_consumer" \
   >/dev/null 2>&1; then
   fail "renderer overwrote a consumer-owned installer"
 fi
-[[ $(/bin/bash "$owned_consumer/install.sh") == 'consumer owned' ]] ||
+[[ $("$active_bash" "$owned_consumer/install.sh") == 'consumer owned' ]] ||
   fail "renderer changed a consumer-owned installer"
 
 invalid_consumer="$tmp/invalid-consumer"
@@ -305,7 +353,8 @@ set -e
 [[ "$self_delegate_status" -ne 0 &&
   "$self_delegate_output" == *'must not be install.sh'* ]] ||
   fail "renderer accepted install.sh as its own delegate"
-cmp -s "$self_delegate_consumer/install.sh.before" \
+command git diff --no-index --quiet --no-ext-diff --no-textconv -- \
+  "$self_delegate_consumer/install.sh.before" \
   "$self_delegate_consumer/install.sh" ||
   fail "self-delegate rejection changed the previous generated installer"
 
@@ -367,7 +416,7 @@ set +e
 CHECKOUT_TEST_LOG="$tmp/standalone.log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$tmp/standalone-managed/example-tool" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$tmp/missing-standalone.git" \
-  /bin/bash "$standalone/install.sh" >/dev/null 2>&1
+  "$active_bash" "$standalone/install.sh" >/dev/null 2>&1
 standalone_status=$?
 set -e
 [[ "$standalone_status" -ne 0 ]] ||
@@ -385,7 +434,7 @@ set +e
 CHECKOUT_TEST_LOG="$tmp/truncated.log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$tmp/truncated-managed/example-tool" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-  /bin/bash -s <"$truncated" >/dev/null 2>&1
+  "$active_bash" -s <"$truncated" >/dev/null 2>&1
 truncated_status=$?
 set -e
 [[ "$truncated_status" -ne 0 ]] ||
@@ -398,8 +447,9 @@ set -e
 git_probe_bin="$tmp/git-probe-bin"
 git_probe_marker="$tmp/git-consumed-installer-input"
 git_probe_env_log="$tmp/git-bootstrap-environment"
-real_git=$(PATH=/usr/bin:/bin command -v git)
-real_mv=$(PATH=/usr/bin:/bin command -v mv)
+real_git=$(PATH="$platform_tool_path" command -v git)
+real_mv=$(PATH="$platform_tool_path" command -v mv)
+real_ln=$(PATH="$platform_tool_path" command -v ln)
 mkdir -p "$git_probe_bin"
 cat >"$git_probe_bin/git" <<'EOF'
 #!/usr/bin/env bash
@@ -425,19 +475,57 @@ done
 exec "$CHECKOUT_TEST_REAL_GIT" "$@"
 EOF
 chmod 0755 "$git_probe_bin/git"
+
+no_hardlink_bin="$tmp/no-hardlink-bin"
+no_hardlink_managed="$tmp/no-hardlink-managed/example-tool"
+mkdir -p "$no_hardlink_bin"
+cat >"$no_hardlink_bin/ln" <<'EOF'
+#!/usr/bin/env bash
+
+if [[ ${1:-} != -s ]]; then
+  printf 'ln: hard links are unavailable in this fixture\n' >&2
+  exit 1
+fi
+exec "${CHECKOUT_TEST_REAL_LN:?}" "$@"
+EOF
+chmod 0755 "$no_hardlink_bin/ln"
+CHECKOUT_TEST_LOG="$tmp/no-hardlink.log" \
+  PATH="$no_hardlink_bin:$platform_tool_path" \
+  CHECKOUT_TEST_REAL_LN="$real_ln" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$no_hardlink_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
+  "$active_bash" -s <"$source_work/install.sh" >/dev/null ||
+  fail "piped install did not fall back when hard links were unavailable"
+[[ -d "$no_hardlink_managed/.git" && ! -L "$no_hardlink_managed" ]] ||
+  fail "hard-link fallback did not publish a managed checkout"
+[[ ! -e "$no_hardlink_managed/.git/cgraf78-publish-identity" &&
+  ! -L "$no_hardlink_managed/.git/cgraf78-publish-identity" ]] ||
+  fail "hard-link fallback left its publication identity marker"
+
+pipe_status_file="$tmp/pipe.status"
 (
   umask 0037
-  CHECKOUT_TEST_LOG="$pipe_log" PREFIX="$tmp/pipe-prefix" \
-    LC_ALL=POSIX \
-    PATH="$git_probe_bin:$PATH" \
-    CHECKOUT_TEST_REAL_GIT="$real_git" \
-    CHECKOUT_TEST_GIT_STDIN_MARKER="$git_probe_marker" \
-    CHECKOUT_TEST_GIT_ENV_LOG="$git_probe_env_log" \
-    CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
-    CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-    /bin/bash -s -- first 'two words' <"$source_work/install.sh" >/dev/null
-) ||
-  fail "piped install did not create a managed checkout"
+  set +e
+  curl --fail --silent --show-error "file://$source_work/install.sh" |
+    CHECKOUT_TEST_LOG="$pipe_log" PREFIX="$tmp/pipe-prefix" \
+      LC_ALL=POSIX \
+      PATH="$git_probe_bin:$platform_tool_path" \
+      CHECKOUT_TEST_REAL_GIT="$real_git" \
+      CHECKOUT_TEST_GIT_STDIN_MARKER="$git_probe_marker" \
+      CHECKOUT_TEST_GIT_ENV_LOG="$git_probe_env_log" \
+      CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
+      CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
+      "$active_bash" -s -- first 'two words' >/dev/null
+  pipeline_status=("${PIPESTATUS[@]}")
+  set -e
+  printf '%s %s\n' "${pipeline_status[0]}" "${pipeline_status[1]}" \
+    >"$pipe_status_file"
+)
+read -r curl_status bootstrap_status <"$pipe_status_file"
+[[ "$curl_status" -eq 0 ]] ||
+  fail "curl could not read the local checkout installer"
+[[ "$bootstrap_status" -eq 0 ]] ||
+  fail "curl-piped install did not create a managed checkout"
 [[ -d "$managed/.git" && ! -L "$managed" ]] ||
   fail "piped install did not retain a regular Git checkout"
 grep -Fqx "root=$(cd "$managed" && pwd -P)" "$pipe_log" ||
@@ -493,12 +581,24 @@ git -C "$source_work" push --quiet
 CHECKOUT_TEST_LOG="$pipe_log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-  /bin/bash -s <"$source_work/install.sh" >/dev/null ||
+  "$active_bash" -s <"$source_work/install.sh" >/dev/null ||
   fail "piped reinstall did not fast-forward a clean managed checkout"
 [[ $(git -C "$managed" rev-parse HEAD) == $(git -C "$source_work" rev-parse HEAD) ]] ||
   fail "piped reinstall did not update to the remote main commit"
 grep -Fqx 'version=two' "$pipe_log" ||
   fail "piped reinstall did not invoke the updated delegate"
+CHECKOUT_TEST_LOG="$tmp/no-hardlink.log" \
+  PATH="$no_hardlink_bin:$platform_tool_path" \
+  CHECKOUT_TEST_REAL_LN="$real_ln" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$no_hardlink_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
+  "$active_bash" -s <"$source_work/install.sh" >/dev/null ||
+  fail "piped update did not fall back when hard links were unavailable"
+[[ $(git -C "$no_hardlink_managed" rev-parse HEAD) == $(git -C "$source_work" rev-parse HEAD) ]] ||
+  fail "hard-link fallback did not publish the managed checkout update"
+[[ ! -e "$tmp/no-hardlink-managed/.example-tool.install.transaction" &&
+  ! -L "$tmp/no-hardlink-managed/.example-tool.install.transaction" ]] ||
+  fail "hard-link update fallback left its transaction directory"
 
 printf 'swap-safe\n' >"$source_work/version.txt"
 git -C "$source_work" add version.txt
@@ -521,14 +621,14 @@ exec "${CHECKOUT_TEST_REAL_MV:?}" "$@"
 EOF
 chmod 0755 "$swap_bin/mv"
 set +e
-swap_output=$(PATH="$swap_bin:/usr/bin:/bin" \
+swap_output=$(PATH="$swap_bin:$platform_tool_path" \
   CHECKOUT_TEST_REAL_MV="$real_mv" \
   CHECKOUT_TEST_SWAP_TARGET="$managed_canonical" \
   CHECKOUT_TEST_SWAP_FAILED="$tmp/swap.failed" \
   CHECKOUT_TEST_LOG="$tmp/swap.log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-  /bin/bash -s <"$source_work/install.sh" 2>&1)
+  "$active_bash" -s <"$source_work/install.sh" 2>&1)
 swap_status=$?
 set -e
 [[ "$swap_status" -ne 0 && "$swap_output" == *'managed checkout'* ]] ||
@@ -545,7 +645,7 @@ set -e
 CHECKOUT_TEST_LOG="$pipe_log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-  /bin/bash -s <"$source_work/install.sh" >/dev/null ||
+  "$active_bash" -s <"$source_work/install.sh" >/dev/null ||
   fail "piped reinstall did not recover after a failed update publication"
 grep -Fqx 'version=swap-safe' "$pipe_log" ||
   fail "recovered update did not invoke the newly published delegate"
@@ -569,15 +669,17 @@ fi
 exit "$move_status"
 EOF
 chmod 0755 "$crash_swap_bin/mv"
+cp "$no_hardlink_bin/ln" "$crash_swap_bin/ln"
 set +e
 {
-  PATH="$crash_swap_bin:/usr/bin:/bin" \
+  PATH="$crash_swap_bin:$platform_tool_path" \
+    CHECKOUT_TEST_REAL_LN="$real_ln" \
     CHECKOUT_TEST_REAL_MV="$real_mv" \
     CHECKOUT_TEST_SWAP_TARGET="$managed_canonical" \
     CHECKOUT_TEST_LOG="$tmp/crash-swap.log" \
     CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
     CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-    /bin/bash -s <"$source_work/install.sh" >/dev/null 2>&1
+    "$active_bash" -s <"$source_work/install.sh" >/dev/null 2>&1
 } 2>/dev/null
 crash_swap_status=$?
 set -e
@@ -596,7 +698,7 @@ set +e
 crash_recovery_output=$(CHECKOUT_TEST_LOG="$tmp/crash-recovery.log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-  /bin/bash -s <"$source_work/install.sh" 2>&1)
+  "$active_bash" -s <"$source_work/install.sh" 2>&1)
 crash_recovery_status=$?
 set -e
 [[ "$crash_recovery_status" -ne 0 &&
@@ -608,7 +710,7 @@ git -C "$managed" restore version.txt
 CHECKOUT_TEST_LOG="$pipe_log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-  /bin/bash -s <"$source_work/install.sh" >/dev/null ||
+  "$active_bash" -s <"$source_work/install.sh" >/dev/null ||
   fail "piped reinstall did not finish an interrupted committed update"
 [[ ! -e "$crash_transaction" && ! -L "$crash_transaction" ]] ||
   fail "committed update recovery left its transaction directory"
@@ -632,14 +734,16 @@ fi
 exec "${CHECKOUT_TEST_REAL_MV:?}" "$@"
 EOF
 chmod 0755 "$update_race_bin/mv"
+cp "$no_hardlink_bin/ln" "$update_race_bin/ln"
 set +e
-update_race_output=$(PATH="$update_race_bin:/usr/bin:/bin" \
+update_race_output=$(PATH="$update_race_bin:$platform_tool_path" \
+  CHECKOUT_TEST_REAL_LN="$real_ln" \
   CHECKOUT_TEST_REAL_MV="$real_mv" \
   CHECKOUT_TEST_SWAP_TARGET="$managed_canonical" \
   CHECKOUT_TEST_LOG="$tmp/update-race.log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-  /bin/bash -s <"$source_work/install.sh" 2>&1)
+  "$active_bash" -s <"$source_work/install.sh" 2>&1)
 update_race_status=$?
 set -e
 [[ "$update_race_status" -ne 0 &&
@@ -657,7 +761,7 @@ rmdir "$managed"
 CHECKOUT_TEST_LOG="$pipe_log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-  /bin/bash -s <"$source_work/install.sh" >/dev/null ||
+  "$active_bash" -s <"$source_work/install.sh" >/dev/null ||
   fail "piped reinstall did not recover after an update publication race"
 [[ ! -e "$update_race_transaction" ]] ||
   fail "update publication race recovery left its transaction directory"
@@ -671,7 +775,7 @@ CHECKOUT_TEST_LOG="$tmp/blocking.log" \
   CHECKOUT_TEST_BLOCK_RELEASE="$blocking_release" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-  /bin/bash -s <"$source_work/install.sh" >"$tmp/blocking.out" 2>&1 &
+  "$active_bash" -s <"$source_work/install.sh" >"$tmp/blocking.out" 2>&1 &
 blocking_pid=$!
 for _ in {1..100}; do
   [[ -e "$blocking_ready" ]] && break
@@ -690,7 +794,7 @@ set +e
 blocked_output=$(CHECKOUT_TEST_LOG="$pipe_log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-  /bin/bash -s <"$source_work/install.sh" 2>&1)
+  "$active_bash" -s <"$source_work/install.sh" 2>&1)
 blocked_status=$?
 set -e
 [[ "$blocked_status" -ne 0 && "$blocked_output" == *'install.lock'* ]] ||
@@ -707,7 +811,7 @@ set +e
 stale_output=$(CHECKOUT_TEST_LOG="$tmp/stale.log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$stale_managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-  /bin/bash -s <"$source_work/install.sh" 2>&1)
+  "$active_bash" -s <"$source_work/install.sh" 2>&1)
 stale_status=$?
 set -e
 [[ "$stale_status" -ne 0 &&
@@ -719,7 +823,7 @@ rmdir "$stale_lock"
 CHECKOUT_TEST_LOG="$tmp/stale-retry.log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$stale_managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-  /bin/bash -s <"$source_work/install.sh" >/dev/null ||
+  "$active_bash" -s <"$source_work/install.sh" >/dev/null ||
   fail "piped install did not recover after removing a confirmed stale lock"
 
 : >"$blocking_release"
@@ -730,7 +834,7 @@ blocking_release=
 CHECKOUT_TEST_LOG="$pipe_log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-  /bin/bash -s <"$source_work/install.sh" >/dev/null ||
+  "$active_bash" -s <"$source_work/install.sh" >/dev/null ||
   fail "piped install did not update after the delegate released its lock"
 grep -Fqx 'version=three' "$pipe_log" ||
   fail "post-lock piped install did not invoke the updated delegate"
@@ -742,9 +846,10 @@ CHECKOUT_TEST_LOG="$tmp/signal.log" \
   CHECKOUT_TEST_BLOCK_READY="$signal_ready" \
   CHECKOUT_TEST_BLOCK_RELEASE="$signal_release" \
   CHECKOUT_TEST_BLOCK_CHILD_FILE="$signal_delegate_child_file" \
+  CHECKOUT_TEST_BLOCK_DELAYED_TERM=1 \
   CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-  /bin/bash -s <"$source_work/install.sh" >"$tmp/signal.out" 2>&1 &
+  "$active_bash" -s <"$source_work/install.sh" >"$tmp/signal.out" 2>&1 &
 signal_pid=$!
 for _ in {1..100}; do
   [[ -e "$signal_ready" && -e "$signal_delegate_child_file" ]] && break
@@ -773,10 +878,10 @@ set -e
   fail "TERM did not produce bootstrap status 143"
 signal_pid=
 signal_release=
-! kill -0 "$signal_delegate_pid" 2>/dev/null ||
-  fail "bootstrap left its delegate running after TERM"
-! kill -0 "$signal_delegate_child" 2>/dev/null ||
-  fail "bootstrap left a delegate child running after TERM"
+assert_process_gone "$signal_delegate_pid" \
+  "bootstrap left its delegate running after TERM"
+assert_process_gone "$signal_delegate_child" \
+  "bootstrap left a delegate child running after TERM"
 signal_delegate_child_file=
 [[ ! -e "$tmp/managed/.example-tool.install.lock" ]] ||
   fail "bootstrap left its lock after TERM"
@@ -792,9 +897,10 @@ CHECKOUT_TEST_LOG="$tmp/signal-int.log" \
   CHECKOUT_TEST_BLOCK_READY="$signal_ready" \
   CHECKOUT_TEST_BLOCK_RELEASE="$signal_release" \
   CHECKOUT_TEST_BLOCK_CHILD_FILE="$signal_delegate_child_file" \
+  CHECKOUT_TEST_BLOCK_DELAYED_TERM=1 \
   CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-  /bin/bash -s <"$source_work/install.sh" >"$tmp/signal-int.out" 2>&1
+  "$active_bash" -s <"$source_work/install.sh" >"$tmp/signal-int.out" 2>&1
 signal_status=$?
 wait "$interrupt_killer_pid"
 interrupt_killer_status=$?
@@ -809,10 +915,10 @@ signal_delegate_child=$(sed -n '1p' "$signal_delegate_child_file")
 [[ "$signal_status" -eq 130 ]] ||
   fail "INT did not produce bootstrap status 130"
 signal_release=
-! kill -0 "$signal_delegate_pid" 2>/dev/null ||
-  fail "bootstrap left its delegate running after INT"
-! kill -0 "$signal_delegate_child" 2>/dev/null ||
-  fail "bootstrap left a delegate child running after INT"
+assert_process_gone "$signal_delegate_pid" \
+  "bootstrap left its delegate running after INT"
+assert_process_gone "$signal_delegate_child" \
+  "bootstrap left a delegate child running after INT"
 signal_delegate_child_file=
 [[ ! -e "$tmp/managed/.example-tool.install.lock" ]] ||
   fail "bootstrap left its lock after INT"
@@ -837,14 +943,14 @@ done
 exec "$CHECKOUT_TEST_REAL_GIT" "$@"
 EOF
 chmod 0755 "$network_signal_bin/git"
-PATH="$network_signal_bin:$PATH" \
+PATH="$network_signal_bin:$platform_tool_path" \
   CHECKOUT_TEST_REAL_GIT="$real_git" \
   CHECKOUT_TEST_NETWORK_SIGNAL_READY="$network_signal_ready" \
   CHECKOUT_TEST_NETWORK_SIGNAL_RELEASE="$network_signal_release" \
   CHECKOUT_TEST_LOG="$tmp/network-signal.log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$network_signal_managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-  /bin/bash -s <"$source_work/install.sh" \
+  "$active_bash" -s <"$source_work/install.sh" \
   >"$tmp/network-signal.out" 2>&1 &
 network_signal_pid=$!
 for _ in {1..100}; do
@@ -873,8 +979,8 @@ set -e
   fail "TERM during network Git did not produce status 143"
 network_signal_pid=
 network_signal_release=
-! kill -0 "$network_git_pid" 2>/dev/null ||
-  fail "bootstrap left network Git running after TERM"
+assert_process_gone "$network_git_pid" \
+  "bootstrap left network Git running after TERM"
 [[ ! -e "$network_signal_managed" && ! -L "$network_signal_managed" ]] ||
   fail "TERM during clone published a managed checkout"
 [[ ! -e "$tmp/network-signal-managed/.example-tool.install.lock" ]] ||
@@ -892,14 +998,14 @@ interrupt_parent_of_ready_child \
   "$network_signal_ready" "$network_signal_timeout" &
 interrupt_killer_pid=$!
 set +e
-PATH="$network_signal_bin:$PATH" \
+PATH="$network_signal_bin:$platform_tool_path" \
   CHECKOUT_TEST_REAL_GIT="$real_git" \
   CHECKOUT_TEST_NETWORK_SIGNAL_READY="$network_signal_ready" \
   CHECKOUT_TEST_NETWORK_SIGNAL_RELEASE="$network_signal_release" \
   CHECKOUT_TEST_LOG="$tmp/network-signal-int.log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$network_signal_managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-  /bin/bash -s <"$source_work/install.sh" \
+  "$active_bash" -s <"$source_work/install.sh" \
   >"$tmp/network-signal-int.out" 2>&1
 network_signal_status=$?
 wait "$interrupt_killer_pid"
@@ -914,8 +1020,8 @@ network_git_pid=$(sed -n '1p' "$network_signal_ready")
 [[ "$network_signal_status" -eq 130 ]] ||
   fail "INT during network Git did not produce status 130"
 network_signal_release=
-! kill -0 "$network_git_pid" 2>/dev/null ||
-  fail "bootstrap left network Git running after INT"
+assert_process_gone "$network_git_pid" \
+  "bootstrap left network Git running after INT"
 [[ ! -e "$network_signal_managed" && ! -L "$network_signal_managed" ]] ||
   fail "INT during clone published a managed checkout"
 [[ ! -e "$tmp/network-signal-int-managed/.example-tool.install.lock" ]] ||
@@ -948,7 +1054,7 @@ GIT_DIR="$poison_git_dir" \
   CHECKOUT_TEST_LOG="$tmp/poison.log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$poison_managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-  /bin/bash -s <"$source_work/install.sh" >/dev/null ||
+  "$active_bash" -s <"$source_work/install.sh" >/dev/null ||
   fail "piped install did not isolate bootstrap Git repository variables"
 grep -Fqx "root=$(cd "$poison_managed" && pwd -P)" "$tmp/poison.log" ||
   fail "Git environment poison redirected the managed checkout"
@@ -981,7 +1087,7 @@ CHECKOUT_TEST_CONFIG_POISON_MARKER="$config_poison_marker" \
   CHECKOUT_TEST_LOG="$tmp/config-poison.log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$config_poison_managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-  /bin/bash -s <"$source_work/install.sh" >/dev/null ||
+  "$active_bash" -s <"$source_work/install.sh" >/dev/null ||
   fail "piped install did not isolate inherited Git configuration"
 [[ ! -e "$config_poison_marker" ]] ||
   fail "inherited Git configuration executed an unapproved transport"
@@ -992,7 +1098,7 @@ config_protocol_output=$(CHECKOUT_TEST_CONFIG_POISON_MARKER="$config_poison_mark
   CHECKOUT_TEST_LOG="$tmp/config-protocol.log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$tmp/config-protocol-managed/example-tool" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="ext::$config_poison/ext-helper" \
-  /bin/bash -s <"$source_work/install.sh" 2>&1)
+  "$active_bash" -s <"$source_work/install.sh" 2>&1)
 config_protocol_status=$?
 set -e
 [[ "$config_protocol_status" -ne 0 &&
@@ -1023,17 +1129,21 @@ fi
 exit "$move_status"
 EOF
 chmod 0755 "$race_bin/mv"
+# Exercise publication-race cleanup through the same symbolic-link identity
+# fallback required by filesystems that reject hard links.
+cp "$no_hardlink_bin/ln" "$race_bin/ln"
 # Keep the mv fixture from intercepting cache publication inside a user's
 # PATH-visible Git launcher when multiple test processes run concurrently.
-race_path="$race_bin:/usr/bin:/bin"
+race_path="$race_bin:$platform_tool_path"
 set +e
 race_output=$(PATH="$race_path" \
+  CHECKOUT_TEST_REAL_LN="$real_ln" \
   CHECKOUT_TEST_REAL_MV="$real_mv" \
   CHECKOUT_TEST_RACE_MARKER="$race_marker" \
   CHECKOUT_TEST_LOG="$tmp/race.log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$race_managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-  /bin/bash -s <"$source_work/install.sh" 2>&1)
+  "$active_bash" -s <"$source_work/install.sh" 2>&1)
 race_status=$?
 set -e
 [[ "$race_status" -ne 0 && "$race_output" == *'publication'* ]] ||
@@ -1049,13 +1159,14 @@ fi
 race_term_managed="$tmp/race-term-managed/example-tool"
 set +e
 PATH="$race_path" \
+  CHECKOUT_TEST_REAL_LN="$real_ln" \
   CHECKOUT_TEST_REAL_MV="$real_mv" \
   CHECKOUT_TEST_RACE_MARKER="$race_marker" \
   CHECKOUT_TEST_RACE_TERM_PARENT=1 \
   CHECKOUT_TEST_LOG="$tmp/race-term.log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$race_term_managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-  /bin/bash -s <"$source_work/install.sh" >/dev/null 2>&1
+  "$active_bash" -s <"$source_work/install.sh" >/dev/null 2>&1
 race_term_status=$?
 set -e
 [[ "$race_term_status" -eq 143 ]] ||
@@ -1123,13 +1234,13 @@ set +e
 migration_parent=$(cd -P -- "${migration_managed%/*}" && pwd -P)
 migration_previous_target="$migration_parent/.example-tool.install.transaction/previous"
 {
-  PATH="$migration_crash_bin:/usr/bin:/bin" \
+  PATH="$migration_crash_bin:$platform_tool_path" \
     CHECKOUT_TEST_REAL_MV="$real_mv" \
     CHECKOUT_TEST_OLD_MOVED_TARGET="$migration_previous_target" \
     CHECKOUT_TEST_LOG="$tmp/migration-crash.log" \
     CGRAF78_CHECKOUT_INSTALL_DIR="$migration_managed" \
     CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$migration_remote" \
-    /bin/bash -s <"$migration_source/install.sh" >/dev/null 2>&1
+    "$active_bash" -s <"$migration_source/install.sh" >/dev/null 2>&1
 } 2>/dev/null
 migration_crash_status=$?
 set -e
@@ -1153,7 +1264,7 @@ rmdir "$migration_lock"
 CHECKOUT_TEST_LOG="$tmp/migration.log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$migration_managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$migration_remote" \
-  /bin/bash -s <"$migration_source/install.sh" >/dev/null ||
+  "$active_bash" -s <"$migration_source/install.sh" >/dev/null ||
   fail "piped update could not migrate the checkout delegate path"
 [[ $(git -C "$migration_managed" rev-parse HEAD) == $(git -C "$migration_source" rev-parse HEAD) ]] ||
   fail "delegate path migration did not update the managed checkout"
@@ -1185,7 +1296,7 @@ missing_repo_url="file://$missing_remote"
 CHECKOUT_TEST_LOG="$tmp/missing-initial.log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$missing_managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$missing_repo_url" \
-  /bin/bash -s <"$missing_source/install.sh" >/dev/null ||
+  "$active_bash" -s <"$missing_source/install.sh" >/dev/null ||
   fail "missing-delegate update fixture did not install initially"
 missing_head=$(git -C "$missing_managed" rev-parse HEAD)
 git -C "$missing_source" rm --quiet support/install-checkout.sh
@@ -1196,7 +1307,7 @@ set +e
 missing_update_output=$(CHECKOUT_TEST_LOG="$tmp/missing-update.log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$missing_managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$missing_repo_url" \
-  /bin/bash -s <"$missing_source/install.sh" 2>&1)
+  "$active_bash" -s <"$missing_source/install.sh" 2>&1)
 missing_update_status=$?
 set -e
 [[ "$missing_update_status" -ne 0 &&
@@ -1209,7 +1320,7 @@ set +e
 missing_fresh_output=$(CHECKOUT_TEST_LOG="$tmp/missing-fresh.log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$missing_fresh" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$missing_repo_url" \
-  /bin/bash -s <"$missing_source/install.sh" 2>&1)
+  "$active_bash" -s <"$missing_source/install.sh" 2>&1)
 missing_fresh_status=$?
 set -e
 [[ "$missing_fresh_status" -ne 0 &&
@@ -1222,7 +1333,7 @@ set +e
 CHECKOUT_TEST_LOG="$pipe_log" CHECKOUT_TEST_EXIT=29 \
   CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-  /bin/bash -s <"$source_work/install.sh" >/dev/null 2>&1
+  "$active_bash" -s <"$source_work/install.sh" >/dev/null 2>&1
 pipe_status=$?
 set -e
 [[ "$pipe_status" -eq 29 ]] ||
@@ -1234,7 +1345,7 @@ set +e
 dirty_output=$(CHECKOUT_TEST_LOG="$pipe_log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-  /bin/bash -s <"$source_work/install.sh" 2>&1)
+  "$active_bash" -s <"$source_work/install.sh" 2>&1)
 dirty_status=$?
 set -e
 [[ "$dirty_status" -ne 0 && "$dirty_output" == *'dirty'* ]] ||
@@ -1249,7 +1360,7 @@ set +e
 foreign_output=$(CHECKOUT_TEST_LOG="$pipe_log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$foreign" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-  /bin/bash -s <"$source_work/install.sh" 2>&1)
+  "$active_bash" -s <"$source_work/install.sh" 2>&1)
 foreign_status=$?
 set -e
 [[ "$foreign_status" -ne 0 && "$foreign_output" == *'managed Git checkout'* ]] ||
@@ -1265,7 +1376,7 @@ set +e
 foreign_transaction_output=$(CHECKOUT_TEST_LOG="$pipe_log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$foreign_transaction_managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
-  /bin/bash -s <"$source_work/install.sh" 2>&1)
+  "$active_bash" -s <"$source_work/install.sh" 2>&1)
 foreign_transaction_status=$?
 set -e
 [[ "$foreign_transaction_status" -ne 0 &&
@@ -1279,7 +1390,7 @@ set +e
 CHECKOUT_TEST_LOG="$pipe_log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$failed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$tmp/missing.git" \
-  /bin/bash -s <"$source_work/install.sh" >/dev/null 2>&1
+  "$active_bash" -s <"$source_work/install.sh" >/dev/null 2>&1
 failed_status=$?
 set -e
 [[ "$failed_status" -ne 0 ]] ||

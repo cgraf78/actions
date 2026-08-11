@@ -195,7 +195,7 @@ jobs:
             *) echo "working-directory escapes checkout" >&2; exit 1 ;;
           esac
           cd "$workdir_path"
-          bash "$TMPDIR/termux-ci-command"
+          bash -euo pipefail "$TMPDIR/termux-ci-command"
           RUNNER
           } >"$RUNNER_TEMP/termux-ci-runner"
           {
