@@ -141,6 +141,12 @@ jobs:
           readelf -h "$binary" | grep -Fq "$EXPECTED_MACHINE"
           readelf -l "$binary" | grep -Fq '/system/bin/linker64'
 
+  release-installer-bash32:
+    name: Release installer / Bash 3.2
+    uses: ./.github/workflows/bash32-ci.yml
+    with:
+      command: /bin/bash test/release-installer-test
+
   quality:
     name: Quality / Ubuntu
     runs-on: ubuntu-24.04
@@ -220,6 +226,10 @@ jobs:
         shell: bash
         run: test/consumer-sync-test
 
+      - name: Test generated release installer
+        shell: bash
+        run: test/release-installer-test
+
       - name: Test musl build prerequisites
         shell: bash
         run: test/musl-prereqs-test
@@ -232,13 +242,14 @@ jobs:
   required:
     name: Required
     if: ${{ always() }}
-    needs: [shell-smoke, rust-smoke, matrix-contract, android-rust-toolchain, quality]
+    needs: [shell-smoke, rust-smoke, matrix-contract, android-rust-toolchain, release-installer-bash32, quality]
     runs-on: ubuntu-24.04
     env:
       SHELL_SMOKE_RESULT: ${{ needs.shell-smoke.result }}
       RUST_SMOKE_RESULT: ${{ needs.rust-smoke.result }}
       MATRIX_CONTRACT_RESULT: ${{ needs.matrix-contract.result }}
       ANDROID_TOOLCHAIN_RESULT: ${{ needs.android-rust-toolchain.result }}
+      RELEASE_INSTALLER_BASH32_RESULT: ${{ needs.release-installer-bash32.result }}
       QUALITY_RESULT: ${{ needs.quality.result }}
     steps:
       - name: Require successful Actions CI
@@ -248,9 +259,11 @@ jobs:
           printf 'Rust smoke: %s\n' "$RUST_SMOKE_RESULT"
           printf 'Matrix contract: %s\n' "$MATRIX_CONTRACT_RESULT"
           printf 'Android toolchain: %s\n' "$ANDROID_TOOLCHAIN_RESULT"
+          printf 'Release installer Bash 3.2: %s\n' "$RELEASE_INSTALLER_BASH32_RESULT"
           printf 'Quality: %s\n' "$QUALITY_RESULT"
           test "$SHELL_SMOKE_RESULT" = success
           test "$RUST_SMOKE_RESULT" = success
           test "$MATRIX_CONTRACT_RESULT" = success
           test "$ANDROID_TOOLCHAIN_RESULT" = success
+          test "$RELEASE_INSTALLER_BASH32_RESULT" = success
           test "$QUALITY_RESULT" = success

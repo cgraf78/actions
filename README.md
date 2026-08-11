@@ -11,7 +11,7 @@ detailed result contract is documented in
 Consumer repositories make one version decision in
 `.github/cgraf78-actions.lock`; `consumer-ci/sync.sh` generates the literal
 workflow refs GitHub requires and, when configured, refreshes vendored release
-scripts from that same commit. See
+scripts and a standalone release installer from that same commit. See
 [`consumer-ci/README.md`](consumer-ci/README.md) for the update and verification
 contract.
 
@@ -186,7 +186,9 @@ implementation of release identity, packaging, and smoke validation that the
 `cgraf78` Rust repos vendor into their own `scripts/` directory, so each repo
 declares only its payload in `scripts/release.conf`. The broader
 `verify-consumer-sync` action checks the repository lock, every literal
-`cgraf78/actions` ref, and the complete managed set of vendored scripts.
+`cgraf78/actions` ref, the complete managed set of vendored scripts, and any
+installer opted in through that release policy. The generated installer itself
+is owned by [`release-installer/`](release-installer/README.md).
 
 ## Layout
 
@@ -230,12 +232,15 @@ than one worker are split into first-party composite actions:
   release scripts no longer match `release-scripts/`.
 - `.github/actions/verify-consumer-sync/` enforces one consumer lock across all
   workflow/action refs and, when `scripts/release.conf` is tracked, delegates
-  to the release-script verifier.
+  to the release-script verifier and checks an opted-in generated installer.
 - `consumer-ci/` owns the maintainer command that regenerates a consumer from
   one clean, reviewed `actions` checkout.
 - `release-scripts/` owns the shared release identity, packaging, and smoke
   logic. It sits outside `.github/` because consumers vendor it into their own
   repositories rather than calling it as an action.
+- `release-installer/` owns the template and renderer for the optional,
+  self-contained top-level installer. Consumers commit the generated file so
+  direct downloads never depend on this repository at runtime.
 
 Callers pin reusable workflows to reviewed commit SHAs and use dependency PRs
 to roll shared fixes across the fleet. Consumer lock verification prevents a

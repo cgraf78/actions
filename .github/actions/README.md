@@ -21,7 +21,8 @@ this repo and by other `cgraf78` repositories.
 - `verify-consumer-sync` is the consumer-facing gate: it requires every
   `cgraf78/actions` ref and the verifier's own ref to match the repository lock,
   then runs `verify-release-scripts` for the same checked-out actions commit
-  when the consumer tracks `scripts/release.conf`.
+  when the consumer tracks `scripts/release.conf`, and rerenders any standalone
+  installer opted into by that policy.
 
 Keep composite actions narrow and reusable. If behavior is only needed by a
 single reusable workflow, prefer keeping it in that workflow until a second

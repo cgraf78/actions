@@ -19,6 +19,7 @@ actions_source="$tmp/actions"
 mkdir -p "$actions_source/.github/actions"
 cp -R "$root/consumer-ci" "$actions_source/consumer-ci"
 cp -R "$root/release-scripts" "$actions_source/release-scripts"
+cp -R "$root/release-installer" "$actions_source/release-installer"
 cp -R "$root/.github/actions/verify-consumer-sync" \
   "$actions_source/.github/actions/verify-consumer-sync"
 cp -R "$root/.github/actions/verify-release-scripts" \
@@ -68,7 +69,18 @@ runs:
     - uses: 'cgraf78/actions/.github/actions/example@7777777777777777777777777777777777777777'
 YAML
 printf 'stale\n' >"$consumer/scripts/package-release.sh"
-printf 'RELEASE_ENV_PREFIX=TOOL\n' >"$consumer/scripts/release.conf"
+cat >"$consumer/scripts/release.conf" <<'EOF'
+# shellcheck shell=bash
+# shellcheck disable=SC2034
+RELEASE_ENV_PREFIX=TOOL
+RELEASE_SLUG=tool
+RELEASE_REPO=example/tool
+RELEASE_ASSET_NAME=tool
+RELEASE_BINARY=tool
+RELEASE_BINARY_DEST=bin/tool
+RELEASE_PAYLOAD_FILES=(README.md LICENSE man/man1/tool.1)
+RELEASE_STANDALONE_INSTALLER=true
+EOF
 git -C "$consumer" add .
 
 "$sync" "$consumer" >/dev/null ||
@@ -93,6 +105,11 @@ fi
 diff -u "$actions_source/release-scripts/package-release.sh" \
   "$consumer/scripts/package-release.sh" >/dev/null ||
   fail "sync did not refresh release scripts"
+[[ -f "$consumer/install.sh" && ! -L "$consumer/install.sh" &&
+  -x "$consumer/install.sh" ]] ||
+  fail "sync did not generate an executable top-level installer"
+grep -Fq "release_repo='example/tool'" "$consumer/install.sh" ||
+  fail "sync generated an installer with the wrong consumer policy"
 
 git -C "$consumer" add .
 GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
@@ -100,6 +117,42 @@ GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
   ACTION_REF="$want" \
   "$verify" >/dev/null ||
   fail "freshly synchronized consumer did not verify"
+
+printf '\n# consumer drift\n' >>"$consumer/install.sh"
+out=$(GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
+  GITHUB_WORKSPACE="$consumer" ACTION_REF="$want" \
+  "$verify" 2>&1) &&
+  fail "drifted generated installer unexpectedly verified"
+if [[ "$out" != *"generated installer differs"* ]]; then
+  fail "installer drift did not explain the failed verification"
+fi
+"$sync" "$consumer" >/dev/null ||
+  fail "sync did not restore a drifted generated installer"
+git -C "$consumer" add .
+
+chmod 0644 "$consumer/install.sh"
+git -C "$consumer" add .
+if GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
+  GITHUB_WORKSPACE="$consumer" ACTION_REF="$want" \
+  "$verify" >/dev/null 2>&1; then
+  fail "non-executable generated installer unexpectedly verified"
+fi
+"$sync" "$consumer" >/dev/null ||
+  fail "sync did not restore the generated installer mode"
+git -C "$consumer" add .
+
+mv "$consumer/install.sh" "$consumer/install.sh-target"
+ln -s install.sh-target "$consumer/install.sh"
+git -C "$consumer" add .
+if GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
+  GITHUB_WORKSPACE="$consumer" ACTION_REF="$want" \
+  "$verify" >/dev/null 2>&1; then
+  fail "symlinked generated installer unexpectedly verified"
+fi
+rm "$consumer/install.sh" "$consumer/install.sh-target"
+"$sync" "$consumer" >/dev/null ||
+  fail "sync did not restore a regular generated installer"
+git -C "$consumer" add .
 
 chmod +x "$consumer/.github/cgraf78-actions.lock"
 git -C "$consumer" add .
@@ -211,6 +264,8 @@ YAML
 git -C "$plain_consumer" add .
 "$sync" "$plain_consumer" >/dev/null ||
   fail "consumer without release scripts did not synchronize"
+[[ ! -e "$plain_consumer/install.sh" ]] ||
+  fail "consumer without installer policy gained an install.sh"
 git -C "$plain_consumer" add .
 GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
   GITHUB_WORKSPACE="$plain_consumer" \

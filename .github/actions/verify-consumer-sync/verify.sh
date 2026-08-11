@@ -141,6 +141,8 @@ fi
 if [[ "$release_config_tracked" == true ]]; then
   export SCRIPTS_DIR=scripts
   "$GITHUB_ACTION_PATH/../verify-release-scripts/verify.sh"
+  actions_root=$(cd "$GITHUB_ACTION_PATH/../../.." && pwd)
+  "$actions_root/release-installer/render.sh" --check "$repo_root"
 else
   printf 'verify-consumer-sync: no tracked release config; version lock only\n'
 fi
