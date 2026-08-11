@@ -94,6 +94,8 @@ case "$CHECKOUT_INSTALLER_DELEGATE" in
     die 'CHECKOUT_INSTALLER_DELEGATE must be a safe relative path'
     ;;
 esac
+[[ "$CHECKOUT_INSTALLER_DELEGATE" != install.sh ]] ||
+  die 'CHECKOUT_INSTALLER_DELEGATE must not be install.sh'
 
 delegate="$consumer/$CHECKOUT_INSTALLER_DELEGATE"
 [[ -f "$delegate" && ! -L "$delegate" ]] ||

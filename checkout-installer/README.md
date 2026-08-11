@@ -51,16 +51,31 @@ maintained branch into:
 ${XDG_DATA_HOME:-$HOME/.local/share}/cgraf78/checkouts/<repository>
 ```
 
-The clone is shallow but durable. A rerun validates the exact origin and branch,
-refuses a dirty, detached, symlinked, nested, or foreign destination, fetches
-without Git hooks, and accepts only a fast-forward whose final commit exactly
-matches the fetched branch. New clones are staged beside the destination and
-published only after their tracked delegate and destination identity pass
-validation. A per-repository directory lock remains held through delegation,
-so an update cannot change the checkout while its installer is publishing
-links. Internal Git operations ignore inherited repository-selection variables
-and cannot prompt through standard Git, credential-helper, askpass, or SSH
-paths.
+The initial clone is shallow but durable. A rerun validates the exact origin
+and branch; refuses a dirty, detached, symlinked, nested, or foreign
+destination; and prepares a separate candidate checkout without Git hooks. It
+accepts only a candidate that fast-forwards the installed revision and matches
+the remote branch exactly. New and updated checkouts are published only after
+their tracked delegate and destination identity pass validation. Updates use a
+same-parent rename transaction, so a failed publication restores the complete
+previous checkout instead of leaving an in-place mixture of revisions. If a
+process dies after the validated candidate reaches the stable path, recovery
+finishes that committed publication; if it dies before publication, recovery
+restores the previous checkout. A per-destination directory lock remains held
+through delegation, so an update cannot change the checkout while its installer
+is publishing links. The two same-parent renames are individually atomic, but
+the stable path can be absent briefly between them. Recovery covers process
+termination; it does not claim power-loss durability without filesystem
+`fsync`, nor protection from a hostile process running as the same user.
+Managed checkouts are disposable source trees: on a revision-changing update,
+ignored files, extra Git objects and reflogs, and checkout-local Git
+configuration are not preserved. Internal Git operations ignore inherited
+repository-selection variables
+and system/global Git configuration, allow only HTTPS, SSH, and local-file
+transports, and cannot prompt through standard Git, credential-helper, askpass,
+or SSH paths. A lock is deliberately fail-closed after an uncatchable process
+termination: after confirming that no installer is running, remove the exact
+empty lock directory named by the diagnostic with `rmdir` and retry.
 
 The entire executable body is one compound shell command. Bash therefore parses
 the final byte before cloning or updating anything; a truncated curl response
@@ -77,10 +92,11 @@ users normally leave both unset.
 
 ## Tests
 
-`test/checkout-installer-test` renders a synthetic consumer and uses a real
-local Git remote. It covers direct delegation, piped clone and update behavior,
+`test/checkout-installer-test` renders synthetic consumers and uses real local
+Git remotes. It covers direct delegation, piped clone and update behavior,
 argument and environment forwarding, exit status propagation, renderer drift,
-truncated input, dirty and foreign destination refusal, missing delegates,
-concurrent installs, signal forwarding, Git-environment isolation, publication
-races, and failed-clone cleanup. The suite is portable to macOS system Bash
+truncated input, dirty and foreign destination refusal, missing and migrating
+delegates, concurrent installs, signal forwarding, Git-environment isolation,
+failed and interrupted update transactions, publication races, stale-lock
+recovery, and failed-clone cleanup. The suite is portable to macOS system Bash
 3.2.

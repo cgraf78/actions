@@ -99,6 +99,7 @@ checkout_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
   printf 'git_dir=%s\n' "${GIT_DIR-unset}"
   printf 'git_work_tree=%s\n' "${GIT_WORK_TREE-unset}"
   printf 'git_index_file=%s\n' "${GIT_INDEX_FILE-unset}"
+  printf 'bash=%s\n' "$BASH"
   printf 'argc=%s\n' "$#"
   argument_index=0
   for argument in "$@"; do
@@ -229,6 +230,15 @@ grep -Fqx 'argc=2' "$direct_log" ||
 grep -Fqx 'arg2=two words' "$direct_log" ||
   fail "direct checkout install did not preserve argument boundaries"
 
+alternate_bash="$tmp/alternate-bash"
+ln -s "$BASH" "$alternate_bash"
+alternate_direct_log="$tmp/alternate-direct.log"
+CHECKOUT_TEST_LOG="$alternate_direct_log" \
+  "$alternate_bash" "$consumer/install.sh" >/dev/null ||
+  fail "direct checkout install failed under an alternate Bash path"
+grep -Fqx "bash=$alternate_bash" "$alternate_direct_log" ||
+  fail "direct checkout install did not preserve the selected Bash interpreter"
+
 set +e
 CHECKOUT_TEST_LOG="$direct_log" CHECKOUT_TEST_EXIT=23 \
   /bin/bash "$consumer/install.sh" >/dev/null 2>&1
@@ -271,6 +281,26 @@ if "$root/checkout-installer/render.sh" "$invalid_consumer" \
 fi
 [[ ! -e "$invalid_consumer/install.sh" ]] ||
   fail "invalid delegate left a generated installer"
+
+self_delegate_consumer="$tmp/self-delegate-consumer"
+write_config "$self_delegate_consumer"
+write_delegate "$self_delegate_consumer"
+"$root/checkout-installer/render.sh" "$self_delegate_consumer" >/dev/null
+cp "$self_delegate_consumer/install.sh" \
+  "$self_delegate_consumer/install.sh.before"
+printf 'CHECKOUT_INSTALLER_DELEGATE=install.sh\n' \
+  >>"$self_delegate_consumer/scripts/checkout-installer.conf"
+set +e
+self_delegate_output=$("$root/checkout-installer/render.sh" \
+  "$self_delegate_consumer" 2>&1)
+self_delegate_status=$?
+set -e
+[[ "$self_delegate_status" -ne 0 &&
+  "$self_delegate_output" == *'must not be install.sh'* ]] ||
+  fail "renderer accepted install.sh as its own delegate"
+cmp -s "$self_delegate_consumer/install.sh.before" \
+  "$self_delegate_consumer/install.sh" ||
+  fail "self-delegate rejection changed the previous generated installer"
 
 invalid_repo_consumer="$tmp/invalid-repo-consumer"
 write_config "$invalid_repo_consumer"
@@ -362,6 +392,7 @@ git_probe_bin="$tmp/git-probe-bin"
 git_probe_marker="$tmp/git-consumed-installer-input"
 git_probe_env_log="$tmp/git-bootstrap-environment"
 real_git=$(PATH=/usr/bin:/bin command -v git)
+real_mv=$(PATH=/usr/bin:/bin command -v mv)
 mkdir -p "$git_probe_bin"
 cat >"$git_probe_bin/git" <<'EOF'
 #!/usr/bin/env bash
@@ -422,12 +453,29 @@ grep -Fqx 'git_ssh_command=ssh -oBatchMode=yes' "$git_probe_env_log" ||
   fail "piped install did not force noninteractive SSH"
 grep -Fq '<credential.helper=>' "$git_probe_env_log" ||
   fail "piped install did not disable Git credential helpers"
+grep -Fq '<protocol.allow=never>' "$git_probe_env_log" ||
+  fail "piped install did not deny unapproved Git transports"
+grep -Fq '<protocol.file.allow=always>' "$git_probe_env_log" ||
+  fail "piped install did not explicitly allow local Git remotes"
+grep -Fq '<protocol.https.allow=always>' "$git_probe_env_log" ||
+  fail "piped install did not explicitly allow HTTPS Git remotes"
+grep -Fq '<protocol.ssh.allow=always>' "$git_probe_env_log" ||
+  fail "piped install did not explicitly allow SSH Git remotes"
 grep -Fqx 'arg2=two words' "$pipe_log" ||
   fail "piped install did not preserve argument boundaries"
 [[ $(git -C "$managed" remote get-url origin) == "$repo_url" ]] ||
   fail "managed checkout retained the wrong origin"
 [[ $(git -C "$managed" branch --show-current) == main ]] ||
   fail "managed checkout retained the wrong branch"
+
+alternate_pipe_log="$tmp/alternate-pipe.log"
+CHECKOUT_TEST_LOG="$alternate_pipe_log" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
+  "$alternate_bash" -s <"$source_work/install.sh" >/dev/null ||
+  fail "piped reinstall failed under an alternate Bash path"
+grep -Fqx "bash=$alternate_bash" "$alternate_pipe_log" ||
+  fail "piped reinstall did not preserve the selected Bash interpreter"
 
 printf 'two\n' >"$source_work/version.txt"
 git -C "$source_work" add version.txt
@@ -442,6 +490,170 @@ CHECKOUT_TEST_LOG="$pipe_log" \
   fail "piped reinstall did not update to the remote main commit"
 grep -Fqx 'version=two' "$pipe_log" ||
   fail "piped reinstall did not invoke the updated delegate"
+
+printf 'swap-safe\n' >"$source_work/version.txt"
+git -C "$source_work" add version.txt
+git -C "$source_work" commit --quiet -m 'atomic swap fixture'
+git -C "$source_work" push --quiet
+swap_old_head=$(git -C "$managed" rev-parse HEAD)
+swap_old_version=$(sed -n '1p' "$managed/version.txt")
+swap_bin="$tmp/swap-bin"
+mkdir -p "$swap_bin"
+cat >"$swap_bin/mv" <<'EOF'
+#!/usr/bin/env bash
+
+target=${!#}
+if [[ "$target" == "${CHECKOUT_TEST_SWAP_TARGET:?}" &&
+  ! -e "${CHECKOUT_TEST_SWAP_FAILED:?}" ]]; then
+  : >"$CHECKOUT_TEST_SWAP_FAILED"
+  exit 73
+fi
+exec "${CHECKOUT_TEST_REAL_MV:?}" "$@"
+EOF
+chmod 0755 "$swap_bin/mv"
+set +e
+swap_output=$(PATH="$swap_bin:/usr/bin:/bin" \
+  CHECKOUT_TEST_REAL_MV="$real_mv" \
+  CHECKOUT_TEST_SWAP_TARGET="$managed" \
+  CHECKOUT_TEST_SWAP_FAILED="$tmp/swap.failed" \
+  CHECKOUT_TEST_LOG="$tmp/swap.log" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
+  /bin/bash -s <"$source_work/install.sh" 2>&1)
+swap_status=$?
+set -e
+[[ "$swap_status" -ne 0 && "$swap_output" == *'managed checkout'* ]] ||
+  fail "failed update publication unexpectedly succeeded"
+[[ $(git -C "$managed" rev-parse HEAD) == "$swap_old_head" ]] ||
+  fail "failed update publication changed the managed checkout revision"
+[[ $(sed -n '1p' "$managed/version.txt") == "$swap_old_version" ]] ||
+  fail "failed update publication mixed managed checkout contents"
+[[ -z $(git -C "$managed" status --porcelain --untracked-files=normal) ]] ||
+  fail "failed update publication left the managed checkout dirty"
+[[ ! -e "$tmp/managed/.example-tool.install.transaction" ]] ||
+  fail "failed update publication left its transaction directory"
+
+CHECKOUT_TEST_LOG="$pipe_log" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
+  /bin/bash -s <"$source_work/install.sh" >/dev/null ||
+  fail "piped reinstall did not recover after a failed update publication"
+grep -Fqx 'version=swap-safe' "$pipe_log" ||
+  fail "recovered update did not invoke the newly published delegate"
+
+printf 'crash-safe\n' >"$source_work/version.txt"
+git -C "$source_work" add version.txt
+git -C "$source_work" commit --quiet -m 'interrupted swap fixture'
+git -C "$source_work" push --quiet
+crash_swap_bin="$tmp/crash-swap-bin"
+mkdir -p "$crash_swap_bin"
+cat >"$crash_swap_bin/mv" <<'EOF'
+#!/usr/bin/env bash
+
+target=${!#}
+"${CHECKOUT_TEST_REAL_MV:?}" "$@"
+move_status=$?
+if [[ "$target" == "${CHECKOUT_TEST_SWAP_TARGET:?}" &&
+  "$move_status" -eq 0 ]]; then
+  kill -KILL "$PPID"
+fi
+exit "$move_status"
+EOF
+chmod 0755 "$crash_swap_bin/mv"
+set +e
+{
+  PATH="$crash_swap_bin:/usr/bin:/bin" \
+    CHECKOUT_TEST_REAL_MV="$real_mv" \
+    CHECKOUT_TEST_SWAP_TARGET="$managed" \
+    CHECKOUT_TEST_LOG="$tmp/crash-swap.log" \
+    CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
+    CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
+    /bin/bash -s <"$source_work/install.sh" >/dev/null 2>&1
+} 2>/dev/null
+crash_swap_status=$?
+set -e
+[[ "$crash_swap_status" -eq 137 ]] ||
+  fail "SIGKILL update fixture did not terminate during publication"
+crash_transaction="$tmp/managed/.example-tool.install.transaction"
+crash_lock="$tmp/managed/.example-tool.install.lock"
+[[ -d "$crash_transaction/previous/.git" && -d "$managed/.git" ]] ||
+  fail "SIGKILL update fixture did not retain both transaction versions"
+[[ -d "$crash_lock" ]] ||
+  fail "SIGKILL update fixture did not leave its fail-closed lock"
+crash_previous_head=$(git -C "$crash_transaction/previous" rev-parse HEAD)
+printf 'corrupt\n' >>"$managed/version.txt"
+rmdir "$crash_lock"
+set +e
+crash_recovery_output=$(CHECKOUT_TEST_LOG="$tmp/crash-recovery.log" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
+  /bin/bash -s <"$source_work/install.sh" 2>&1)
+crash_recovery_status=$?
+set -e
+[[ "$crash_recovery_status" -ne 0 &&
+  "$crash_recovery_output" == *'cannot recover interrupted'* ]] ||
+  fail "recovery accepted a modified published checkout"
+[[ $(git -C "$crash_transaction/previous" rev-parse HEAD) == "$crash_previous_head" ]] ||
+  fail "failed recovery changed the previous managed checkout"
+git -C "$managed" restore version.txt
+CHECKOUT_TEST_LOG="$pipe_log" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
+  /bin/bash -s <"$source_work/install.sh" >/dev/null ||
+  fail "piped reinstall did not finish an interrupted committed update"
+[[ ! -e "$crash_transaction" && ! -L "$crash_transaction" ]] ||
+  fail "committed update recovery left its transaction directory"
+grep -Fqx 'version=crash-safe' "$pipe_log" ||
+  fail "committed update recovery did not invoke the published delegate"
+
+printf 'race-safe\n' >"$source_work/version.txt"
+git -C "$source_work" add version.txt
+git -C "$source_work" commit --quiet -m 'update publication race fixture'
+git -C "$source_work" push --quiet
+update_race_bin="$tmp/update-race-bin"
+mkdir -p "$update_race_bin"
+cat >"$update_race_bin/mv" <<'EOF'
+#!/usr/bin/env bash
+
+target=${!#}
+if [[ "$target" == "${CHECKOUT_TEST_SWAP_TARGET:?}" ]]; then
+  mkdir -p "$target"
+  printf 'foreign\n' >"$target/sentinel"
+fi
+exec "${CHECKOUT_TEST_REAL_MV:?}" "$@"
+EOF
+chmod 0755 "$update_race_bin/mv"
+set +e
+update_race_output=$(PATH="$update_race_bin:/usr/bin:/bin" \
+  CHECKOUT_TEST_REAL_MV="$real_mv" \
+  CHECKOUT_TEST_SWAP_TARGET="$managed" \
+  CHECKOUT_TEST_LOG="$tmp/update-race.log" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
+  /bin/bash -s <"$source_work/install.sh" 2>&1)
+update_race_status=$?
+set -e
+[[ "$update_race_status" -ne 0 &&
+  "$update_race_output" == *'cannot safely recover'* ]] ||
+  fail "update publication race did not fail closed"
+update_race_transaction="$tmp/managed/.example-tool.install.transaction"
+[[ $(sed -n '1p' "$managed/sentinel") == foreign ]] ||
+  fail "update publication race changed the foreign destination"
+[[ ! -e "$managed/next" &&
+  -d "$update_race_transaction/next/.git" &&
+  -d "$update_race_transaction/previous/.git" ]] ||
+  fail "update publication race did not reclaim both owned revisions"
+unlink "$managed/sentinel"
+rmdir "$managed"
+CHECKOUT_TEST_LOG="$pipe_log" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
+  /bin/bash -s <"$source_work/install.sh" >/dev/null ||
+  fail "piped reinstall did not recover after an update publication race"
+[[ ! -e "$update_race_transaction" ]] ||
+  fail "update publication race recovery left its transaction directory"
+grep -Fqx 'version=race-safe' "$pipe_log" ||
+  fail "update publication race recovery did not invoke the updated delegate"
 
 blocking_ready="$tmp/blocking.ready"
 blocking_release="$tmp/blocking.release"
@@ -476,6 +688,28 @@ set -e
   fail "concurrent piped install did not respect the active delegate lock"
 [[ $(git -C "$managed" rev-parse HEAD) == "$blocked_head" ]] ||
   fail "concurrent piped install updated the checkout during delegation"
+
+stale_managed="$tmp/stale-managed/example-tool"
+stale_lock="$tmp/stale-managed/.example-tool.install.lock"
+mkdir -p "$stale_lock"
+set +e
+stale_output=$(CHECKOUT_TEST_LOG="$tmp/stale.log" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$stale_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
+  /bin/bash -s <"$source_work/install.sh" 2>&1)
+stale_status=$?
+set -e
+[[ "$stale_status" -ne 0 &&
+  "$stale_output" == *'if no install is running'* &&
+  "$stale_output" == *"$stale_lock"* &&
+  "$stale_output" == *'remove that exact empty directory with rmdir'* ]] ||
+  fail "stale checkout lock did not provide fail-closed recovery guidance"
+rmdir "$stale_lock"
+CHECKOUT_TEST_LOG="$tmp/stale-retry.log" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$stale_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
+  /bin/bash -s <"$source_work/install.sh" >/dev/null ||
+  fail "piped install did not recover after removing a confirmed stale lock"
 
 : >"$blocking_release"
 wait "$blocking_pid" ||
@@ -714,10 +948,51 @@ grep -Fqx "git_work_tree=$poison" "$tmp/poison.log" ||
 grep -Fqx "git_index_file=$poison_git_index" "$tmp/poison.log" ||
   fail "piped install did not restore GIT_INDEX_FILE for the delegate"
 
+config_poison="$tmp/config-poison"
+config_poison_managed="$tmp/config-poison-managed/example-tool"
+config_poison_marker="$tmp/config-poison-ran"
+config_poison_home="$tmp/config-poison-home"
+mkdir -p "$config_poison"
+mkdir -p "$config_poison_home"
+cat >"$config_poison/ext-helper" <<'EOF'
+#!/usr/bin/env bash
+
+printf 'unexpected\n' >"${CHECKOUT_TEST_CONFIG_POISON_MARKER:?}"
+exit 1
+EOF
+chmod 0755 "$config_poison/ext-helper"
+git config -f "$config_poison_home/.gitconfig" protocol.ext.allow always
+git config -f "$config_poison_home/.gitconfig" \
+  url."ext::$config_poison/ext-helper".insteadOf "$repo_url"
+CHECKOUT_TEST_CONFIG_POISON_MARKER="$config_poison_marker" \
+  GIT_ALLOW_PROTOCOL=ext:file:https:ssh \
+  HOME="$config_poison_home" \
+  CHECKOUT_TEST_LOG="$tmp/config-poison.log" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$config_poison_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
+  /bin/bash -s <"$source_work/install.sh" >/dev/null ||
+  fail "piped install did not isolate inherited Git configuration"
+[[ ! -e "$config_poison_marker" ]] ||
+  fail "inherited Git configuration executed an unapproved transport"
+
+set +e
+config_protocol_output=$(CHECKOUT_TEST_CONFIG_POISON_MARKER="$config_poison_marker" \
+  GIT_ALLOW_PROTOCOL=ext:file:https:ssh \
+  CHECKOUT_TEST_LOG="$tmp/config-protocol.log" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$tmp/config-protocol-managed/example-tool" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="ext::$config_poison/ext-helper" \
+  /bin/bash -s <"$source_work/install.sh" 2>&1)
+config_protocol_status=$?
+set -e
+[[ "$config_protocol_status" -ne 0 &&
+  "$config_protocol_output" == *"cannot clone"* ]] ||
+  fail "piped install accepted a caller-enabled Git transport"
+[[ ! -e "$config_poison_marker" ]] ||
+  fail "caller-enabled Git transport executed an unapproved helper"
+
 race_bin="$tmp/race-bin"
 race_managed="$tmp/race-managed/example-tool"
 race_marker="$tmp/race-delegate-ran"
-real_mv=$(PATH=/usr/bin:/bin command -v mv)
 mkdir -p "$race_bin"
 cat >"$race_bin/mv" <<'EOF'
 #!/usr/bin/env bash
@@ -818,6 +1093,51 @@ mv "$migration_source/scripts/checkout-installer.conf.tmp" \
 git -C "$migration_source" add scripts/checkout-installer.conf install.sh
 git -C "$migration_source" commit --quiet -m 'migrate delegate path fixture'
 git -C "$migration_source" push --quiet
+migration_crash_bin="$tmp/migration-crash-bin"
+mkdir -p "$migration_crash_bin"
+cat >"$migration_crash_bin/mv" <<'EOF'
+#!/usr/bin/env bash
+
+target=${!#}
+"${CHECKOUT_TEST_REAL_MV:?}" "$@"
+move_status=$?
+if [[ "$target" == "${CHECKOUT_TEST_OLD_MOVED_TARGET:?}" &&
+  "$move_status" -eq 0 ]]; then
+  kill -KILL "$PPID"
+fi
+exit "$move_status"
+EOF
+chmod 0755 "$migration_crash_bin/mv"
+set +e
+migration_previous_target="$tmp/migration-managed/.example-tool.install.transaction/previous"
+{
+  PATH="$migration_crash_bin:/usr/bin:/bin" \
+    CHECKOUT_TEST_REAL_MV="$real_mv" \
+    CHECKOUT_TEST_OLD_MOVED_TARGET="$migration_previous_target" \
+    CHECKOUT_TEST_LOG="$tmp/migration-crash.log" \
+    CGRAF78_CHECKOUT_INSTALL_DIR="$migration_managed" \
+    CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$migration_remote" \
+    /bin/bash -s <"$migration_source/install.sh" >/dev/null 2>&1
+} 2>/dev/null
+migration_crash_status=$?
+set -e
+[[ "$migration_crash_status" -eq 137 ]] ||
+  fail "delegate migration did not stop after moving the old checkout"
+migration_transaction="$tmp/migration-managed/.example-tool.install.transaction"
+migration_lock="$tmp/migration-managed/.example-tool.install.lock"
+[[ ! -e "$migration_managed" &&
+  -f "$migration_transaction/previous/support/install-old.sh" &&
+  -f "$migration_transaction/next/support/install-checkout.sh" ]] ||
+  fail "interrupted delegate migration did not preserve both revisions"
+git -C "$migration_source" mv support/install-checkout.sh \
+  support/install-new.sh
+printf 'CHECKOUT_INSTALLER_DELEGATE=support/install-new.sh\n' \
+  >>"$migration_source/scripts/checkout-installer.conf"
+"$root/checkout-installer/render.sh" "$migration_source" >/dev/null
+git -C "$migration_source" add scripts/checkout-installer.conf install.sh
+git -C "$migration_source" commit --quiet -m 'advance delegate after interruption'
+git -C "$migration_source" push --quiet
+rmdir "$migration_lock"
 CHECKOUT_TEST_LOG="$tmp/migration.log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$migration_managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$migration_remote" \
@@ -828,6 +1148,8 @@ CHECKOUT_TEST_LOG="$tmp/migration.log" \
 grep -Fqx "root=$(cd "$migration_managed" && pwd -P)" \
   "$tmp/migration.log" ||
   fail "delegate path migration did not invoke the new delegate"
+[[ -f "$migration_managed/support/install-new.sh" ]] ||
+  fail "delegate path migration did not reach the post-interruption delegate"
 
 missing_source="$tmp/missing-source"
 missing_remote="$tmp/missing-delegate.git"
@@ -922,6 +1244,23 @@ set -e
   fail "piped install did not reject a foreign destination"
 grep -Fqx 'owned elsewhere' "$foreign/sentinel" ||
   fail "foreign destination changed before rejection"
+
+foreign_transaction_managed="$tmp/foreign-transaction/example-tool"
+foreign_transaction="$tmp/foreign-transaction/.example-tool.install.transaction"
+mkdir -p "$foreign_transaction"
+printf 'owned elsewhere\n' >"$foreign_transaction/sentinel"
+set +e
+foreign_transaction_output=$(CHECKOUT_TEST_LOG="$pipe_log" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$foreign_transaction_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
+  /bin/bash -s <"$source_work/install.sh" 2>&1)
+foreign_transaction_status=$?
+set -e
+[[ "$foreign_transaction_status" -ne 0 &&
+  "$foreign_transaction_output" == *'no valid ownership identity'* ]] ||
+  fail "piped install accepted a foreign update transaction"
+grep -Fqx 'owned elsewhere' "$foreign_transaction/sentinel" ||
+  fail "piped install changed a foreign update transaction"
 
 failed="$tmp/failed/example-tool"
 set +e
