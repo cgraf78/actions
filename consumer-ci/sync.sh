@@ -250,11 +250,19 @@ while IFS= read -r relative; do
   updated=$((updated + 1))
 done <"$reference_list"
 
+# Retire a disabled checkout-generated installer before a release renderer
+# claims the shared top-level path during a policy transition.
+if [[ "$checkout_config_present" == true &&
+  "$checkout_installer_enabled" != true ]]; then
+  "$source_root/checkout-installer/render.sh" "$consumer"
+fi
 if [[ "$release_enabled" == true ]]; then
   "$source_root/release-scripts/sync.sh" "$consumer/scripts"
   "$source_root/release-installer/render.sh" "$consumer"
 fi
-if [[ "$checkout_config_present" == true ]]; then
+# An enabled checkout renderer runs only after a disabled release renderer has
+# had the same opportunity to retire its generated installer.
+if [[ "$checkout_installer_enabled" == true ]]; then
   "$source_root/checkout-installer/render.sh" "$consumer"
 fi
 
