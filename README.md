@@ -11,7 +11,8 @@ detailed result contract is documented in
 Consumer repositories make one version decision in
 `.github/cgraf78-actions.lock`; `consumer-ci/sync.sh` generates the literal
 workflow refs GitHub requires and, when configured, refreshes vendored release
-scripts and a standalone release installer from that same commit. See
+scripts and generates either release-backed or checkout-backed installers from
+that same commit. See
 [`consumer-ci/README.md`](consumer-ci/README.md) for the update and verification
 contract.
 
@@ -190,6 +191,15 @@ declares only its payload in `scripts/release.conf`. The broader
 installer opted in through that release policy. The generated installer itself
 is owned by [`release-installer/`](release-installer/README.md).
 
+## Checkout bootstrap installer
+
+Source-distributed repositories keep their command and supporting files in one
+version-coupled checkout. [`checkout-installer/`](checkout-installer/README.md)
+generates a small top-level bootstrap that delegates directly when run from a
+checkout and creates a durable shallow clone when downloaded or piped. It uses
+no release workflow or release assets; repository-specific link publication
+stays in the consumer's `support/install-checkout.sh`.
+
 ## Layout
 
 The public workflows delegate to internal workers, while steps shared by more
@@ -231,10 +241,12 @@ than one worker are split into first-party composite actions:
 - `.github/actions/verify-release-scripts/` fails a consumer whose vendored
   release scripts no longer match `release-scripts/`.
 - `.github/actions/verify-consumer-sync/` enforces one consumer lock across all
-  workflow/action refs and, when `scripts/release.conf` is tracked, delegates
-  to the release-script verifier and checks an opted-in generated installer.
+  workflow/action refs, release tooling, and any generated release or checkout
+  installer.
 - `consumer-ci/` owns the maintainer command that regenerates a consumer from
   one clean, reviewed `actions` checkout.
+- `checkout-installer/` owns the self-contained bootstrap template and renderer
+  for repositories that install from durable source checkouts.
 - `release-scripts/` owns the shared release identity, packaging, and smoke
   logic. It sits outside `.github/` because consumers vendor it into their own
   repositories rather than calling it as an action.
