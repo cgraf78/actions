@@ -315,11 +315,10 @@
         return 1
         ;;
     esac
-    [[ $(sed -n '1p' "$update_identity") == \
-      'cgraf78 checkout installer update transaction v1' &&
-      $(sed -n '2p' "$update_identity") == "$checkout_dir" &&
-      $(sed -n '3p' "$update_identity") == "$checkout_repo" &&
-      $(sed -n '4p' "$update_identity") == "$checkout_ref" ]]
+    [[ $(sed -n '1p' "$update_identity") == 'cgraf78 checkout installer update transaction v1' &&
+    $(sed -n '2p' "$update_identity") == "$checkout_dir" &&
+    $(sed -n '3p' "$update_identity") == "$checkout_repo" &&
+    $(sed -n '4p' "$update_identity") == "$checkout_ref" ]]
   }
 
   update_identity_matches() {
@@ -345,11 +344,13 @@
     [[ -f "$head_file" && ! -L "$head_file" ]] || return 1
     expected=$(sed -n '1p' "$head_file")
     [[ "$expected" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] || return 1
-    if ! (validate_managed_checkout "$candidate"
+    if ! (
+      validate_managed_checkout "$candidate"
       if [[ "$require_recorded_delegate" == true ]]; then
         require_tree_delegate "$candidate" HEAD "$update_recorded_delegate"
         require_tracked_delegate "$candidate" "$update_recorded_delegate"
-      fi); then
+      fi
+    ); then
       return 1
     fi
     actual=$(bootstrap_git -C "$candidate" rev-parse HEAD) || return 1
