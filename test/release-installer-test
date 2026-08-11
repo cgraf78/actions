@@ -269,6 +269,51 @@ fi
 first_current=$(readlink "$control_root/current")
 first_release_count=$(find "$control_root/releases" -mindepth 1 -maxdepth 1 \
   -type d | wc -l | tr -d ' ')
+
+# A failed checksum implementation must never turn two empty command-
+# substitution results into apparent equality. Let the private archive hash
+# succeed, then reject every retained-tree operand and require the installer to
+# fail without changing the active release.
+if real_hash_tool=$(command -v sha256sum); then
+  hash_tool_name=sha256sum
+else
+  real_hash_tool=$(command -v shasum)
+  hash_tool_name=shasum
+fi
+hash_failure_bin="$tmp/hash-failure-bin"
+mkdir -p "$hash_failure_bin"
+cat >"$hash_failure_bin/$hash_tool_name" <<'EOF'
+#!/usr/bin/env bash
+last_arg=
+for last_arg in "$@"; do :; done
+case $last_arg in
+  */archive.snapshot) exec "$REAL_HASH_TOOL" "$@" ;;
+  *) exit 96 ;;
+esac
+EOF
+chmod 0755 "$hash_failure_bin/$hash_tool_name"
+if HOME="$home" XDG_DATA_HOME="$data_home" \
+  REAL_HASH_TOOL="$real_hash_tool" PATH="$hash_failure_bin:$PATH" \
+  /bin/bash "$consumer/install.sh" --archive "$archive1" \
+  >/dev/null 2>&1; then
+  fail "retained-tree checksum failures were accepted as equality"
+fi
+[[ $(readlink "$control_root/current") == "$first_current" ]] ||
+  fail "retained-tree checksum failure changed the active release"
+
+# A release installer is a bootstrap surface and must not quietly grow a
+# dependency on diffutils. Minimal Arch images do not necessarily provide
+# `cmp`; keep a hostile command at the front of PATH so the idempotence check
+# proves byte comparison uses the already-required SHA-256 implementation.
+no_cmp_bin="$tmp/no-cmp-bin"
+mkdir -p "$no_cmp_bin"
+cat >"$no_cmp_bin/cmp" <<'EOF'
+#!/usr/bin/env bash
+exit 97
+EOF
+chmod 0755 "$no_cmp_bin/cmp"
+PATH="$no_cmp_bin:$PATH"
+export PATH
 HOME="$home" XDG_DATA_HOME="$data_home" \
   /bin/bash "$consumer/install.sh" --archive "$archive1" >/dev/null ||
   fail "idempotent offline reinstall failed"
