@@ -467,6 +467,8 @@ grep -Fqx 'arg2=two words' "$pipe_log" ||
   fail "managed checkout retained the wrong origin"
 [[ $(git -C "$managed" branch --show-current) == main ]] ||
   fail "managed checkout retained the wrong branch"
+managed_parent=$(cd -P -- "${managed%/*}" && pwd -P)
+managed_canonical="$managed_parent/${managed##*/}"
 
 alternate_pipe_log="$tmp/alternate-pipe.log"
 CHECKOUT_TEST_LOG="$alternate_pipe_log" \
@@ -514,7 +516,7 @@ chmod 0755 "$swap_bin/mv"
 set +e
 swap_output=$(PATH="$swap_bin:/usr/bin:/bin" \
   CHECKOUT_TEST_REAL_MV="$real_mv" \
-  CHECKOUT_TEST_SWAP_TARGET="$managed" \
+  CHECKOUT_TEST_SWAP_TARGET="$managed_canonical" \
   CHECKOUT_TEST_SWAP_FAILED="$tmp/swap.failed" \
   CHECKOUT_TEST_LOG="$tmp/swap.log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
@@ -564,7 +566,7 @@ set +e
 {
   PATH="$crash_swap_bin:/usr/bin:/bin" \
     CHECKOUT_TEST_REAL_MV="$real_mv" \
-    CHECKOUT_TEST_SWAP_TARGET="$managed" \
+    CHECKOUT_TEST_SWAP_TARGET="$managed_canonical" \
     CHECKOUT_TEST_LOG="$tmp/crash-swap.log" \
     CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
     CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
@@ -626,7 +628,7 @@ chmod 0755 "$update_race_bin/mv"
 set +e
 update_race_output=$(PATH="$update_race_bin:/usr/bin:/bin" \
   CHECKOUT_TEST_REAL_MV="$real_mv" \
-  CHECKOUT_TEST_SWAP_TARGET="$managed" \
+  CHECKOUT_TEST_SWAP_TARGET="$managed_canonical" \
   CHECKOUT_TEST_LOG="$tmp/update-race.log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
@@ -692,6 +694,8 @@ set -e
 stale_managed="$tmp/stale-managed/example-tool"
 stale_lock="$tmp/stale-managed/.example-tool.install.lock"
 mkdir -p "$stale_lock"
+stale_parent=$(cd -P -- "${stale_managed%/*}" && pwd -P)
+stale_lock_canonical="$stale_parent/.example-tool.install.lock"
 set +e
 stale_output=$(CHECKOUT_TEST_LOG="$tmp/stale.log" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$stale_managed" \
@@ -701,7 +705,7 @@ stale_status=$?
 set -e
 [[ "$stale_status" -ne 0 &&
   "$stale_output" == *'if no install is running'* &&
-  "$stale_output" == *"$stale_lock"* &&
+  "$stale_output" == *"$stale_lock_canonical"* &&
   "$stale_output" == *'remove that exact empty directory with rmdir'* ]] ||
   fail "stale checkout lock did not provide fail-closed recovery guidance"
 rmdir "$stale_lock"
@@ -1109,7 +1113,8 @@ exit "$move_status"
 EOF
 chmod 0755 "$migration_crash_bin/mv"
 set +e
-migration_previous_target="$tmp/migration-managed/.example-tool.install.transaction/previous"
+migration_parent=$(cd -P -- "${migration_managed%/*}" && pwd -P)
+migration_previous_target="$migration_parent/.example-tool.install.transaction/previous"
 {
   PATH="$migration_crash_bin:/usr/bin:/bin" \
     CHECKOUT_TEST_REAL_MV="$real_mv" \
