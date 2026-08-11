@@ -627,8 +627,11 @@ fi
 exit "$move_status"
 EOF
 chmod 0755 "$race_bin/mv"
+# Keep the mv fixture from intercepting cache publication inside a user's
+# PATH-visible Git launcher when multiple test processes run concurrently.
+race_path="$race_bin:/usr/bin:/bin"
 set +e
-race_output=$(PATH="$race_bin:$PATH" \
+race_output=$(PATH="$race_path" \
   CHECKOUT_TEST_REAL_MV="$real_mv" \
   CHECKOUT_TEST_RACE_MARKER="$race_marker" \
   CHECKOUT_TEST_LOG="$tmp/race.log" \
@@ -649,7 +652,7 @@ fi
 
 race_term_managed="$tmp/race-term-managed/example-tool"
 set +e
-PATH="$race_bin:$PATH" \
+PATH="$race_path" \
   CHECKOUT_TEST_REAL_MV="$real_mv" \
   CHECKOUT_TEST_RACE_MARKER="$race_marker" \
   CHECKOUT_TEST_RACE_TERM_PARENT=1 \
@@ -660,7 +663,7 @@ PATH="$race_bin:$PATH" \
 race_term_status=$?
 set -e
 [[ "$race_term_status" -eq 143 ]] ||
-  fail "TERM during raced publication did not preserve status 143"
+  fail "TERM during raced publication did not preserve status 143 (got $race_term_status)"
 [[ ! -e "$race_marker" ]] ||
   fail "TERM during publication executed a planted delegate"
 [[ -f "$race_term_managed/support/install-checkout.sh" ]] ||
