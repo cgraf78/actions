@@ -31,7 +31,15 @@ GitHub workflow or composite action (including actions outside `.github/`), and
 refreshes vendored release scripts when the consumer has
 `scripts/release.conf`. When that policy sets
 `RELEASE_STANDALONE_INSTALLER=true`, it also regenerates the self-contained
-top-level `install.sh`. Commit all of those derived changes together.
+top-level `install.sh`. Independently, a tracked
+`scripts/checkout-installer.conf` regenerates the checkout bootstrap described
+in [`../checkout-installer/README.md`](../checkout-installer/README.md). Both
+installer types use the same Actions lock; source-only repositories do not need
+a release or release asset. Because both generated installer policies own
+top-level `install.sh`, `RELEASE_STANDALONE_INSTALLER=true` and
+`CHECKOUT_INSTALLER_ENABLED=true` are mutually exclusive. The synchronizer
+rejects that conflict before changing consumer files. Commit all derived
+changes together.
 
 The `verify-consumer-sync` action checks the inverse contract in CI: its own ref
 and every other `cgraf78/actions` ref must agree with the lock. A tracked
@@ -39,8 +47,10 @@ and every other `cgraf78/actions` ref must agree with the lock. A tracked
 contract; the sync command creates the paired managed manifest, and CI rejects
 deletion of only one marker. An opted-in generated installer is rendered again
 from the locked provider and compared byte-for-byte, including its regular-file,
-executable, and tracked-file contract. Repositories with neither release marker
-get only the universal version-lock check.
+executable, and tracked-file contract. A tracked checkout-installer config gets
+the same render-and-compare treatment, including its repository-owned delegate.
+Repositories with neither installer policy get only the universal version-lock
+check.
 Run the verifier in a dedicated job named `cgraf78/actions sync`, and require
 that check on the consumer's protected default branch. Keeping one stable name
 across repositories makes the protection rule recognizable, while keeping the

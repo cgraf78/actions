@@ -25,8 +25,8 @@ GitHub requires a literal ref after `uses:` and resolves reusable workflows
 before any job can read repository files. A caller therefore cannot interpolate
 a lock value directly into workflow YAML. Each `cgraf78` consumer instead keeps
 one authoritative commit in `.github/cgraf78-actions.lock` and treats all YAML
-refs, vendored release scripts, and any opted-in standalone installer as
-generated views of that value.
+refs, vendored release scripts, and any opted-in release or checkout installer
+as generated views of that value.
 
 From a clean `actions` checkout at the reviewed commit, run:
 
@@ -43,9 +43,11 @@ together so deleting only the config cannot orphan formerly managed bytes. This
 same policy may set `RELEASE_STANDALONE_INSTALLER=true`; the verifier then
 rerenders the top-level `install.sh` and checks its bytes, type, mode, and Git
 tracking state. This mirrors the sync command without a separate path knob that
-could accidentally bypass the check. A Dependabot update to only a literal SHA
-therefore fails closed until a maintainer synchronizes the lock and derived
-bytes.
+could accidentally bypass the check. A tracked
+`scripts/checkout-installer.conf` applies the same render-and-compare contract
+to a source-distributed checkout bootstrap without requiring release assets. A
+Dependabot update to only a literal SHA therefore fails closed until a
+maintainer synchronizes the lock and derived bytes.
 
 ## Required Check Contract
 
