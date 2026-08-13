@@ -4,10 +4,11 @@
 
 **Goal:** Make shared Rust release uploads idempotent and resilient to ambiguous GitHub API failures.
 
-**Architecture:** A focused Bash helper owns per-asset remote-state checks,
-bounded retries, and post-error verification. The reusable workflow delegates
-its upload step to that helper, while shell tests exercise the helper through a
-fake `gh` executable and real files.
+**Architecture:** A focused composite action and Bash helper own per-asset
+remote-state checks, bounded retries, and post-error verification. After the
+provider action lands, the reusable workflow delegates its upload step to the
+action's immutable merge SHA. Shell tests exercise the helper through a fake
+`gh` executable and real files.
 
 **Tech Stack:** Bash, GitHub CLI, reusable GitHub Actions workflows, jq, ShellCheck.
 
@@ -25,12 +26,13 @@ fake `gh` executable and real files.
 **Files:**
 
 - Create: `.github/actions/upload-release-assets/upload.sh`
+- Create: `.github/actions/upload-release-assets/action.yml`
 - Create: `test/release-asset-upload-test`
 
 **Interfaces:**
 
 - Consumes: `TAG`, `ASSET_GLOB`, `GITHUB_REPOSITORY`, `GH_TOKEN`, and the current working directory.
-- Produces: exit zero only when every matched local asset has an exact-name remote asset with the same byte size.
+- Produces: a composite action that exits zero only when every matched local asset has an exact-name remote asset with the same byte size.
 
 **Steps:**
 
@@ -48,13 +50,13 @@ fake `gh` executable and real files.
 
 **Files:**
 
-- Modify: `.github/workflows/rust-release.yml`
+- Modify after Task 1 lands: `.github/workflows/rust-release.yml`
 - Modify: `test/workflow-contract-test`
 
 **Interfaces:**
 
 - Consumes: the existing `asset-glob`, tag, working-directory, token, and repository values.
-- Produces: one workflow step invoking the tested helper from the checked-out actions repository.
+- Produces: one workflow step invoking the tested composite action at Task 1's immutable merge SHA.
 
 **Steps:**
 

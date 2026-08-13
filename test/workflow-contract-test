@@ -167,6 +167,10 @@ contracts() {
   check '.on.workflow_call.inputs.install-musl-tools.default == false' rust-release.yml
   check '.on.workflow_call.inputs.install-musl-tools.required == false' rust-release.yml
   check '.on.workflow_call.inputs.install-musl-tools.type == "boolean"' rust-release.yml
+  check '.runs.using == "composite"' ../actions/upload-release-assets/action.yml
+  check '.runs.steps[0].env.ASSET_GLOB == "${{ inputs.asset-glob }}"' ../actions/upload-release-assets/action.yml
+  check '.runs.steps[0].env.GH_TOKEN == "${{ inputs.github-token }}"' ../actions/upload-release-assets/action.yml
+  check '.runs.steps[0].run | contains("$GITHUB_ACTION_PATH/upload.sh")' ../actions/upload-release-assets/action.yml
   # Guarded on the matrix row so a caller that opts in does not run apt on the
   # macOS or Android rows, where musl-tools does not apply.
   check '.jobs.build.steps[] | select(.name == "Install musl build prerequisites").if | contains("endsWith(matrix.rust-target, '"'"'-musl'"'"')")' rust-release.yml

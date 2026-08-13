@@ -10,6 +10,7 @@ program	.github/actions/shell-ci-prereqs/install.sh
 program	.github/actions/shell-ci-prereqs/lib.sh
 program	.github/actions/shell-ci-prereqs/profiles.sh
 program	.github/actions/shellcheck-inventory/run.sh
+program	.github/actions/upload-release-assets/upload.sh
 program	.github/actions/verify-consumer-sync/verify.sh
 program	.github/actions/verify-release-scripts/verify.sh
 program	consumer-ci/sync.sh
@@ -32,6 +33,7 @@ program	test/examples-test
 program	test/infra-retry-test
 program	test/musl-prereqs-test
 program	test/release-installer-test
+program	test/release-asset-upload-test
 program	test/release-scripts-test
 program	test/shell-ci-prereqs-test
 program	test/shellcheck-action-test

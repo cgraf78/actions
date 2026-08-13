@@ -241,6 +241,10 @@ jobs:
         shell: bash
         run: test/release-installer-test
 
+      - name: Test retry-safe release asset uploads
+        shell: bash
+        run: test/release-asset-upload-test
+
       - name: Test generated checkout installer
         shell: bash
         run: test/checkout-installer-test
