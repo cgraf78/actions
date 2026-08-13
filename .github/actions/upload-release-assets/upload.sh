@@ -20,6 +20,16 @@ if ((${#assets[@]} == 0)); then
   exit 1
 fi
 
+declare -A asset_names=()
+for asset in "${assets[@]}"; do
+  asset_name=${asset##*/}
+  if [[ -n ${asset_names[$asset_name]:-} ]]; then
+    printf 'duplicate release asset name: %s\n' "$asset_name" >&2
+    exit 1
+  fi
+  asset_names[$asset_name]=1
+done
+
 remote_size() {
   local asset_name=$1
   local response
@@ -32,13 +42,18 @@ remote_size() {
     '.assets[] | select(.name == $name) | .size' <<<"$response" | head -n 1
 }
 
-matches_remote() {
+remote_state() {
   local asset_name=$1
   local expected_size=$2
   local actual_size
 
-  actual_size=$(remote_size "$asset_name") || return 1
-  [[ "$actual_size" == "$expected_size" ]]
+  if ! actual_size=$(remote_size "$asset_name"); then
+    printf 'unknown\n'
+  elif [[ "$actual_size" == "$expected_size" ]]; then
+    printf 'matching\n'
+  else
+    printf 'different\n'
+  fi
 }
 
 upload_one() {
@@ -47,6 +62,7 @@ upload_one() {
   local asset_size
   local attempt
   local delay
+  local state
 
   [[ -f "$asset" ]] || {
     printf 'release asset is not a regular file: %s\n' "$asset" >&2
@@ -54,23 +70,46 @@ upload_one() {
   }
   asset_size=$(wc -c <"$asset" | tr -d ' ')
 
-  if matches_remote "$asset_name" "$asset_size"; then
+  state=$(remote_state "$asset_name" "$asset_size")
+  if [[ "$state" == matching ]]; then
     printf 'release asset already uploaded: %s\n' "$asset_name"
     return 0
   fi
 
   for attempt in 1 2 3; do
-    if gh release upload "$TAG" "$asset" \
-      --repo "$GITHUB_REPOSITORY" --clobber; then
-      if matches_remote "$asset_name" "$asset_size"; then
+    if ((attempt > 1)); then
+      state=$(remote_state "$asset_name" "$asset_size")
+      if [[ "$state" == matching ]]; then
         return 0
       fi
+      if [[ "$state" == unknown ]]; then
+        printf 'release asset state is unknown; deferring mutation: %s\n' \
+          "$asset_name" >&2
+      else
+        state=different
+      fi
+    fi
+
+    if [[ "$state" == unknown ]]; then
+      upload_status=1
+    elif gh release upload "$TAG" "$asset" \
+      --repo "$GITHUB_REPOSITORY" --clobber; then
+      upload_status=0
+    else
+      upload_status=$?
+    fi
+
+    state=$(remote_state "$asset_name" "$asset_size")
+    if [[ "$state" == matching ]]; then
+      if ((upload_status != 0)); then
+        printf 'release asset arrived after an ambiguous upload error: %s\n' \
+          "$asset_name"
+      fi
+      return 0
+    fi
+    if ((upload_status == 0)); then
       printf 'release asset upload returned success but verification failed: %s\n' \
         "$asset_name" >&2
-    elif matches_remote "$asset_name" "$asset_size"; then
-      printf 'release asset arrived after an ambiguous upload error: %s\n' \
-        "$asset_name"
-      return 0
     fi
 
     if ((attempt < 3)); then

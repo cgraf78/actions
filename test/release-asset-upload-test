@@ -22,6 +22,7 @@ run_case() {
   printf 'checksum-data\n' >"$case_dir/assets/tool.tar.gz.sha256"
   : >"$case_dir/calls"
   : >"$case_dir/remote"
+  : >"$case_dir/view-count"
 
   cat >"$case_dir/bin/gh" <<'EOF'
 #!/usr/bin/env bash
@@ -30,6 +31,13 @@ set -euo pipefail
 printf '%s\n' "$*" >>"$FAKE_CALLS"
 case "$1:$2" in
   release:view)
+    view_count=0
+    [[ ! -s "$FAKE_DIR/view-count" ]] || view_count=$(<"$FAKE_DIR/view-count")
+    view_count=$((view_count + 1))
+    printf '%s\n' "$view_count" >"$FAKE_DIR/view-count"
+    if [[ "$FAKE_SCENARIO:$view_count" == ambiguous-view-failure:2 ]]; then
+      exit 1
+    fi
     printf '{"assets":['
     first=true
     while IFS='|' read -r name size; do
@@ -51,7 +59,7 @@ case "$1:$2" in
     printf '%s\n' "$attempt" >"$attempt_file"
     case "$FAKE_SCENARIO:$name:$attempt" in
       fail:*:*) exit 1 ;;
-      ambiguous:tool.tar.gz:1)
+      ambiguous:tool.tar.gz:1 | ambiguous-view-failure:tool.tar.gz:1)
         printf '%s|%s\n' "$name" "$size" >>"$FAKE_REMOTE"
         exit 1
         ;;
@@ -124,6 +132,10 @@ run_case ambiguous ambiguous 0
 [[ $(rg -c '^release upload ' "$CASE_DIR/calls") -eq 1 ]] ||
   fail "ambiguous successful upload was retried"
 
+run_case ambiguous-view-failure ambiguous-view-failure 0
+[[ $(rg -c '^release upload ' "$CASE_DIR/calls") -eq 1 ]] ||
+  fail "unknown verification state caused a successful upload to be clobbered"
+
 run_case mismatch mismatch 0
 [[ $(rg -c '^release upload ' "$CASE_DIR/calls") -eq 1 ]] ||
   fail "mismatched asset was not replaced"
@@ -139,5 +151,33 @@ rg -q 'matched no files' "$CASE_DIR/stderr" ||
 run_case multiple multi 0
 [[ $(rg -c '^release upload ' "$CASE_DIR/calls") -eq 2 ]] ||
   fail "multi-file batch did not upload each asset"
+
+duplicate_dir="$tmp/duplicate"
+mkdir -p "$duplicate_dir/a" "$duplicate_dir/b" "$duplicate_dir/bin"
+printf 'a\n' >"$duplicate_dir/a/tool.tar.gz"
+printf 'b\n' >"$duplicate_dir/b/tool.tar.gz"
+cp "$tmp/clean/bin/gh" "$duplicate_dir/bin/gh"
+: >"$duplicate_dir/calls"
+: >"$duplicate_dir/remote"
+: >"$duplicate_dir/view-count"
+set +e
+ASSET_GLOB="$duplicate_dir/*/tool.tar.gz" \
+  FAKE_CALLS="$duplicate_dir/calls" \
+  FAKE_DIR="$duplicate_dir" \
+  FAKE_REMOTE="$duplicate_dir/remote" \
+  FAKE_SCENARIO=duplicate \
+  GITHUB_REPOSITORY=cgraf78/example \
+  PATH="$duplicate_dir/bin:$PATH" \
+  RELEASE_UPLOAD_RETRY_DELAYS=0,0 \
+  TAG=v1 \
+  bash "$upload" >"$duplicate_dir/stdout" 2>"$duplicate_dir/stderr"
+duplicate_status=$?
+set -e
+[[ "$duplicate_status" -eq 1 ]] || fail "duplicate basenames were accepted"
+rg -q 'duplicate release asset name' "$duplicate_dir/stderr" ||
+  fail "duplicate basename failure was not explained"
+if rg -q '^release upload ' "$duplicate_dir/calls"; then
+  fail "duplicate basename validation happened after an upload"
+fi
 
 printf 'release asset upload tests passed\n'
