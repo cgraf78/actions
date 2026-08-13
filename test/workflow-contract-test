@@ -167,6 +167,11 @@ contracts() {
   check '.on.workflow_call.inputs.install-musl-tools.default == false' rust-release.yml
   check '.on.workflow_call.inputs.install-musl-tools.required == false' rust-release.yml
   check '.on.workflow_call.inputs.install-musl-tools.type == "boolean"' rust-release.yml
+  check '.jobs.build.steps[] | select(.name == "Upload release assets").uses == "cgraf78/actions/.github/actions/upload-release-assets@f39ca190e87dea4a06382e09efb94f29f4af8d27"' rust-release.yml
+  check '.jobs.build.steps[] | select(.name == "Upload release assets").with."asset-glob" == "${{ inputs.asset-glob }}"' rust-release.yml
+  check '.jobs.build.steps[] | select(.name == "Upload release assets").with."github-token" == "${{ github.token }}"' rust-release.yml
+  check '.jobs.build.steps[] | select(.name == "Upload release assets").with.tag == "${{ github.ref_name }}"' rust-release.yml
+  check '.jobs.build.steps[] | select(.name == "Upload release assets").with."working-directory" == "${{ inputs.working-directory }}"' rust-release.yml
   check '.runs.using == "composite"' ../actions/upload-release-assets/action.yml
   check '.runs.steps[0].env.ASSET_GLOB == "${{ inputs.asset-glob }}"' ../actions/upload-release-assets/action.yml
   check '.runs.steps[0].env.GH_TOKEN == "${{ inputs.github-token }}"' ../actions/upload-release-assets/action.yml
