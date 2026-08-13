@@ -282,17 +282,12 @@ jobs:
 
       - name: Upload release assets
         if: matrix.enabled
-        shell: bash
-        env:
-          ASSET_GLOB: ${{ inputs.asset-glob }}
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-          WORKING_DIRECTORY: ${{ inputs.working-directory }}
-        run: |
-          cd "$WORKING_DIRECTORY"
-          # Asset globs are caller-owned shell patterns.
-          # shellcheck disable=SC2086
-          gh release upload "$TAG" $ASSET_GLOB --repo "$GITHUB_REPOSITORY" --clobber
+        uses: cgraf78/actions/.github/actions/upload-release-assets@f39ca190e87dea4a06382e09efb94f29f4af8d27
+        with:
+          asset-glob: ${{ inputs.asset-glob }}
+          github-token: ${{ github.token }}
+          tag: ${{ github.ref_name }}
+          working-directory: ${{ inputs.working-directory }}
 
   publish-release:
     name: Publish release
