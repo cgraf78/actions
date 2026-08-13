@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+upload="$root/.github/actions/upload-release-assets/upload.sh"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() {
+  printf 'release-asset-upload-test: %s\n' "$*" >&2
+  exit 1
+}
+
+run_case() {
+  local name=$1
+  local scenario=$2
+  local expected_status=$3
+  local case_dir="$tmp/$name"
+  mkdir -p "$case_dir/bin" "$case_dir/assets"
+  printf 'archive-data\n' >"$case_dir/assets/tool.tar.gz"
+  printf 'checksum-data\n' >"$case_dir/assets/tool.tar.gz.sha256"
+  : >"$case_dir/calls"
+  : >"$case_dir/remote"
+  : >"$case_dir/view-count"
+
+  cat >"$case_dir/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' "$*" >>"$FAKE_CALLS"
+case "$1:$2" in
+  release:view)
+    view_count=0
+    [[ ! -s "$FAKE_DIR/view-count" ]] || view_count=$(<"$FAKE_DIR/view-count")
+    view_count=$((view_count + 1))
+    printf '%s\n' "$view_count" >"$FAKE_DIR/view-count"
+    if [[ "$FAKE_SCENARIO:$view_count" == ambiguous-view-failure:2 ]]; then
+      exit 1
+    fi
+    printf '{"assets":['
+    first=true
+    while IFS='|' read -r name size; do
+      [[ -n "$name" ]] || continue
+      if [[ "$first" == false ]]; then printf ','; fi
+      first=false
+      printf '{"name":"%s","size":%s}' "$name" "$size"
+    done <"$FAKE_REMOTE"
+    printf ']}\n'
+    ;;
+  release:upload)
+    asset=$4
+    name=${asset##*/}
+    size=$(wc -c <"$asset" | tr -d ' ')
+    attempt_file="$FAKE_DIR/attempt-$name"
+    attempt=0
+    [[ ! -f "$attempt_file" ]] || attempt=$(<"$attempt_file")
+    attempt=$((attempt + 1))
+    printf '%s\n' "$attempt" >"$attempt_file"
+    case "$FAKE_SCENARIO:$name:$attempt" in
+      fail:*:*) exit 1 ;;
+      ambiguous:tool.tar.gz:1 | ambiguous-view-failure:tool.tar.gz:1)
+        printf '%s|%s\n' "$name" "$size" >>"$FAKE_REMOTE"
+        exit 1
+        ;;
+    esac
+    awk -F '|' -v name="$name" '$1 != name' "$FAKE_REMOTE" >"$FAKE_REMOTE.next"
+    printf '%s|%s\n' "$name" "$size" >>"$FAKE_REMOTE.next"
+    mv "$FAKE_REMOTE.next" "$FAKE_REMOTE"
+    ;;
+  *)
+    printf 'unexpected gh call: %s\n' "$*" >&2
+    exit 2
+    ;;
+esac
+EOF
+  chmod +x "$case_dir/bin/gh"
+
+  case "$scenario" in
+    existing)
+      printf 'tool.tar.gz|%s\n' \
+        "$(wc -c <"$case_dir/assets/tool.tar.gz" | tr -d ' ')" \
+        >"$case_dir/remote"
+      ;;
+    partial)
+      printf 'tool.tar.gz|%s\n' \
+        "$(wc -c <"$case_dir/assets/tool.tar.gz" | tr -d ' ')" \
+        >"$case_dir/remote"
+      ;;
+    mismatch)
+      printf 'tool.tar.gz|1\n' >"$case_dir/remote"
+      ;;
+  esac
+
+  local glob="$case_dir/assets/tool.tar.gz"
+  [[ "$scenario" != multi && "$scenario" != partial ]] || glob="$case_dir/assets/tool.tar.gz*"
+  [[ "$scenario" != empty ]] || glob="$case_dir/assets/missing-*"
+
+  set +e
+  ASSET_GLOB="$glob" \
+    FAKE_CALLS="$case_dir/calls" \
+    FAKE_DIR="$case_dir" \
+    FAKE_REMOTE="$case_dir/remote" \
+    FAKE_SCENARIO="$scenario" \
+    GITHUB_REPOSITORY=cgraf78/example \
+    PATH="$case_dir/bin:$PATH" \
+    RELEASE_UPLOAD_RETRY_DELAYS=0,0 \
+    TAG=v1 \
+    bash "$upload" >"$case_dir/stdout" 2>"$case_dir/stderr"
+  status=$?
+  set -e
+
+  [[ "$status" -eq "$expected_status" ]] ||
+    fail "$name exited $status, expected $expected_status: $(<"$case_dir/stderr")"
+  CASE_DIR=$case_dir
+}
+
+run_case clean clean 0
+[[ $(grep -c '^release upload ' "$CASE_DIR/calls") -eq 1 ]] ||
+  fail "clean upload did not upload once"
+
+run_case existing existing 0
+if grep -q '^release upload ' "$CASE_DIR/calls"; then
+  fail "matching existing asset was uploaded again"
+fi
+
+run_case partial partial 0
+[[ $(grep -c '^release upload ' "$CASE_DIR/calls") -eq 1 ]] ||
+  fail "partial rerun did not upload only the missing asset"
+
+run_case ambiguous ambiguous 0
+[[ $(grep -c '^release upload ' "$CASE_DIR/calls") -eq 1 ]] ||
+  fail "ambiguous successful upload was retried"
+
+run_case ambiguous-view-failure ambiguous-view-failure 0
+[[ $(grep -c '^release upload ' "$CASE_DIR/calls") -eq 1 ]] ||
+  fail "unknown verification state caused a successful upload to be clobbered"
+
+run_case mismatch mismatch 0
+[[ $(grep -c '^release upload ' "$CASE_DIR/calls") -eq 1 ]] ||
+  fail "mismatched asset was not replaced"
+
+run_case failure fail 1
+[[ $(grep -c '^release upload ' "$CASE_DIR/calls") -eq 3 ]] ||
+  fail "failed upload did not make exactly three attempts"
+
+run_case empty empty 1
+grep -q 'matched no files' "$CASE_DIR/stderr" ||
+  fail "empty glob did not explain the failure"
+
+run_case multiple multi 0
+[[ $(grep -c '^release upload ' "$CASE_DIR/calls") -eq 2 ]] ||
+  fail "multi-file batch did not upload each asset"
+
+duplicate_dir="$tmp/duplicate"
+mkdir -p "$duplicate_dir/a" "$duplicate_dir/b" "$duplicate_dir/bin"
+printf 'a\n' >"$duplicate_dir/a/tool.tar.gz"
+printf 'b\n' >"$duplicate_dir/b/tool.tar.gz"
+cp "$tmp/clean/bin/gh" "$duplicate_dir/bin/gh"
+: >"$duplicate_dir/calls"
+: >"$duplicate_dir/remote"
+: >"$duplicate_dir/view-count"
+set +e
+ASSET_GLOB="$duplicate_dir/*/tool.tar.gz" \
+  FAKE_CALLS="$duplicate_dir/calls" \
+  FAKE_DIR="$duplicate_dir" \
+  FAKE_REMOTE="$duplicate_dir/remote" \
+  FAKE_SCENARIO=duplicate \
+  GITHUB_REPOSITORY=cgraf78/example \
+  PATH="$duplicate_dir/bin:$PATH" \
+  RELEASE_UPLOAD_RETRY_DELAYS=0,0 \
+  TAG=v1 \
+  bash "$upload" >"$duplicate_dir/stdout" 2>"$duplicate_dir/stderr"
+duplicate_status=$?
+set -e
+[[ "$duplicate_status" -eq 1 ]] || fail "duplicate basenames were accepted"
+grep -q 'duplicate release asset name' "$duplicate_dir/stderr" ||
+  fail "duplicate basename failure was not explained"
+if grep -q '^release upload ' "$duplicate_dir/calls"; then
+  fail "duplicate basename validation happened after an upload"
+fi
+
+printf 'release asset upload tests passed\n'
