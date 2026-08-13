@@ -30,6 +30,7 @@ run_case() {
   local logs=$3
   local attempt=${4:-1}
   local conclusion=${5:-failure}
+  local log_fetch_mode=${6:-normal}
   local case_dir="$tmp/$name"
   mkdir -p "$case_dir/bin"
 
@@ -42,6 +43,28 @@ case "$*" in
     cat "$FAKE_JOBS"
     ;;
   *'/actions/jobs/'*'/logs'*)
+    case "${FAKE_LOG_FETCH_MODE:-normal}" in
+      ansi-refusal)
+        if [[ "$*" != *'--allow-escape-sequences'* ]]; then
+          printf '%s\n' \
+            'the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway' >&2
+          exit 1
+        fi
+        ;;
+      ansi-fallback-failure)
+        if [[ "$*" == *'--allow-escape-sequences'* ]]; then
+          printf 'fallback log request failed\n' >&2
+        else
+          printf '%s\n' \
+            'the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway' >&2
+        fi
+        exit 1
+        ;;
+      unrelated-failure)
+        printf 'unrelated log request failed\n' >&2
+        exit 1
+        ;;
+    esac
     job_id=${*%/logs}
     job_id=${job_id##*/}
     cat "$FAKE_LOGS/$job_id.log"
@@ -59,6 +82,7 @@ EOF
   FAKE_GH_CALLS="$case_dir/gh-calls" \
     FAKE_JOBS="$jobs" \
     FAKE_LOGS="$logs" \
+    FAKE_LOG_FETCH_MODE="$log_fetch_mode" \
     GH_TOKEN=test-token \
     TARGET_CONCLUSION="$conclusion" \
     TARGET_REPOSITORY=cgraf78/example \
@@ -75,6 +99,7 @@ mkdir -p \
   "$tmp/shellcheck-connection-logs" \
   "$tmp/shellcheck-checksum-logs" \
   "$tmp/shellcheck-lint-logs" \
+  "$tmp/ansi-app-logs" \
   "$tmp/app-logs" \
   "$tmp/mixed-logs"
 write_jobs "$tmp/infra-jobs.json" \
@@ -91,8 +116,49 @@ EOF
 run_case infra "$tmp/infra-jobs.json" "$tmp/infra-logs"
 grep -Fq 'rerun-failed-jobs' "$tmp/infra/gh-calls" ||
   fail "allowlisted infrastructure failure was not rerun"
+[[ $(grep -Fc '/actions/jobs/11/logs' "$tmp/infra/gh-calls") -eq 1 ]] ||
+  fail "normal log fetch did not stay on one request"
+if grep -Fq -- '--allow-escape-sequences' "$tmp/infra/gh-calls"; then
+  fail "normal log fetch used the escape-sequence opt-in"
+fi
 grep -Fq 'rerunning failed jobs once' "$tmp/infra/stdout" ||
   fail "retry decision was not reported"
+
+# Newer GitHub CLI releases refuse to print logs containing terminal control
+# bytes unless the caller explicitly opts in. The retry action never renders a
+# downloaded log, so the exact refusal can safely retry the same private-file
+# download. Keep the fallback exact and bounded so unrelated API failures do
+# not gain a second request or broaden retry classification.
+run_case ansi-log "$tmp/infra-jobs.json" "$tmp/infra-logs" \
+  1 failure ansi-refusal
+grep -Fq 'rerun-failed-jobs' "$tmp/ansi-log/gh-calls" ||
+  fail "allowlisted ANSI-bearing infrastructure log was not rerun"
+[[ $(grep -Fc '/actions/jobs/11/logs' "$tmp/ansi-log/gh-calls") -eq 2 ]] ||
+  fail "ANSI refusal did not make exactly two log requests"
+grep -Fq -- '--allow-escape-sequences' "$tmp/ansi-log/gh-calls" ||
+  fail "ANSI refusal did not use the explicit log opt-in"
+
+run_case unrelated-log-error "$tmp/infra-jobs.json" "$tmp/infra-logs" \
+  1 failure unrelated-failure
+if grep -Fq 'rerun-failed-jobs' "$tmp/unrelated-log-error/gh-calls"; then
+  fail "unrelated log request failure was rerun"
+fi
+[[ $(grep -Fc '/actions/jobs/11/logs' \
+  "$tmp/unrelated-log-error/gh-calls") -eq 1 ]] ||
+  fail "unrelated log request failure gained a fallback request"
+if grep -Fq -- '--allow-escape-sequences' \
+  "$tmp/unrelated-log-error/gh-calls"; then
+  fail "unrelated log request failure used the ANSI fallback"
+fi
+
+run_case ansi-fallback-failure "$tmp/infra-jobs.json" "$tmp/infra-logs" \
+  1 failure ansi-fallback-failure
+if grep -Fq 'rerun-failed-jobs' "$tmp/ansi-fallback-failure/gh-calls"; then
+  fail "failed ANSI fallback was rerun"
+fi
+[[ $(grep -Fc '/actions/jobs/11/logs' \
+  "$tmp/ansi-fallback-failure/gh-calls") -eq 2 ]] ||
+  fail "failed ANSI fallback did not stop after two requests"
 
 write_jobs "$tmp/termux-jobs.json" \
   '16:rust / Termux runtime / Runtime / Android / Termux x86_64:failure' \
@@ -262,6 +328,20 @@ if grep -Fq 'rerun-failed-jobs' "$tmp/app/gh-calls"; then
 fi
 grep -Fq 'not an allowlisted infrastructure failure' "$tmp/app/stdout" ||
   fail "application failure decision was not reported"
+
+printf '\033]0;PRIVATE_JOB_LOG_MARKER\007\033[31mRun tests\033[0m\nassertion failed: expected 1, got 2\n' \
+  >"$tmp/ansi-app-logs/21.log"
+run_case ansi-app "$tmp/app-jobs.json" "$tmp/ansi-app-logs" \
+  1 failure ansi-refusal
+if grep -Fq 'rerun-failed-jobs' "$tmp/ansi-app/gh-calls"; then
+  fail "ANSI-bearing application failure was rerun"
+fi
+[[ $(grep -Fc '/actions/jobs/21/logs' "$tmp/ansi-app/gh-calls") -eq 2 ]] ||
+  fail "ANSI-bearing application log did not use one bounded fallback"
+if grep -Fq 'PRIVATE_JOB_LOG_MARKER' \
+  "$tmp/ansi-app/stdout" "$tmp/ansi-app/stderr"; then
+  fail "raw ANSI-bearing job log escaped the private temporary directory"
+fi
 
 write_jobs "$tmp/mixed-jobs.json" \
   '31:shell / Platforms / Arch:failure' \

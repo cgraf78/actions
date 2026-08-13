@@ -12,6 +12,24 @@ cleanup() {
   fi
 }
 
+read_job_log() {
+  local endpoint=$1 log=$2 error="${2}.error"
+
+  if gh api "$endpoint" >"$log" 2>"$error"; then
+    return 0
+  fi
+
+  # Newer gh releases protect terminals by refusing responses with control
+  # bytes, even when stdout is a private file. Retry only that exact refusal:
+  # older gh versions never see their unsupported flag, and every other API
+  # error remains unclassified. The raw log is parsed in place and never
+  # rendered, so escape bytes stay inert and can only make matching fail closed.
+  grep -Fqx \
+    'the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway' \
+    "$error" || return 1
+  gh api --allow-escape-sequences "$endpoint" >"$log" 2>"$error"
+}
+
 is_required_aggregate() {
   local name=$1
 
@@ -130,7 +148,8 @@ main() {
 
     failed_leaf=$((failed_leaf + 1))
     log="$retry_tmp/$job_id.log"
-    if ! gh api "repos/$TARGET_REPOSITORY/actions/jobs/$job_id/logs" >"$log"; then
+    if ! read_job_log \
+      "repos/$TARGET_REPOSITORY/actions/jobs/$job_id/logs" "$log"; then
       notice "could not read failed job log: $name"
       unclassified_leaf=$((unclassified_leaf + 1))
       continue
