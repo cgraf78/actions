@@ -68,7 +68,15 @@ EOF
     bash "$retry" >"$case_dir/stdout" 2>"$case_dir/stderr"
 }
 
-mkdir -p "$tmp/infra-logs" "$tmp/termux-logs" "$tmp/app-logs" "$tmp/mixed-logs"
+mkdir -p \
+  "$tmp/infra-logs" \
+  "$tmp/termux-logs" \
+  "$tmp/shellcheck-http-logs" \
+  "$tmp/shellcheck-connection-logs" \
+  "$tmp/shellcheck-checksum-logs" \
+  "$tmp/shellcheck-lint-logs" \
+  "$tmp/app-logs" \
+  "$tmp/mixed-logs"
 write_jobs "$tmp/infra-jobs.json" \
   '11:shell / Platforms / Arch:failure' \
   '12:shell / Required:failure' \
@@ -102,6 +110,128 @@ grep -Fq 'rerun-failed-jobs' "$tmp/termux/gh-calls" ||
   fail "allowlisted Termux bootstrap failure was not rerun"
 grep -Fq 'allowlisted Termux bootstrap failure' "$tmp/termux/stdout" ||
   fail "Termux bootstrap retry decision was not reported"
+
+# The pinned ShellCheck archive is downloaded by the shared prerequisite
+# action before repository lint starts. Exhausted GitHub transport retries are
+# safe to rerun, but the signature deliberately includes that action boundary
+# so an arbitrary application curl failure cannot opt a job into retry.
+write_jobs "$tmp/shellcheck-http-jobs.json" \
+  '21:shell / ShellCheck:failure' \
+  '22:shell / Required:failure'
+cat >"$tmp/shellcheck-http-logs/21.log" <<'EOF'
+Run cgraf78/actions/.github/actions/shell-ci-prereqs@8eaac8e384ae89e9c1aaf675dd23689cfe73fa7c
+  profiles: base,shellcheck
+  setup: none
+curl: (22) The requested URL returned error: 503
+Error: Process completed with exit code 22.
+EOF
+
+run_case shellcheck-http \
+  "$tmp/shellcheck-http-jobs.json" "$tmp/shellcheck-http-logs"
+grep -Fq 'rerun-failed-jobs' "$tmp/shellcheck-http/gh-calls" ||
+  fail "ShellCheck prerequisite HTTP failure was not rerun"
+grep -Fq 'allowlisted ShellCheck prerequisite download failure' \
+  "$tmp/shellcheck-http/stdout" ||
+  fail "ShellCheck HTTP retry decision was not reported"
+
+# Checkrun uses a larger named setup whose prerequisite downloads have a
+# different contract. The shared ShellCheck classifier must not broaden to it
+# merely because the job name and curl failure happen to look alike.
+cat >"$tmp/shellcheck-http-logs/21.log" <<'EOF'
+Run cgraf78/actions/.github/actions/shell-ci-prereqs@8eaac8e384ae89e9c1aaf675dd23689cfe73fa7c
+  profiles: base,shellcheck
+  setup: checkrun
+curl: (22) The requested URL returned error: 503
+Error: Process completed with exit code 22.
+EOF
+
+run_case shellcheck-other-setup \
+  "$tmp/shellcheck-http-jobs.json" "$tmp/shellcheck-http-logs"
+if grep -Fq 'rerun-failed-jobs' "$tmp/shellcheck-other-setup/gh-calls"; then
+  fail "ShellCheck failure from another setup mode was rerun"
+fi
+
+write_jobs "$tmp/shellcheck-connection-jobs.json" \
+  '25:shell / ShellCheck:failure' \
+  '26:shell / Required:failure'
+cat >"$tmp/shellcheck-connection-logs/25.log" <<'EOF'
+Run cgraf78/actions/.github/actions/shell-ci-prereqs@8eaac8e384ae89e9c1aaf675dd23689cfe73fa7c
+  profiles: base,shellcheck
+  setup: none
+curl: (56) Connection died, tried 5 times before giving up
+Error: Process completed with exit code 56.
+EOF
+
+run_case shellcheck-connection \
+  "$tmp/shellcheck-connection-jobs.json" \
+  "$tmp/shellcheck-connection-logs"
+grep -Fq 'rerun-failed-jobs' "$tmp/shellcheck-connection/gh-calls" ||
+  fail "ShellCheck prerequisite connection failure was not rerun"
+
+# A recovered curl warning followed by an integrity failure is not transport
+# infrastructure. Its final process exit does not match the earlier curl
+# diagnostic, so it must stay red even though inventory has not begun yet.
+write_jobs "$tmp/shellcheck-checksum-jobs.json" \
+  '27:shell / ShellCheck:failure' \
+  '28:shell / Required:failure'
+cat >"$tmp/shellcheck-checksum-logs/27.log" <<'EOF'
+Run cgraf78/actions/.github/actions/shell-ci-prereqs@8eaac8e384ae89e9c1aaf675dd23689cfe73fa7c
+  profiles: base,shellcheck
+  setup: none
+curl: (22) The requested URL returned error: 503
+shellcheck-v0.11.0.linux.x86_64.tar.xz: FAILED
+sha256sum: WARNING: 1 computed checksum did NOT match
+Error: Process completed with exit code 1.
+EOF
+
+run_case shellcheck-checksum \
+  "$tmp/shellcheck-checksum-jobs.json" "$tmp/shellcheck-checksum-logs"
+if grep -Fq 'rerun-failed-jobs' "$tmp/shellcheck-checksum/gh-calls"; then
+  fail "ShellCheck checksum failure was rerun"
+fi
+
+# Curl exit 22 is shared by permanent HTTP failures. A transient warning from
+# an earlier attempt cannot make a terminal 404 retryable because only the
+# final curl diagnostic controls classification.
+cat >"$tmp/shellcheck-checksum-logs/27.log" <<'EOF'
+Run cgraf78/actions/.github/actions/shell-ci-prereqs@8eaac8e384ae89e9c1aaf675dd23689cfe73fa7c
+  profiles: base,shellcheck
+  setup: none
+curl: (22) The requested URL returned error: 503
+curl: (22) The requested URL returned error: 404
+Error: Process completed with exit code 22.
+EOF
+
+run_case shellcheck-permanent-http \
+  "$tmp/shellcheck-checksum-jobs.json" "$tmp/shellcheck-checksum-logs"
+if grep -Fq 'rerun-failed-jobs' \
+  "$tmp/shellcheck-permanent-http/gh-calls"; then
+  fail "ShellCheck permanent HTTP failure was rerun"
+fi
+
+# A recovered download can leave curl warnings in an otherwise complete job.
+# Once the inventory begins, a later failure is repository-owned lint and must
+# remain red rather than being hidden behind the infrastructure retry budget.
+write_jobs "$tmp/shellcheck-lint-jobs.json" \
+  '23:shell / ShellCheck:failure' \
+  '24:shell / Required:failure'
+cat >"$tmp/shellcheck-lint-logs/23.log" <<'EOF'
+Run cgraf78/actions/.github/actions/shell-ci-prereqs@8eaac8e384ae89e9c1aaf675dd23689cfe73fa7c
+  profiles: base,shellcheck
+  setup: none
+curl: (22) The requested URL returned error: 503
+=== repository ShellCheck inventory ===
+In script line 4:
+echo $value
+     ^----^ SC2086 (info): Double quote to prevent globbing and word splitting.
+Error: Process completed with exit code 1.
+EOF
+
+run_case shellcheck-lint \
+  "$tmp/shellcheck-lint-jobs.json" "$tmp/shellcheck-lint-logs"
+if grep -Fq 'rerun-failed-jobs' "$tmp/shellcheck-lint/gh-calls"; then
+  fail "repository ShellCheck finding was rerun"
+fi
 
 write_jobs "$tmp/termux-partial-jobs.json" \
   '19:rust / Termux runtime / Runtime / Android / Termux x86_64:failure' \

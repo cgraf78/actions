@@ -35,6 +35,40 @@ is_retryable_termux_bootstrap() {
     grep -Fq 'Termux bootstrap did not become ready' "$log"
 }
 
+is_retryable_shellcheck_download() {
+  local log=$1 final_curl final_exit
+
+  # Curl prints every failed retry, including attempts that later recover.
+  # Require its final diagnostic and the action's final exit to agree on the
+  # same transient failure. This leaves recovered downloads, permanent HTTP
+  # errors, checksum failures, and real lint findings red.
+  grep -Fq '/.github/actions/shell-ci-prereqs@' "$log" || return 1
+  grep -Fq 'profiles: base,shellcheck' "$log" || return 1
+  grep -Fq 'setup: none' "$log" || return 1
+  ! grep -Fq '=== repository ShellCheck inventory ===' "$log" || return 1
+
+  final_curl=$(grep -E 'curl: \((22|56)\)' "$log" | tail -n 1) || return 1
+  final_exit=$(grep -E 'Process completed with exit code (22|56)\.' "$log" |
+    tail -n 1) || return 1
+
+  case "$final_exit" in
+    *'exit code 22.'*)
+      case "$final_curl" in
+        *'curl: (22) The requested URL returned error: 429' | \
+          *'curl: (22) The requested URL returned error: 5'??) return 0 ;;
+      esac
+      ;;
+    *'exit code 56.'*)
+      case "$final_curl" in
+        *'curl: (56) Connection died, tried '*' times before giving up')
+          return 0
+          ;;
+      esac
+      ;;
+  esac
+  return 1
+}
+
 validate_inputs() {
   [[ "$TARGET_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || {
     notice "invalid repository: $TARGET_REPOSITORY"
@@ -107,6 +141,9 @@ main() {
       retryable_leaf=$((retryable_leaf + 1))
     elif is_retryable_termux_bootstrap "$log"; then
       notice "allowlisted Termux bootstrap failure: $name"
+      retryable_leaf=$((retryable_leaf + 1))
+    elif is_retryable_shellcheck_download "$log"; then
+      notice "allowlisted ShellCheck prerequisite download failure: $name"
       retryable_leaf=$((retryable_leaf + 1))
     else
       notice "not an allowlisted infrastructure failure: $name"
