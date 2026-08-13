@@ -86,9 +86,11 @@ repository Actions secrets. See GitHub's
 The `infra-retry` composite action lets a caller smooth over a small allowlist
 of failures caused before repository code runs. It recognizes GitHub runner
 job-container pulls that exhausted the runner's own retries due to transient
-registry transport failures, and Termux APK launches whose bootstrap never
-became ready before the caller command ran. It does not retry test, lint, build,
-package-manager, authentication, or mixed infrastructure/application failures.
+registry transport failures, Termux APK launches whose bootstrap never became
+ready before the caller command ran, and pinned ShellCheck archive downloads
+that exhausted curl's retries before repository inventory began. It does not
+retry ShellCheck findings, tests, builds, package-manager failures,
+authentication failures, or mixed infrastructure/application failures.
 
 The action inspects failed leaf-job logs and ignores only derived `Required`
 aggregates. It reruns failed jobs through GitHub's API when every failed leaf is
