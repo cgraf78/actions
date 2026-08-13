@@ -116,40 +116,40 @@ EOF
 }
 
 run_case clean clean 0
-[[ $(rg -c '^release upload ' "$CASE_DIR/calls") -eq 1 ]] ||
+[[ $(grep -c '^release upload ' "$CASE_DIR/calls") -eq 1 ]] ||
   fail "clean upload did not upload once"
 
 run_case existing existing 0
-if rg -q '^release upload ' "$CASE_DIR/calls"; then
+if grep -q '^release upload ' "$CASE_DIR/calls"; then
   fail "matching existing asset was uploaded again"
 fi
 
 run_case partial partial 0
-[[ $(rg -c '^release upload ' "$CASE_DIR/calls") -eq 1 ]] ||
+[[ $(grep -c '^release upload ' "$CASE_DIR/calls") -eq 1 ]] ||
   fail "partial rerun did not upload only the missing asset"
 
 run_case ambiguous ambiguous 0
-[[ $(rg -c '^release upload ' "$CASE_DIR/calls") -eq 1 ]] ||
+[[ $(grep -c '^release upload ' "$CASE_DIR/calls") -eq 1 ]] ||
   fail "ambiguous successful upload was retried"
 
 run_case ambiguous-view-failure ambiguous-view-failure 0
-[[ $(rg -c '^release upload ' "$CASE_DIR/calls") -eq 1 ]] ||
+[[ $(grep -c '^release upload ' "$CASE_DIR/calls") -eq 1 ]] ||
   fail "unknown verification state caused a successful upload to be clobbered"
 
 run_case mismatch mismatch 0
-[[ $(rg -c '^release upload ' "$CASE_DIR/calls") -eq 1 ]] ||
+[[ $(grep -c '^release upload ' "$CASE_DIR/calls") -eq 1 ]] ||
   fail "mismatched asset was not replaced"
 
 run_case failure fail 1
-[[ $(rg -c '^release upload ' "$CASE_DIR/calls") -eq 3 ]] ||
+[[ $(grep -c '^release upload ' "$CASE_DIR/calls") -eq 3 ]] ||
   fail "failed upload did not make exactly three attempts"
 
 run_case empty empty 1
-rg -q 'matched no files' "$CASE_DIR/stderr" ||
+grep -q 'matched no files' "$CASE_DIR/stderr" ||
   fail "empty glob did not explain the failure"
 
 run_case multiple multi 0
-[[ $(rg -c '^release upload ' "$CASE_DIR/calls") -eq 2 ]] ||
+[[ $(grep -c '^release upload ' "$CASE_DIR/calls") -eq 2 ]] ||
   fail "multi-file batch did not upload each asset"
 
 duplicate_dir="$tmp/duplicate"
@@ -174,9 +174,9 @@ ASSET_GLOB="$duplicate_dir/*/tool.tar.gz" \
 duplicate_status=$?
 set -e
 [[ "$duplicate_status" -eq 1 ]] || fail "duplicate basenames were accepted"
-rg -q 'duplicate release asset name' "$duplicate_dir/stderr" ||
+grep -q 'duplicate release asset name' "$duplicate_dir/stderr" ||
   fail "duplicate basename failure was not explained"
-if rg -q '^release upload ' "$duplicate_dir/calls"; then
+if grep -q '^release upload ' "$duplicate_dir/calls"; then
   fail "duplicate basename validation happened after an upload"
 fi
 
