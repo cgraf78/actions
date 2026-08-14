@@ -1460,40 +1460,77 @@ git -C "$source_work" commit --quiet -m 'use shdeps destination fixture'
 git -C "$source_work" push --quiet
 
 run_shdeps_destination_case() {
-  local name=$1 xdg=$2 shdeps_root=$3 expected=$4
+  local name=$1 xdg_state=$2 shdeps_state=$3 expected_base=$4
   local case_home="$tmp/shdeps-destination-$name/home"
   local case_log="$tmp/shdeps-destination-$name.log"
+  local case_xdg="$tmp/shdeps-destination-$name/data"
+  local case_shdeps="$tmp/shdeps-destination-$name/install"
+  local expected_base expected
 
   mkdir -p "$case_home"
   (
     unset XDG_DATA_HOME SHDEPS_INSTALL_DIR
-    [[ "$xdg" == unset ]] || export XDG_DATA_HOME="$xdg"
-    [[ "$shdeps_root" == unset ]] || export SHDEPS_INSTALL_DIR="$shdeps_root"
+    [[ "$xdg_state" == unset ]] || export XDG_DATA_HOME="$case_xdg"
+    case "$shdeps_state" in
+      unset) ;;
+      set) export SHDEPS_INSTALL_DIR="$case_shdeps" ;;
+      trailing) export SHDEPS_INSTALL_DIR="$case_shdeps/" ;;
+      *) fail "unknown Shdeps root fixture state: $shdeps_state" ;;
+    esac
     HOME="$case_home" CHECKOUT_TEST_LOG="$case_log" \
       CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
       "$active_bash" -s <"$source_work/install.sh" >/dev/null
   ) || fail "shdeps destination case failed: $name"
 
+  case "$expected_base" in
+    home) expected_base="$case_home/.local/share" ;;
+    shdeps) expected_base="$case_shdeps" ;;
+    *) fail "unknown expected Shdeps root fixture state: $expected_base" ;;
+  esac
+  expected="$expected_base/example/example-tool"
   [[ -d "$expected/.git" && ! -L "$expected" ]] ||
     fail "shdeps destination case used the wrong checkout root: $name"
   grep -Fqx "root=$(cd "$expected" && pwd -P)" "$case_log" ||
     fail "shdeps destination case delegated from the wrong root: $name"
 }
 
-shdeps_default_home="$tmp/shdeps-destination-default/home"
-run_shdeps_destination_case default unset unset \
-  "$shdeps_default_home/.local/share/example/example-tool"
+while IFS=$'\t' read -r root_case root_xdg root_shdeps root_expected; do
+  [[ -n "$root_case" && "$root_case" != \#* ]] || continue
+  [[ "$root_shdeps" != root ]] || continue
+  run_shdeps_destination_case \
+    "$root_case" "$root_xdg" "$root_shdeps" "$root_expected"
+done <"$root/checkout-installer/fixtures/shdeps-root-v1.tsv"
 
-shdeps_xdg_home="$tmp/shdeps-destination-xdg/home"
-run_shdeps_destination_case xdg "$tmp/shdeps-destination-xdg/data" unset \
-  "$shdeps_xdg_home/.local/share/example/example-tool"
+# The root-directory vector cannot safely run a real checkout in a test. Load
+# only the generated pure resolver function and verify the same vector without
+# touching /example on the host.
+shdeps_resolver_definition=$(sed -n \
+  '/^  resolve_default_checkout_dir()/,/^  }/p' "$source_work/install.sh")
+[[ -n "$shdeps_resolver_definition" ]] ||
+  fail "generated installer does not expose its pure destination resolver"
+eval "$shdeps_resolver_definition"
+SHDEPS_INSTALL_DIR=/
+# shellcheck disable=SC2034 # Read by the generated function loaded through eval.
+checkout_default_destination=shdeps \
+  checkout_repo=example/example-tool \
+  checkout_slug=example-tool
+HOME="$tmp/shdeps-destination-root/home"
+root_resolved=$(resolve_default_checkout_dir)
+unset SHDEPS_INSTALL_DIR
+[[ "$root_resolved" == /example/example-tool ]] ||
+  fail "Shdeps root-directory destination did not normalize correctly"
 
-run_shdeps_destination_case shdeps unset \
-  "$tmp/shdeps-destination-shdeps/install" \
-  "$tmp/shdeps-destination-shdeps/install/example/example-tool"
-
-run_shdeps_destination_case both "$tmp/shdeps-destination-both/data" \
-  "$tmp/shdeps-destination-both/install" \
-  "$tmp/shdeps-destination-both/install/example/example-tool"
+shdeps_override="$tmp/shdeps-destination-override/explicit/example-tool"
+CHECKOUT_TEST_LOG="$tmp/shdeps-destination-override.log" \
+  HOME="$tmp/shdeps-destination-override/home" \
+  XDG_DATA_HOME="$tmp/shdeps-destination-override/data" \
+  SHDEPS_INSTALL_DIR="$tmp/shdeps-destination-override/install" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$shdeps_override" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
+  "$active_bash" -s <"$source_work/install.sh" >/dev/null ||
+  fail "explicit checkout destination did not override Shdeps mode"
+grep -Fqx "root=$(cd "$shdeps_override" && pwd -P)" \
+  "$tmp/shdeps-destination-override.log" ||
+  fail "explicit checkout destination did not win in Shdeps mode"
 
 printf 'checkout-installer-test: ok\n'

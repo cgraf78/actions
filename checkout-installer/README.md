@@ -58,11 +58,17 @@ From a real checkout, `install.sh` immediately invokes the repository-owned
 delegate, preserving its environment, arguments, output, and exit status.
 
 When the script is downloaded or piped to Bash, it clones the repository's
-maintained branch into:
+maintained branch into the generated destination policy:
 
 ```text
-${XDG_DATA_HOME:-$HOME/.local/share}/cgraf78/checkouts/<repository>
+xdg:    ${XDG_DATA_HOME:-$HOME/.local/share}/cgraf78/checkouts/<repository>
+shdeps: ${SHDEPS_INSTALL_DIR:-$HOME/.local/share}/<owner>/<repository>
 ```
+
+The versioned symbolic cases in
+`fixtures/shdeps-root-v1.tsv` are the shared conformance vectors for consumers
+and Shdeps; neither implementation should maintain an independent precedence
+table.
 
 The initial clone is shallow but durable. A rerun validates the exact origin
 and branch; refuses a dirty, detached, symlinked, nested, or foreign

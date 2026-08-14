@@ -22,6 +22,35 @@
     exit 1
   }
 
+  resolve_default_checkout_dir() {
+    local data_home install_home
+
+    case "$checkout_default_destination" in
+      xdg)
+        if [[ ${XDG_DATA_HOME:-} == /* ]]; then
+          data_home=$XDG_DATA_HOME
+        else
+          data_home=$HOME/.local/share
+        fi
+        printf '%s/cgraf78/checkouts/%s\n' "$data_home" "$checkout_slug"
+        ;;
+      shdeps)
+        # Shdeps treats its install root as a product-wide contract rather
+        # than an XDG data root. Matching that precedence here prevents a
+        # bootstrap checkout and the steady-state provider from diverging.
+        install_home=${SHDEPS_INSTALL_DIR:-$HOME/.local/share}
+        case "$install_home" in
+          /) printf '/%s\n' "$checkout_repo" ;;
+          */) printf '%s/%s\n' "${install_home%/}" "$checkout_repo" ;;
+          *) printf '%s/%s\n' "$install_home" "$checkout_repo" ;;
+        esac
+        ;;
+      *)
+        die "unsupported generated default destination: $checkout_default_destination"
+        ;;
+    esac
+  }
+
   require_delegate() {
     local checkout_root=$1 delegate_path=${2:-$checkout_delegate} delegate
 
@@ -198,26 +227,7 @@
   repo_url=${CGRAF78_CHECKOUT_INSTALL_REPO_URL:-$default_repo_url}
   checkout_dir=${CGRAF78_CHECKOUT_INSTALL_DIR:-}
   if [[ -z "$checkout_dir" ]]; then
-    case "$checkout_default_destination" in
-      xdg)
-        if [[ ${XDG_DATA_HOME:-} == /* ]]; then
-          data_home=$XDG_DATA_HOME
-        else
-          data_home=$HOME/.local/share
-        fi
-        checkout_dir="$data_home/cgraf78/checkouts/$checkout_slug"
-        ;;
-      shdeps)
-        # Shdeps treats its install root as a product-wide contract rather
-        # than an XDG data root. Matching that precedence here prevents a
-        # bootstrap checkout and the steady-state provider from diverging.
-        install_home=${SHDEPS_INSTALL_DIR:-$HOME/.local/share}
-        checkout_dir="$install_home/$checkout_repo"
-        ;;
-      *)
-        die "unsupported generated default destination: $checkout_default_destination"
-        ;;
-    esac
+    checkout_dir=$(resolve_default_checkout_dir)
   fi
 
   case "$checkout_dir" in
