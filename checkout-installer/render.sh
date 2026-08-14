@@ -52,6 +52,7 @@ CHECKOUT_INSTALLER_ENABLED=
 CHECKOUT_INSTALLER_REPO=
 CHECKOUT_INSTALLER_REF=
 CHECKOUT_INSTALLER_DELEGATE=
+CHECKOUT_INSTALLER_DEFAULT_DESTINATION=
 
 # shellcheck source=/dev/null
 . "$config"
@@ -83,6 +84,7 @@ for name in "$checkout_owner" "$checkout_slug"; do
 done
 : "${CHECKOUT_INSTALLER_REF:=main}"
 : "${CHECKOUT_INSTALLER_DELEGATE:=support/install-checkout.sh}"
+: "${CHECKOUT_INSTALLER_DEFAULT_DESTINATION:=xdg}"
 
 case "$CHECKOUT_INSTALLER_REF" in
   '' | -* | /* | */ | *//* | *..* | *[!A-Za-z0-9._/-]*)
@@ -96,6 +98,12 @@ case "$CHECKOUT_INSTALLER_DELEGATE" in
 esac
 [[ "$CHECKOUT_INSTALLER_DELEGATE" != install.sh ]] ||
   die 'CHECKOUT_INSTALLER_DELEGATE must not be install.sh'
+case "$CHECKOUT_INSTALLER_DEFAULT_DESTINATION" in
+  xdg | shdeps) ;;
+  *)
+    die 'CHECKOUT_INSTALLER_DEFAULT_DESTINATION must be xdg or shdeps'
+    ;;
+esac
 
 delegate="$consumer/$CHECKOUT_INSTALLER_DELEGATE"
 [[ -f "$delegate" && ! -L "$delegate" ]] ||
@@ -115,6 +123,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   line=${line//@CHECKOUT_SLUG@/$checkout_slug}
   line=${line//@CHECKOUT_REF@/$CHECKOUT_INSTALLER_REF}
   line=${line//@CHECKOUT_DELEGATE@/$CHECKOUT_INSTALLER_DELEGATE}
+  line=${line//@CHECKOUT_DEFAULT_DESTINATION@/$CHECKOUT_INSTALLER_DEFAULT_DESTINATION}
   printf '%s\n' "$line" >>"$tmp"
 done <"$template"
 

@@ -22,8 +22,21 @@ CHECKOUT_INSTALLER_REPO=cgraf78/example-tool
 ```
 
 `CHECKOUT_INSTALLER_REF` defaults to `main`, and
-`CHECKOUT_INSTALLER_DELEGATE` defaults to `support/install-checkout.sh`. Run the
-normal synchronization command from a clean Actions checkout:
+`CHECKOUT_INSTALLER_DELEGATE` defaults to `support/install-checkout.sh`.
+`CHECKOUT_INSTALLER_DEFAULT_DESTINATION` defaults to `xdg`, preserving the
+historical `${XDG_DATA_HOME:-$HOME/.local/share}/cgraf78/checkouts/<repository>`
+layout. A consumer managed by Shdeps may opt into:
+
+```bash
+CHECKOUT_INSTALLER_DEFAULT_DESTINATION=shdeps
+```
+
+That mode uses
+`${SHDEPS_INSTALL_DIR:-$HOME/.local/share}/<owner>/<repository>` and
+intentionally ignores `XDG_DATA_HOME`, matching Shdeps' root precedence. The
+exact `CGRAF78_CHECKOUT_INSTALL_DIR` runtime override still wins in both modes.
+
+Run the normal synchronization command from a clean Actions checkout:
 
 ```bash
 consumer-ci/sync.sh /path/to/example-tool

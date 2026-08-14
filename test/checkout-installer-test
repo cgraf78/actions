@@ -382,6 +382,18 @@ fi
 [[ ! -e "$invalid_repo_consumer/install.sh" ]] ||
   fail "invalid repository owner left a generated installer"
 
+invalid_destination_consumer="$tmp/invalid-destination-consumer"
+write_config "$invalid_destination_consumer"
+write_delegate "$invalid_destination_consumer"
+printf 'CHECKOUT_INSTALLER_DEFAULT_DESTINATION=unknown\n' \
+  >>"$invalid_destination_consumer/scripts/checkout-installer.conf"
+if "$root/checkout-installer/render.sh" "$invalid_destination_consumer" \
+  >/dev/null 2>&1; then
+  fail "renderer accepted an unknown default-destination policy"
+fi
+[[ ! -e "$invalid_destination_consumer/install.sh" ]] ||
+  fail "invalid default-destination policy left a generated installer"
+
 option_delegate_consumer="$tmp/option-delegate-consumer"
 write_config "$option_delegate_consumer"
 printf 'CHECKOUT_INSTALLER_DELEGATE=--stage\n' \
@@ -1436,5 +1448,52 @@ set -e
 if compgen -G "$tmp/failed/.example-tool.clone.*" >/dev/null; then
   fail "failed clone left a staging checkout"
 fi
+
+# Dot opts into the Shdeps destination contract. The generated installer must
+# use the same base-root precedence as Shdeps itself: SHDEPS_INSTALL_DIR wins,
+# otherwise HOME/.local/share is used, and XDG_DATA_HOME is irrelevant.
+printf 'CHECKOUT_INSTALLER_DEFAULT_DESTINATION=shdeps\n' \
+  >>"$source_work/scripts/checkout-installer.conf"
+"$root/checkout-installer/render.sh" "$source_work" >/dev/null
+git -C "$source_work" add scripts/checkout-installer.conf install.sh
+git -C "$source_work" commit --quiet -m 'use shdeps destination fixture'
+git -C "$source_work" push --quiet
+
+run_shdeps_destination_case() {
+  local name=$1 xdg=$2 shdeps_root=$3 expected=$4
+  local case_home="$tmp/shdeps-destination-$name/home"
+  local case_log="$tmp/shdeps-destination-$name.log"
+
+  mkdir -p "$case_home"
+  (
+    unset XDG_DATA_HOME SHDEPS_INSTALL_DIR
+    [[ "$xdg" == unset ]] || export XDG_DATA_HOME="$xdg"
+    [[ "$shdeps_root" == unset ]] || export SHDEPS_INSTALL_DIR="$shdeps_root"
+    HOME="$case_home" CHECKOUT_TEST_LOG="$case_log" \
+      CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
+      "$active_bash" -s <"$source_work/install.sh" >/dev/null
+  ) || fail "shdeps destination case failed: $name"
+
+  [[ -d "$expected/.git" && ! -L "$expected" ]] ||
+    fail "shdeps destination case used the wrong checkout root: $name"
+  grep -Fqx "root=$(cd "$expected" && pwd -P)" "$case_log" ||
+    fail "shdeps destination case delegated from the wrong root: $name"
+}
+
+shdeps_default_home="$tmp/shdeps-destination-default/home"
+run_shdeps_destination_case default unset unset \
+  "$shdeps_default_home/.local/share/example/example-tool"
+
+shdeps_xdg_home="$tmp/shdeps-destination-xdg/home"
+run_shdeps_destination_case xdg "$tmp/shdeps-destination-xdg/data" unset \
+  "$shdeps_xdg_home/.local/share/example/example-tool"
+
+run_shdeps_destination_case shdeps unset \
+  "$tmp/shdeps-destination-shdeps/install" \
+  "$tmp/shdeps-destination-shdeps/install/example/example-tool"
+
+run_shdeps_destination_case both "$tmp/shdeps-destination-both/data" \
+  "$tmp/shdeps-destination-both/install" \
+  "$tmp/shdeps-destination-both/install/example/example-tool"
 
 printf 'checkout-installer-test: ok\n'
