@@ -121,6 +121,13 @@ checkout_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
   printf 'git_work_tree=%s\n' "${GIT_WORK_TREE-unset}"
   printf 'git_index_file=%s\n' "${GIT_INDEX_FILE-unset}"
   printf 'bash=%s\n' "$BASH"
+  checkout_parent=${checkout_root%/*}
+  checkout_name=${checkout_root##*/}
+  if [[ -d "$checkout_parent/.${checkout_name}.install.lock" ]]; then
+    printf 'checkout_lock=held\n'
+  else
+    printf 'checkout_lock=absent\n'
+  fi
   printf 'argc=%s\n' "$#"
   argument_index=0
   for argument in "$@"; do
@@ -275,6 +282,8 @@ grep -Fqx 'argc=2' "$direct_log" ||
   fail "direct checkout install did not preserve the argument count"
 grep -Fqx 'arg2=two words' "$direct_log" ||
   fail "direct checkout install did not preserve argument boundaries"
+grep -Fqx 'checkout_lock=absent' "$direct_log" ||
+  fail "direct checkout install unexpectedly acquired the managed-checkout lock"
 
 alternate_bash="$tmp/alternate-bash"
 ln -s "$BASH" "$alternate_bash"
@@ -428,6 +437,31 @@ repo_url="file://$remote"
 managed="$tmp/managed/example-tool"
 pipe_log="$tmp/pipe.log"
 
+# Existing consumers deliberately keep the historical XDG checkout layout.
+# An ambient Shdeps installation root must not change generated installer
+# behavior unless the consumer explicitly opts into the new destination
+# contract added for dot.
+legacy_default_home="$tmp/legacy-default-home"
+legacy_default_xdg="$tmp/legacy-default-xdg"
+legacy_default_root="$legacy_default_xdg/cgraf78/checkouts/example-tool"
+legacy_default_log="$tmp/legacy-default.log"
+mkdir -p "$legacy_default_home"
+CHECKOUT_TEST_LOG="$legacy_default_log" \
+  HOME="$legacy_default_home" \
+  XDG_DATA_HOME="$legacy_default_xdg" \
+  SHDEPS_INSTALL_DIR="$tmp/ambient-shdeps-root" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
+  "$active_bash" -s <"$source_work/install.sh" >/dev/null ||
+  fail "legacy consumer did not retain its default checkout destination"
+[[ -d "$legacy_default_root/.git" && ! -L "$legacy_default_root" ]] ||
+  fail "legacy consumer did not use the XDG checkouts destination"
+[[ ! -e "$tmp/ambient-shdeps-root/example/example-tool" ]] ||
+  fail "ambient SHDEPS_INSTALL_DIR changed an unconfigured consumer destination"
+grep -Fqx "root=$(cd "$legacy_default_root" && pwd -P)" "$legacy_default_log" ||
+  fail "legacy default checkout delegated from the wrong root"
+grep -Fqx 'checkout_lock=held' "$legacy_default_log" ||
+  fail "piped legacy checkout delegate did not run under its mutation lock"
+
 truncated="$tmp/truncated-install.sh"
 sed '$d' "$source_work/install.sh" >"$truncated"
 set +e
@@ -558,6 +592,8 @@ grep -Fq '<protocol.ssh.allow=always>' "$git_probe_env_log" ||
   fail "piped install did not explicitly allow SSH Git remotes"
 grep -Fqx 'arg2=two words' "$pipe_log" ||
   fail "piped install did not preserve argument boundaries"
+grep -Fqx 'checkout_lock=held' "$pipe_log" ||
+  fail "piped checkout delegate did not run under its mutation lock"
 [[ $(git -C "$managed" remote get-url origin) == "$repo_url" ]] ||
   fail "managed checkout retained the wrong origin"
 [[ $(git -C "$managed" branch --show-current) == main ]] ||
