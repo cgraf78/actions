@@ -15,6 +15,10 @@
   checkout_ref='@CHECKOUT_REF@'
   checkout_delegate='@CHECKOUT_DELEGATE@'
   checkout_default_destination='@CHECKOUT_DEFAULT_DESTINATION@'
+  # @CHECKOUT_POST_INSTALL_BEGIN@
+  checkout_post_install_delegate='@CHECKOUT_POST_INSTALL_DELEGATE@'
+  active_child_pid=
+  # @CHECKOUT_POST_INSTALL_END@
   default_repo_url="https://github.com/${checkout_repo}.git"
 
   die() {
@@ -58,6 +62,91 @@
     [[ -f "$delegate" && ! -L "$delegate" ]] ||
       die "checkout installer is missing: $delegate"
   }
+  # @CHECKOUT_POST_INSTALL_BEGIN@
+  require_post_install_delegate() {
+    local checkout_root=$1
+    local post_install_path=${2:-$checkout_post_install_delegate} post_install
+
+    post_install="$checkout_root/$post_install_path"
+    [[ -f "$post_install" && ! -L "$post_install" ]] ||
+      die "checkout installer post-install command is missing: $post_install"
+  }
+
+  # Opting into a second phase means the installer can no longer exec the
+  # primary delegate directly. Preserve the existing cancellation guarantee by
+  # supervising that child and its descendants until the post-install exec.
+  # shellcheck disable=SC2329 # Reached through the direct-phase signal traps.
+  post_install_wait_for_pid_exit() {
+    local pid=$1
+
+    for _ in {1..100}; do
+      kill -0 "$pid" 2>/dev/null || return 0
+      command sleep 0.01
+    done
+    return 1
+  }
+
+  # shellcheck disable=SC2329 # Reached through the direct-phase signal traps.
+  post_install_terminate_child() {
+    local child=$1 parent=$2 signal=$3
+
+    kill -s "$signal" "$child" 2>/dev/null || true
+    post_install_wait_for_pid_exit "$child" && return 0
+    kill -s KILL "$child" 2>/dev/null || true
+    post_install_wait_for_pid_exit "$child" && return 0
+    printf 'install.sh: child process %s was not reaped by parent %s after %s and KILL\n' \
+      "$child" "$parent" "$signal" >&2
+    return 1
+  }
+
+  # shellcheck disable=SC2329 # Reached through the direct-phase signal traps.
+  post_install_signal_descendants() {
+    local parent=$1 signal=$2 snapshot=$3 child children live_parent failed=0
+
+    children=$(printf '%s\n' "$snapshot" |
+      command awk -v parent="$parent" '$2 == parent { print $1 }')
+    for child in $children; do
+      post_install_signal_descendants "$child" "$signal" "$snapshot" ||
+        failed=1
+      live_parent=$(command ps -o ppid= -p "$child" 2>/dev/null || true)
+      live_parent=${live_parent//[[:space:]]/}
+      if [[ "$live_parent" == "$parent" ]]; then
+        post_install_terminate_child "$child" "$parent" "$signal" || failed=1
+      fi
+    done
+    return "$failed"
+  }
+
+  # shellcheck disable=SC2329 # Reached through the direct-phase signal traps.
+  post_install_signal_process_tree() {
+    local root=$1 signal=$2 snapshot failed=0
+
+    snapshot=$(command ps -eo pid=,ppid= 2>/dev/null || true)
+    post_install_signal_descendants "$root" "$signal" "$snapshot" || failed=1
+    kill -s "$signal" "$root" 2>/dev/null || true
+    return "$failed"
+  }
+
+  # shellcheck disable=SC2329 # Installed as the direct-phase signal traps.
+  post_install_forward_signal() {
+    local signal=$1 status=$2 child_signal=$1
+
+    trap - HUP INT TERM
+    if [[ -n "$active_child_pid" ]]; then
+      # Background Bash children inherit ignored SIGINT outside job-control.
+      # TERM remains catchable while the installer reports conventional 130.
+      [[ "$signal" == INT ]] && child_signal=TERM
+      if ! post_install_signal_process_tree \
+        "$active_child_pid" "$child_signal"; then
+        printf 'install.sh: process-tree cleanup was incomplete after %s\n' \
+          "$signal" >&2
+      fi
+      wait "$active_child_pid" 2>/dev/null || true
+      active_child_pid=
+    fi
+    exit "$status"
+  }
+  # @CHECKOUT_POST_INSTALL_END@
 
   exec_bootstrap_git() {
     [[ -n ${CHECKOUT_INSTALLER_GIT_HOME:-} ]] ||
@@ -169,6 +258,17 @@
       "$delegate_path" >/dev/null 2>&1 ||
       die "checkout installer is not tracked: $checkout_root/$delegate_path"
   }
+  # @CHECKOUT_POST_INSTALL_BEGIN@
+  require_tracked_post_install_delegate() {
+    local checkout_root=$1
+    local post_install_path=${2:-$checkout_post_install_delegate}
+
+    require_post_install_delegate "$checkout_root" "$post_install_path"
+    bootstrap_git -C "$checkout_root" ls-files --error-unmatch -- \
+      "$post_install_path" >/dev/null 2>&1 ||
+      die "checkout installer post-install command is not tracked: $checkout_root/$post_install_path"
+  }
+  # @CHECKOUT_POST_INSTALL_END@
 
   require_tree_delegate() {
     local checkout_root=$1 revision=$2
@@ -182,6 +282,21 @@
       "$type" == blob && -n "$object" && "$path" == "$delegate_path" ]] ||
       die "checkout installer is missing from revision $revision: $delegate_path"
   }
+  # @CHECKOUT_POST_INSTALL_BEGIN@
+  require_tree_post_install_delegate() {
+    local checkout_root=$1 revision=$2
+    local post_install_path=${3:-$checkout_post_install_delegate}
+    local entry mode type object path
+
+    entry=$(bootstrap_git -C "$checkout_root" ls-tree "$revision" -- \
+      "$post_install_path") ||
+      die "cannot inspect checkout post-install command in revision $revision"
+    IFS=$' \t' read -r mode type object path <<<"$entry"
+    [[ ("$mode" == 100644 || "$mode" == 100755) &&
+      "$type" == blob && -n "$object" && "$path" == "$post_install_path" ]] ||
+      die "checkout post-install command is missing from revision $revision: $post_install_path"
+  }
+  # @CHECKOUT_POST_INSTALL_END@
 
   checkout_source_root() {
     local source_path=$1 script_dir top
@@ -197,8 +312,18 @@
     [[ -f "$top/install.sh" && ! -L "$top/install.sh" ]] || return 1
     [[ -f "$top/$checkout_delegate" && ! -L "$top/$checkout_delegate" ]] ||
       return 1
+    # @CHECKOUT_POST_INSTALL_BEGIN@
+    if [[ ! -f "$top/$checkout_post_install_delegate" ||
+      -L "$top/$checkout_post_install_delegate" ]]; then
+      return 1
+    fi
+    # @CHECKOUT_POST_INSTALL_END@
     trusted_checkout_git "$top" ls-files --error-unmatch -- \
       install.sh "$checkout_delegate" >/dev/null 2>&1 || return 1
+    # @CHECKOUT_POST_INSTALL_BEGIN@
+    trusted_checkout_git "$top" ls-files --error-unmatch -- \
+      "$checkout_post_install_delegate" >/dev/null 2>&1 || return 1
+    # @CHECKOUT_POST_INSTALL_END@
     printf '%s\n' "$top"
   }
 
@@ -210,6 +335,30 @@
     umask "$caller_umask"
     exec "$BASH" "$checkout_root/$checkout_delegate" "$@"
   }
+  # @CHECKOUT_POST_INSTALL_BEGIN@
+  run_direct_install_with_post() {
+    local checkout_root=$1 status
+    shift
+
+    require_delegate "$checkout_root"
+    require_post_install_delegate "$checkout_root"
+    umask "$caller_umask"
+
+    trap 'post_install_forward_signal HUP 129' HUP
+    trap 'post_install_forward_signal INT 130' INT
+    trap 'post_install_forward_signal TERM 143' TERM
+    set +e
+    "$BASH" "$checkout_root/$checkout_delegate" "$@" <&0 &
+    active_child_pid=$!
+    wait "$active_child_pid"
+    status=$?
+    active_child_pid=
+    set -e
+    trap - HUP INT TERM
+    [[ "$status" -eq 0 ]] || exit "$status"
+    exec "$BASH" "$checkout_root/$checkout_post_install_delegate" "$@"
+  }
+  # @CHECKOUT_POST_INSTALL_END@
 
   # A generated installer committed at the repository root keeps ordinary
   # checkout installs fast and offline. Piped Bash has no regular source file,
@@ -218,6 +367,9 @@
   script_source=${BASH_SOURCE[0]:-}
   if [[ -n "$script_source" ]] &&
     script_dir=$(checkout_source_root "$script_source"); then
+    # @CHECKOUT_POST_INSTALL_BEGIN@
+    run_direct_install_with_post "$script_dir" "$@"
+    # @CHECKOUT_POST_INSTALL_END@
     exec_delegate "$script_dir" "$@"
   fi
 
@@ -265,6 +417,9 @@
   update_candidate_head="$update_transaction/candidate-head"
   update_previous_head="$update_transaction/previous-head"
   update_recorded_delegate=
+  # @CHECKOUT_POST_INSTALL_BEGIN@
+  update_recorded_post_install_delegate=
+  # @CHECKOUT_POST_INSTALL_END@
   update_next_marker=.git/cgraf78-update-next-identity
   update_previous_marker=.git/cgraf78-update-previous-identity
   update_transaction_created=0
@@ -277,6 +432,16 @@
       lock_held=0
     fi
   }
+  # @CHECKOUT_POST_INSTALL_BEGIN@
+  # The ordinary EXIT cleanup remains deliberately best effort. The transition
+  # to post-install is different: nested tooling may need this exact lock, so
+  # failing to prove its removal must stop before any second-phase code runs.
+  release_lock_for_post_install() {
+    [[ "$lock_held" -eq 1 ]] || return 0
+    rmdir "$lock_dir" 2>/dev/null || return 1
+    lock_held=0
+  }
+  # @CHECKOUT_POST_INSTALL_END@
 
   # shellcheck disable=SC2329 # Installed as the EXIT trap below.
   recover_staging_location() {
@@ -350,6 +515,18 @@
         return 1
         ;;
     esac
+    # @CHECKOUT_POST_INSTALL_BEGIN@
+    update_recorded_post_install_delegate=$(sed -n '6p' "$update_identity")
+    if [[ -n "$update_recorded_post_install_delegate" ]]; then
+      case "$update_recorded_post_install_delegate" in
+        install.sh | -* | . | .. | /* | ./* | */./* | */. | *[!A-Za-z0-9._/-]* | *//* | ../* | */../* | */..)
+          return 1
+          ;;
+      esac
+      [[ "$update_recorded_post_install_delegate" != "$update_recorded_delegate" ]] ||
+        return 1
+    fi
+    # @CHECKOUT_POST_INSTALL_END@
     [[ $(sed -n '1p' "$update_identity") == 'cgraf78 checkout installer update transaction v1' &&
     $(sed -n '2p' "$update_identity") == "$checkout_dir" &&
     $(sed -n '3p' "$update_identity") == "$checkout_repo" &&
@@ -384,6 +561,14 @@
       if [[ "$require_recorded_delegate" == true ]]; then
         require_tree_delegate "$candidate" HEAD "$update_recorded_delegate"
         require_tracked_delegate "$candidate" "$update_recorded_delegate"
+        # @CHECKOUT_POST_INSTALL_BEGIN@
+        if [[ -n "$update_recorded_post_install_delegate" ]]; then
+          require_tree_post_install_delegate "$candidate" HEAD \
+            "$update_recorded_post_install_delegate"
+          require_tracked_post_install_delegate "$candidate" \
+            "$update_recorded_post_install_delegate"
+        fi
+        # @CHECKOUT_POST_INSTALL_END@
       fi
     ); then
       return 1
@@ -640,7 +825,16 @@
       rm -f -- "$update_identity"
       die "cannot write update transaction identity: $update_transaction"
     fi
+    # @CHECKOUT_POST_INSTALL_BEGIN@
+    if ! printf '%s\n' "$checkout_post_install_delegate" >>"$update_identity"; then
+      rm -f -- "$update_identity"
+      die "cannot record checkout post-install command: $update_transaction"
+    fi
+    # @CHECKOUT_POST_INSTALL_END@
     update_recorded_delegate=$checkout_delegate
+    # @CHECKOUT_POST_INSTALL_BEGIN@
+    update_recorded_post_install_delegate=$checkout_post_install_delegate
+    # @CHECKOUT_POST_INSTALL_END@
     network_git -c init.templateDir= \
       clone --quiet --single-branch --branch "$checkout_ref" \
       --no-tags -- "$repo_url" "$update_next" </dev/null ||
@@ -648,6 +842,10 @@
     validate_managed_checkout "$update_next"
     require_tree_delegate "$update_next" HEAD
     require_tracked_delegate "$update_next"
+    # @CHECKOUT_POST_INSTALL_BEGIN@
+    require_tree_post_install_delegate "$update_next" HEAD
+    require_tracked_post_install_delegate "$update_next"
+    # @CHECKOUT_POST_INSTALL_END@
     current_head=$(bootstrap_git -C "$checkout_dir" rev-parse HEAD) ||
       die "cannot resolve managed checkout revision: $checkout_dir"
     candidate_head=$(bootstrap_git -C "$update_next" rev-parse HEAD) ||
@@ -679,6 +877,9 @@
       die "cannot finish managed checkout update: $update_transaction"
     validate_managed_checkout "$checkout_dir"
     require_tracked_delegate "$checkout_dir"
+    # @CHECKOUT_POST_INSTALL_BEGIN@
+    require_tracked_post_install_delegate "$checkout_dir"
+    # @CHECKOUT_POST_INSTALL_END@
   else
     staging=$(mktemp -d "$checkout_parent/.${checkout_slug}.clone.XXXXXX") ||
       die "cannot create checkout staging directory under $checkout_parent"
@@ -690,6 +891,10 @@
     validate_managed_checkout "$staging"
     require_tree_delegate "$staging" HEAD
     require_tracked_delegate "$staging"
+    # @CHECKOUT_POST_INSTALL_BEGIN@
+    require_tree_post_install_delegate "$staging" HEAD
+    require_tracked_post_install_delegate "$staging"
+    # @CHECKOUT_POST_INSTALL_END@
     [[ ! -e "$checkout_dir" && ! -L "$checkout_dir" ]] ||
       die "managed checkout destination appeared during clone: $checkout_dir"
     publish_identity=$(mktemp "$checkout_parent/.${checkout_slug}.publish.XXXXXX") ||
@@ -709,7 +914,35 @@
     staging=
     validate_managed_checkout "$checkout_dir"
     require_tracked_delegate "$checkout_dir"
+    # @CHECKOUT_POST_INSTALL_BEGIN@
+    require_tracked_post_install_delegate "$checkout_dir"
+    # @CHECKOUT_POST_INSTALL_END@
   fi
+  # @CHECKOUT_POST_INSTALL_BEGIN@
+  require_delegate "$checkout_dir"
+  require_post_install_delegate "$checkout_dir"
+  umask "$caller_umask"
+  set +e
+  "$BASH" "$checkout_dir/$checkout_delegate" "$@" <&0 &
+  active_child_pid=$!
+  wait "$active_child_pid"
+  delegate_status=$?
+  active_child_pid=
+  set -e
+  [[ "$delegate_status" -eq 0 ]] || exit "$delegate_status"
+
+  # Every checkout mutation and recovery resource must be settled before the
+  # lock is released. The post-install delegate can then safely invoke another
+  # manager for the same checkout without inherited transaction state.
+  [[ -z "$staging" && -z "$publish_identity" && -z "$active_git_home" &&
+    "$update_transaction_created" -eq 0 &&
+    ! -e "$update_transaction" && ! -L "$update_transaction" ]] ||
+    die 'cannot enter post-install with active checkout transaction state'
+  release_lock_for_post_install ||
+    die "cannot release managed checkout lock before post-install: $lock_dir"
+  trap - EXIT HUP INT TERM
+  exec "$BASH" "$checkout_dir/$checkout_post_install_delegate" "$@"
+  # @CHECKOUT_POST_INSTALL_END@
 
   require_delegate "$checkout_dir"
   umask "$caller_umask"

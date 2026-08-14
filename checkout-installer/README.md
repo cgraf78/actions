@@ -36,6 +36,20 @@ That mode uses
 intentionally ignores `XDG_DATA_HOME`, matching Shdeps' root precedence. The
 exact `CGRAF78_CHECKOUT_INSTALL_DIR` runtime override still wins in both modes.
 
+A consumer that needs a second, unlocked phase may set one additional tracked
+script path:
+
+```bash
+CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE=support/post-install.sh
+```
+
+The value uses the same safe repository-relative path grammar as the primary
+delegate. It must name a tracked regular file, may not be `install.sh`, and may
+not equal the primary delegate. Command strings and embedded arguments are
+intentionally unsupported; product-specific argument interpretation belongs in
+the repository-owned wrapper. When unset, the rendered installer remains
+byte-for-byte identical to the legacy single-phase form.
+
 Run the normal synchronization command from a clean Actions checkout:
 
 ```bash
@@ -54,8 +68,10 @@ header; custom files and symlinks remain consumer-owned.
 
 ## Runtime behavior
 
-From a real checkout, `install.sh` immediately invokes the repository-owned
-delegate, preserving its environment, arguments, output, and exit status.
+From a real checkout, the default single-phase installer immediately invokes
+the repository-owned delegate, preserving its environment, arguments, output,
+and exit status. An opted-in two-phase installer runs the primary delegate to
+completion and then replaces itself with the post-install delegate.
 
 When the script is downloaded or piped to Bash, it clones the repository's
 maintained branch into the generated destination policy:
@@ -96,6 +112,18 @@ or SSH paths. A lock is deliberately fail-closed after an uncatchable process
 termination: after confirming that no installer is running, remove the exact
 empty lock directory named by the diagnostic with `rmdir` and retry.
 
+For an opted-in post-install delegate in downloaded or piped mode, the primary
+delegate retains the same lock-protected publication behavior. Only after it
+succeeds does the installer verify that transaction and temporary state are
+gone, strictly release the checkout lock, clear its phase traps, and `exec` the
+post-install script with the original environment and exact argument vector.
+Direct-checkout mode has no mutation lock; it preserves the same primary-then-
+post ordering. Primary failure skips the second phase and keeps its exact
+status; post-install status and signals come directly from the replacement
+process. The second phase must be idempotent because an uncatchable termination
+can always occur after lock release and before or during that repository-owned
+work.
+
 The entire executable body is one compound shell command. Bash therefore parses
 the final byte before cloning or updating anything; a truncated curl response
 cannot partially execute the bootstrap and report a successful install.
@@ -117,6 +145,7 @@ argument and environment forwarding, exit status propagation, renderer drift,
 truncated input, dirty and foreign destination refusal, missing and migrating
 delegates, concurrent installs, signal forwarding, Git-environment isolation,
 hard-link rejection fallback, failed and interrupted update transactions,
-publication races, stale-lock recovery, and failed-clone cleanup. CI runs the
+publication races, stale-lock recovery, unlocked post-install ordering and
+status propagation, and failed-clone cleanup. CI runs the
 suite across the full shared Linux/macOS matrix, real Android/Termux, and macOS
 system Bash 3.2.

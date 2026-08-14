@@ -53,6 +53,7 @@ CHECKOUT_INSTALLER_REPO=
 CHECKOUT_INSTALLER_REF=
 CHECKOUT_INSTALLER_DELEGATE=
 CHECKOUT_INSTALLER_DEFAULT_DESTINATION=
+CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE=
 
 # shellcheck source=/dev/null
 . "$config"
@@ -85,6 +86,7 @@ done
 : "${CHECKOUT_INSTALLER_REF:=main}"
 : "${CHECKOUT_INSTALLER_DELEGATE:=support/install-checkout.sh}"
 : "${CHECKOUT_INSTALLER_DEFAULT_DESTINATION:=xdg}"
+: "${CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE:=}"
 
 case "$CHECKOUT_INSTALLER_REF" in
   '' | -* | /* | */ | *//* | *..* | *[!A-Za-z0-9._/-]*)
@@ -98,6 +100,17 @@ case "$CHECKOUT_INSTALLER_DELEGATE" in
 esac
 [[ "$CHECKOUT_INSTALLER_DELEGATE" != install.sh ]] ||
   die 'CHECKOUT_INSTALLER_DELEGATE must not be install.sh'
+if [[ -n "$CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE" ]]; then
+  case "$CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE" in
+    -* | . | .. | /* | ./* | */./* | */. | *[!A-Za-z0-9._/-]* | *//* | ../* | */../* | */..)
+      die 'CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE must be a safe relative path'
+      ;;
+  esac
+  [[ "$CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE" != install.sh ]] ||
+    die 'CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE must not be install.sh'
+  [[ "$CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE" != "$CHECKOUT_INSTALLER_DELEGATE" ]] ||
+    die 'CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE must differ from CHECKOUT_INSTALLER_DELEGATE'
+fi
 case "$CHECKOUT_INSTALLER_DEFAULT_DESTINATION" in
   xdg | shdeps) ;;
   *)
@@ -108,6 +121,11 @@ esac
 delegate="$consumer/$CHECKOUT_INSTALLER_DELEGATE"
 [[ -f "$delegate" && ! -L "$delegate" ]] ||
   die "checkout installer delegate must be a regular file: $delegate"
+if [[ -n "$CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE" ]]; then
+  post_install="$consumer/$CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE"
+  [[ -f "$post_install" && ! -L "$post_install" ]] ||
+    die "checkout installer post-install command must be a regular file: $post_install"
+fi
 
 if [[ "$check" != true && (-e "$output" || -L "$output") ]]; then
   [[ -f "$output" && ! -L "$output" &&
@@ -118,14 +136,37 @@ fi
 tmp=$(mktemp "$consumer/.install.sh.XXXXXX")
 trap 'rm -f "$tmp"' EXIT
 
+post_install_block=false
 while IFS= read -r line || [[ -n "$line" ]]; do
+  marker_line=${line#"${line%%[![:space:]]*}"}
+  case "$marker_line" in
+    '# @CHECKOUT_POST_INSTALL_BEGIN@')
+      [[ "$post_install_block" == false ]] ||
+        die 'installer template contains a nested post-install block'
+      post_install_block=true
+      continue
+      ;;
+    '# @CHECKOUT_POST_INSTALL_END@')
+      [[ "$post_install_block" == true ]] ||
+        die 'installer template closes an unopened post-install block'
+      post_install_block=false
+      continue
+      ;;
+  esac
+  if [[ "$post_install_block" == true &&
+    -z "$CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE" ]]; then
+    continue
+  fi
   line=${line//@CHECKOUT_REPO@/$CHECKOUT_INSTALLER_REPO}
   line=${line//@CHECKOUT_SLUG@/$checkout_slug}
   line=${line//@CHECKOUT_REF@/$CHECKOUT_INSTALLER_REF}
   line=${line//@CHECKOUT_DELEGATE@/$CHECKOUT_INSTALLER_DELEGATE}
   line=${line//@CHECKOUT_DEFAULT_DESTINATION@/$CHECKOUT_INSTALLER_DEFAULT_DESTINATION}
+  line=${line//@CHECKOUT_POST_INSTALL_DELEGATE@/$CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE}
   printf '%s\n' "$line" >>"$tmp"
 done <"$template"
+[[ "$post_install_block" == false ]] ||
+  die 'installer template contains an unterminated post-install block'
 
 if grep -Eq '@[A-Z][A-Z0-9_]*@' "$tmp"; then
   die 'installer template contains an unresolved token'
@@ -141,6 +182,11 @@ if [[ "$check" == true ]]; then
     git -C "$consumer" ls-files --error-unmatch -- \
       "$CHECKOUT_INSTALLER_DELEGATE" >/dev/null 2>&1 ||
       die "checkout installer delegate is not tracked: $delegate"
+    if [[ -n "$CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE" ]]; then
+      git -C "$consumer" ls-files --error-unmatch -- \
+        "$CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE" >/dev/null 2>&1 ||
+        die "checkout installer post-install command is not tracked: $post_install"
+    fi
   fi
   # Git is already part of the checkout-installer contract. Its no-index diff
   # keeps drift verification exact without adding a hidden diffutils/cmp
