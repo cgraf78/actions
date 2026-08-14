@@ -12,6 +12,7 @@ signal_delegate_child_file=
 network_signal_pid=
 network_signal_release=
 interrupt_killer_pid=
+lock_wait_pid=
 
 cleanup() {
   if [[ -n "$blocking_release" ]]; then
@@ -40,6 +41,10 @@ cleanup() {
   if [[ -n "$interrupt_killer_pid" ]]; then
     kill -TERM "$interrupt_killer_pid" 2>/dev/null || true
     wait "$interrupt_killer_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$lock_wait_pid" ]]; then
+    kill -TERM "$lock_wait_pid" 2>/dev/null || true
+    wait "$lock_wait_pid" 2>/dev/null || true
   fi
   rm -rf "$tmp"
 }
@@ -110,6 +115,8 @@ write_delegate() {
 set -euo pipefail
 
 checkout_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+checkout_parent=${checkout_root%/*}
+checkout_name=${checkout_root##*/}
 {
   printf 'root=%s\n' "$checkout_root"
   printf 'prefix=%s\n' "${PREFIX:-}"
@@ -121,12 +128,32 @@ checkout_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
   printf 'git_work_tree=%s\n' "${GIT_WORK_TREE-unset}"
   printf 'git_index_file=%s\n' "${GIT_INDEX_FILE-unset}"
   printf 'bash=%s\n' "$BASH"
-  checkout_parent=${checkout_root%/*}
-  checkout_name=${checkout_root##*/}
-  if [[ -d "$checkout_parent/.${checkout_name}.install.lock" ]]; then
+  checkout_lock_path="$checkout_parent/.${checkout_name}.install.lock"
+  if [[ -L "$checkout_lock_path" ]]; then
     printf 'checkout_lock=held\n'
+    printf 'checkout_lock_kind=v1\n'
+    checkout_lock_target=$(readlink "$checkout_lock_path")
+    printf 'checkout_lock_target=%s\n' "$checkout_lock_target"
+    checkout_lock_owner="$checkout_parent/$checkout_lock_target"
+    if stat -c '%a' "$checkout_lock_owner" >/dev/null 2>&1; then
+      printf 'checkout_lock_owner_mode=%s\n' \
+        "$(stat -c '%a' "$checkout_lock_owner")"
+      printf 'checkout_lock_record_mode=%s\n' \
+        "$(stat -c '%a' "$checkout_lock_owner/owner-v1")"
+    else
+      printf 'checkout_lock_owner_mode=%s\n' \
+        "$(stat -f '%Lp' "$checkout_lock_owner")"
+      printf 'checkout_lock_record_mode=%s\n' \
+        "$(stat -f '%Lp' "$checkout_lock_owner/owner-v1")"
+    fi
+    printf 'checkout_lock_record_header=%s\n' \
+      "$(sed -n '1p' "$checkout_lock_owner/owner-v1")"
+  elif [[ -d "$checkout_lock_path" ]]; then
+    printf 'checkout_lock=held\n'
+    printf 'checkout_lock_kind=legacy\n'
   else
     printf 'checkout_lock=absent\n'
+    printf 'checkout_lock_kind=absent\n'
   fi
   printf 'argc=%s\n' "$#"
   argument_index=0
@@ -455,6 +482,18 @@ if "$root/checkout-installer/render.sh" "$invalid_destination_consumer" \
 fi
 [[ ! -e "$invalid_destination_consumer/install.sh" ]] ||
   fail "invalid default-destination policy left a generated installer"
+
+invalid_lock_consumer="$tmp/invalid-lock-consumer"
+write_config "$invalid_lock_consumer"
+write_delegate "$invalid_lock_consumer"
+printf 'CHECKOUT_INSTALLER_LOCK_PROTOCOL=unknown\n' \
+  >>"$invalid_lock_consumer/scripts/checkout-installer.conf"
+if "$root/checkout-installer/render.sh" "$invalid_lock_consumer" \
+  >/dev/null 2>&1; then
+  fail "renderer accepted an unknown checkout lock protocol"
+fi
+[[ ! -e "$invalid_lock_consumer/install.sh" ]] ||
+  fail "invalid checkout lock protocol left a generated installer"
 
 option_delegate_consumer="$tmp/option-delegate-consumer"
 write_config "$option_delegate_consumer"
@@ -856,6 +895,1277 @@ set -e
   fail "fresh clone accepted a revision without its post-install delegate"
 [[ ! -e "$post_missing_fresh" && ! -L "$post_missing_fresh" ]] ||
   fail "fresh clone published a checkout without its post-install delegate"
+
+# Exercise the composition that motivated both opt-ins: the primary phase uses
+# the shared v1 lock, then the unlocked post-install phase can immediately
+# reacquire the canonical path through another manager.
+post_v1_source="$tmp/post-v1-source"
+post_v1_remote="$tmp/post-v1-tool.git"
+post_v1_managed="$tmp/post-v1-managed/example-tool"
+post_v1_primary_log="$tmp/post-v1-primary.log"
+post_v1_phase_log="$tmp/post-v1-phase.log"
+write_config "$post_v1_source"
+write_delegate "$post_v1_source"
+write_post_install "$post_v1_source"
+printf '%s\n' \
+  'CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE=support/post-install.sh' \
+  'CHECKOUT_INSTALLER_LOCK_PROTOCOL=v1' \
+  >>"$post_v1_source/scripts/checkout-installer.conf"
+"$root/checkout-installer/render.sh" "$post_v1_source" >/dev/null
+git -C "$post_v1_source" init --quiet --initial-branch=main --template=''
+git -C "$post_v1_source" config core.hooksPath /dev/null
+git -C "$post_v1_source" config commit.gpgsign false
+git -C "$post_v1_source" config user.name 'Checkout Installer Test'
+git -C "$post_v1_source" config user.email checkout-installer@example.invalid
+git -C "$post_v1_source" add .
+git -C "$post_v1_source" commit --quiet -m 'v1 post-install fixture'
+git init --quiet --bare --initial-branch=main "$post_v1_remote"
+git -C "$post_v1_source" remote add origin "$post_v1_remote"
+git -C "$post_v1_source" push --quiet --set-upstream origin main
+CHECKOUT_TEST_LOG="$post_v1_primary_log" \
+  CHECKOUT_TEST_POST_LOG="$post_v1_phase_log" \
+  CHECKOUT_TEST_POST_REACQUIRE=1 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$post_v1_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$post_v1_remote" \
+  "$active_bash" -s <"$post_v1_source/install.sh" >/dev/null ||
+  fail "v1 checkout lock did not compose with unlocked post-install"
+grep -Fqx 'checkout_lock_kind=v1' "$post_v1_primary_log" ||
+  fail "v1 post-install primary phase did not hold the shared lock"
+grep -Fqx 'checkout_lock=absent' "$post_v1_phase_log" ||
+  fail "v1 post-install phase started before strict lock release"
+grep -Fqx 'lock_reacquire=ok' "$post_v1_phase_log" ||
+  fail "v1 post-install phase could not reacquire the canonical lock path"
+[[ ! -e "$tmp/post-v1-managed/.example-tool.install.lock" &&
+  ! -L "$tmp/post-v1-managed/.example-tool.install.lock" ]] ||
+  fail "v1 post-install composition left the canonical lock"
+
+# The v1 lock is opt-in so existing generated installers retain their exact
+# bytes. Its first contract is structural: the canonical path is an atomically
+# published relative symlink to one private owner directory, and normal release
+# removes only that generation's known paths.
+lock_source="$tmp/lock-source"
+lock_remote="$tmp/lock-tool.git"
+lock_managed="$tmp/lock-managed/example-tool"
+lock_log="$tmp/lock.log"
+write_config "$lock_source"
+write_delegate "$lock_source"
+printf 'CHECKOUT_INSTALLER_LOCK_PROTOCOL=v1\n' \
+  >>"$lock_source/scripts/checkout-installer.conf"
+printf 'lock-v1\n' >"$lock_source/version.txt"
+"$root/checkout-installer/render.sh" "$lock_source" >/dev/null
+git -C "$lock_source" init --quiet --initial-branch=main --template=''
+git -C "$lock_source" config core.hooksPath /dev/null
+git -C "$lock_source" config commit.gpgsign false
+git -C "$lock_source" config user.name 'Checkout Installer Test'
+git -C "$lock_source" config user.email checkout-installer@example.invalid
+git -C "$lock_source" add .
+git -C "$lock_source" commit --quiet -m 'checkout lock v1 fixture'
+git init --quiet --bare --initial-branch=main "$lock_remote"
+git -C "$lock_source" remote add origin "$lock_remote"
+git -C "$lock_source" push --quiet --set-upstream origin main
+
+CHECKOUT_TEST_LOG="$lock_log" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null ||
+  fail "v1 checkout lock install failed"
+grep -Fqx 'checkout_lock=held' "$lock_log" ||
+  fail "v1 checkout lock was not held during primary delegation"
+grep -Fqx 'checkout_lock_kind=v1' "$lock_log" ||
+  fail "v1 checkout lock did not use the canonical symlink representation"
+lock_target=$(sed -n 's/^checkout_lock_target=//p' "$lock_log")
+[[ "$lock_target" =~ ^\.example-tool\.install\.lock\.owner\.[0-9a-f]{32}/\.$ ]] ||
+  fail "v1 checkout lock used an unsafe owner target: $lock_target"
+grep -Fqx 'checkout_lock_owner_mode=700' "$lock_log" ||
+  fail "v1 checkout lock owner directory was not private"
+grep -Fqx 'checkout_lock_record_mode=600' "$lock_log" ||
+  fail "v1 checkout lock owner record was not private"
+grep -Fqx \
+  'checkout_lock_record_header=cgraf78 checkout mutation lock v1' \
+  "$lock_log" ||
+  fail "v1 checkout lock owner record used the wrong version"
+lock_parent=$(cd -P -- "${lock_managed%/*}" && pwd -P)
+lock_path="$lock_parent/.example-tool.install.lock"
+[[ ! -e "$lock_path" && ! -L "$lock_path" ]] ||
+  fail "v1 checkout lock remained after successful delegation"
+[[ ! -e "$lock_parent/$lock_target" && ! -L "$lock_parent/$lock_target" ]] ||
+  fail "v1 checkout lock left its owner directory after release"
+
+lock_fresh_managed="$tmp/lock-fresh/example-tool"
+CHECKOUT_TEST_LOG="$tmp/lock-fresh-one.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=5 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_fresh_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" \
+  >"$tmp/lock-fresh-one.out" 2>&1 &
+lock_fresh_one_pid=$!
+CHECKOUT_TEST_LOG="$tmp/lock-fresh-two.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=5 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_fresh_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" \
+  >"$tmp/lock-fresh-two.out" 2>&1 &
+lock_fresh_two_pid=$!
+set +e
+wait "$lock_fresh_one_pid"
+lock_fresh_one_status=$?
+wait "$lock_fresh_two_pid"
+lock_fresh_two_status=$?
+set -e
+if [[ "$lock_fresh_one_status" -ne 0 || "$lock_fresh_two_status" -ne 0 ]]; then
+  sed -n '1,120p' "$tmp/lock-fresh-one.out" >&2
+  sed -n '1,120p' "$tmp/lock-fresh-two.out" >&2
+  fail "two fresh v1 writers did not serialize to success"
+fi
+grep -Fqx 'checkout_lock_kind=v1' "$tmp/lock-fresh-one.log" ||
+  fail "first fresh writer did not acquire v1"
+grep -Fqx 'checkout_lock_kind=v1' "$tmp/lock-fresh-two.log" ||
+  fail "second fresh writer did not acquire v1"
+[[ ! -e "$tmp/lock-fresh/.example-tool.install.lock" &&
+  ! -L "$tmp/lock-fresh/.example-tool.install.lock" ]] ||
+  fail "two fresh v1 writers left the canonical lock"
+
+lock_block_ready="$tmp/lock-block.ready"
+blocking_release="$tmp/lock-block.release"
+CHECKOUT_TEST_LOG="$tmp/lock-block.log" \
+  CHECKOUT_TEST_BLOCK_READY="$lock_block_ready" \
+  CHECKOUT_TEST_BLOCK_RELEASE="$blocking_release" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null 2>&1 &
+blocking_pid=$!
+for _ in {1..100}; do
+  [[ -e "$lock_block_ready" ]] && break
+  kill -0 "$blocking_pid" 2>/dev/null || break
+  sleep 0.05
+done
+[[ -e "$lock_block_ready" ]] ||
+  fail "v1 checkout lock holder did not reach its primary delegate"
+
+# Recovery is a checkout mutation too. A process that has not acquired the
+# canonical generation must not inspect or alter even obviously invalid
+# transaction state left beside that checkout.
+lock_blocked_transaction="$lock_parent/.example-tool.install.transaction"
+mkdir "$lock_blocked_transaction"
+printf 'must remain untouched\n' >"$lock_blocked_transaction/sentinel"
+
+set +e
+lock_timeout_output=$(CHECKOUT_TEST_LOG="$tmp/lock-timeout.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=0 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" 2>&1)
+lock_timeout_status=$?
+set -e
+[[ "$lock_timeout_status" -ne 0 &&
+  "$lock_timeout_output" == *'timed out after 0s waiting for managed checkout lock'* ]] ||
+  fail "v1 checkout lock timeout zero did not classify the live owner"
+[[ -L "$lock_path" ]] ||
+  fail "v1 checkout lock timeout changed the live owner"
+grep -Fqx 'must remain untouched' "$lock_blocked_transaction/sentinel" ||
+  fail "v1 checkout lock timeout changed transaction state before acquisition"
+rm -f "$lock_blocked_transaction/sentinel"
+rmdir "$lock_blocked_transaction"
+
+lock_wait_output="$tmp/lock-wait.out"
+CHECKOUT_TEST_LOG="$tmp/lock-wait.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=5 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" \
+  >"$lock_wait_output" 2>&1 &
+lock_wait_pid=$!
+for _ in {1..100}; do
+  grep -Fq 'waiting for managed checkout lock' "$lock_wait_output" 2>/dev/null &&
+    break
+  kill -0 "$lock_wait_pid" 2>/dev/null || break
+  sleep 0.05
+done
+grep -Fq 'waiting for managed checkout lock' "$lock_wait_output" ||
+  fail "v1 checkout lock waiter did not report its bounded wait"
+kill -0 "$lock_wait_pid" 2>/dev/null ||
+  fail "v1 checkout lock waiter exited before the owner released"
+: >"$blocking_release"
+wait "$blocking_pid" ||
+  fail "v1 checkout lock holder did not finish successfully"
+blocking_pid=
+blocking_release=
+if ! wait "$lock_wait_pid"; then
+  sed -n '1,120p' "$lock_wait_output" >&2
+  fail "v1 checkout lock waiter did not acquire after release"
+fi
+lock_wait_pid=
+grep -Fqx 'checkout_lock_kind=v1' "$tmp/lock-wait.log" ||
+  fail "v1 checkout lock waiter did not acquire a fresh lock generation"
+
+# A completed detachment must stop participating in lock arbitration before
+# leaf-by-leaf cleanup begins. Pause a releaser after it removes the retired
+# owner record and prove that a new writer can acquire without mistaking that
+# ordinary cleanup window for malformed active state.
+lock_cleanup_bin="$tmp/lock-cleanup-bin"
+lock_cleanup_ready="$tmp/lock-cleanup.ready"
+lock_cleanup_release="$tmp/lock-cleanup.release"
+lock_cleanup_waiter_ready="$tmp/lock-cleanup-waiter.ready"
+lock_cleanup_waiter_release="$tmp/lock-cleanup-waiter.release"
+lock_real_rm=$(PATH="$platform_tool_path" command -v rm)
+mkdir -p "$lock_cleanup_bin"
+cat >"$lock_cleanup_bin/rm" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+"${CHECKOUT_TEST_REAL_RM:?}" "$@"
+for path in "$@"; do
+  case "$path" in
+    */.example-tool.install.lock.claim.*.*/owner/owner-v1 | \
+      */.example-tool.install.lock.claim.*.*/retired/owner-v1)
+      printf '%s\n' "$$" >"${CHECKOUT_TEST_CLEANUP_READY:?}"
+      while [[ ! -e ${CHECKOUT_TEST_CLEANUP_RELEASE:?} ]]; do
+        sleep 0.01
+      done
+      ;;
+  esac
+done
+EOF
+chmod 0755 "$lock_cleanup_bin/rm"
+CHECKOUT_TEST_LOG="$tmp/lock-cleanup-owner.log" \
+  PATH="$lock_cleanup_bin:$platform_tool_path" \
+  CHECKOUT_TEST_REAL_RM="$lock_real_rm" \
+  CHECKOUT_TEST_CLEANUP_READY="$lock_cleanup_ready" \
+  CHECKOUT_TEST_CLEANUP_RELEASE="$lock_cleanup_release" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null 2>&1 &
+blocking_pid=$!
+blocking_release=$lock_cleanup_release
+for _ in {1..100}; do
+  [[ -e "$lock_cleanup_ready" ]] && break
+  kill -0 "$blocking_pid" 2>/dev/null || break
+  sleep 0.05
+done
+[[ -e "$lock_cleanup_ready" ]] ||
+  fail "v1 checkout lock cleanup did not reach its interruptible leaf phase"
+
+CHECKOUT_TEST_LOG="$tmp/lock-cleanup-waiter.log" \
+  CHECKOUT_TEST_BLOCK_READY="$lock_cleanup_waiter_ready" \
+  CHECKOUT_TEST_BLOCK_RELEASE="$lock_cleanup_waiter_release" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=2 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" \
+  >"$tmp/lock-cleanup-waiter.out" 2>&1 &
+lock_wait_pid=$!
+for _ in {1..100}; do
+  [[ -e "$lock_cleanup_waiter_ready" ]] && break
+  kill -0 "$lock_wait_pid" 2>/dev/null || break
+  sleep 0.05
+done
+if [[ ! -e "$lock_cleanup_waiter_ready" ]]; then
+  sed -n '1,120p' "$tmp/lock-cleanup-waiter.out" >&2
+  fail "v1 checkout lock cleanup blocked a fresh owner generation"
+fi
+
+: >"$lock_cleanup_release"
+wait "$blocking_pid" ||
+  fail "v1 checkout lock releaser failed after cleanup resumed"
+blocking_pid=
+blocking_release=
+: >"$lock_cleanup_waiter_release"
+wait "$lock_wait_pid" ||
+  fail "v1 checkout lock waiter failed after concurrent retired cleanup"
+lock_wait_pid=
+[[ ! -e "$lock_path" && ! -L "$lock_path" ]] ||
+  fail "concurrent retired cleanup left the canonical lock"
+
+set +e
+lock_bad_timeout_output=$(CHECKOUT_TEST_LOG="$tmp/lock-bad-timeout.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=invalid \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$tmp/lock-bad-timeout/example-tool" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" 2>&1)
+lock_bad_timeout_status=$?
+set -e
+[[ "$lock_bad_timeout_status" -ne 0 &&
+  "$lock_bad_timeout_output" == *'checkout lock timeout must be a nonnegative integer'* ]] ||
+  fail "v1 checkout lock accepted an invalid timeout"
+[[ ! -e "$tmp/lock-bad-timeout/example-tool" ]] ||
+  fail "invalid v1 checkout lock timeout mutated the checkout"
+
+lock_legacy_managed="$tmp/lock-legacy/example-tool"
+lock_legacy_path="$tmp/lock-legacy/.example-tool.install.lock"
+mkdir -p "$lock_legacy_path"
+set +e
+lock_legacy_output=$(CHECKOUT_TEST_LOG="$tmp/lock-legacy.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=0 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_legacy_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" 2>&1)
+lock_legacy_status=$?
+set -e
+[[ "$lock_legacy_status" -ne 0 &&
+  "$lock_legacy_output" == *'remove that exact empty directory with rmdir and retry'* ]] ||
+  fail "v1 checkout lock did not preserve legacy lock recovery guidance"
+[[ -d "$lock_legacy_path" && ! -L "$lock_legacy_path" ]] ||
+  fail "v1 checkout lock removed a legacy directory lock"
+rmdir "$lock_legacy_path"
+
+lock_kill_managed="$tmp/lock-kill/example-tool"
+lock_kill_parent="$tmp/lock-kill"
+lock_kill_path="$lock_kill_parent/.example-tool.install.lock"
+lock_kill_bin="$tmp/lock-kill-bin"
+lock_real_ln=$(PATH="$platform_tool_path" command -v ln)
+mkdir -p "$lock_kill_bin"
+cat >"$lock_kill_bin/ln" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+target=${!#}
+if [[ "$target" == "${CHECKOUT_TEST_KILL_LOCK:?}" &&
+  ${CHECKOUT_TEST_KILL_LOCK_MODE:-after} == before ]]; then
+  kill -KILL "$PPID"
+  exit 137
+fi
+"${CHECKOUT_TEST_REAL_LN:?}" "$@"
+if [[ "$target" == "$CHECKOUT_TEST_KILL_LOCK" ]]; then
+  kill -KILL "$PPID"
+fi
+EOF
+chmod 0755 "$lock_kill_bin/ln"
+
+lock_publish_race_managed="$tmp/lock-publish-race/example-tool"
+lock_publish_race_parent="$tmp/lock-publish-race"
+lock_publish_race_path="$lock_publish_race_parent/.example-tool.install.lock"
+lock_publish_race_bin="$tmp/lock-publish-race-bin"
+mkdir -p "$lock_publish_race_bin"
+cat >"$lock_publish_race_bin/ln" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+destination=${!#}
+if [[ "$destination" == "${CHECKOUT_TEST_PUBLISH_RACE_LOCK:?}" ]]; then
+  mkdir "$destination"
+fi
+exec "${CHECKOUT_TEST_REAL_LN:?}" "$@"
+EOF
+chmod 0755 "$lock_publish_race_bin/ln"
+set +e
+lock_publish_race_output=$(CHECKOUT_TEST_LOG="$tmp/lock-publish-race.log" \
+  PATH="$lock_publish_race_bin:$platform_tool_path" \
+  CHECKOUT_TEST_REAL_LN="$lock_real_ln" \
+  CHECKOUT_TEST_PUBLISH_RACE_LOCK="$lock_publish_race_path" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=0 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_publish_race_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" 2>&1)
+lock_publish_race_status=$?
+set -e
+[[ "$lock_publish_race_status" -ne 0 &&
+  "$lock_publish_race_output" == *'remove that exact empty directory with rmdir and retry'* ]] ||
+  fail "v1 publication did not classify a legacy mkdir winner"
+if ! rmdir "$lock_publish_race_path"; then
+  fail "v1 publication polluted a legacy directory that won the race"
+fi
+if compgen -G \
+  "$lock_publish_race_parent/.example-tool.install.lock.owner.*" \
+  >/dev/null; then
+  fail "v1 publication race left its unpublished owner generation"
+fi
+
+lock_prepub_managed="$tmp/lock-prepub/example-tool"
+lock_prepub_parent="$tmp/lock-prepub"
+lock_prepub_path="$lock_prepub_parent/.example-tool.install.lock"
+set +e
+CHECKOUT_TEST_LOG="$tmp/lock-prepub.log" \
+  PATH="$lock_kill_bin:$platform_tool_path" \
+  CHECKOUT_TEST_REAL_LN="$lock_real_ln" \
+  CHECKOUT_TEST_KILL_LOCK="$lock_prepub_path" \
+  CHECKOUT_TEST_KILL_LOCK_MODE=before \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_prepub_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null 2>&1
+lock_prepub_status=$?
+set -e
+[[ "$lock_prepub_status" -eq 137 ]] ||
+  fail "v1 checkout lock prepublication fixture did not SIGKILL its owner"
+[[ ! -e "$lock_prepub_path" && ! -L "$lock_prepub_path" ]] ||
+  fail "SIGKILL before v1 publication changed the canonical lock"
+lock_prepub_owner=$(compgen -G \
+  "$lock_prepub_parent/.example-tool.install.lock.owner.*/owner-v1" || true)
+lock_prepub_owner=${lock_prepub_owner%%$'\n'*}
+[[ -f "$lock_prepub_owner" && ! -L "$lock_prepub_owner" ]] ||
+  fail "SIGKILL before v1 publication did not leave an inert complete owner"
+CHECKOUT_TEST_LOG="$tmp/lock-prepub-retry.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=0 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_prepub_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null ||
+  fail "an unpublished v1 owner blocked a fresh lock generation"
+[[ ! -e "$lock_prepub_path" && ! -L "$lock_prepub_path" ]] ||
+  fail "fresh acquisition after a prepublication death left the canonical lock"
+[[ -f "$lock_prepub_owner" ]] ||
+  fail "fresh acquisition removed an unrelated unpublished owner generation"
+rm -f "$lock_prepub_owner"
+rmdir "${lock_prepub_owner%/*}"
+
+set +e
+CHECKOUT_TEST_LOG="$tmp/lock-kill.log" \
+  PATH="$lock_kill_bin:$platform_tool_path" \
+  CHECKOUT_TEST_REAL_LN="$lock_real_ln" \
+  CHECKOUT_TEST_KILL_LOCK="$lock_kill_path" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_kill_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null 2>&1
+lock_kill_status=$?
+set -e
+[[ "$lock_kill_status" -eq 137 ]] ||
+  fail "v1 checkout lock publication fixture did not SIGKILL its owner"
+[[ -L "$lock_kill_path" ]] ||
+  fail "SIGKILL after v1 lock publication did not preserve the canonical lock"
+lock_kill_target=$(readlink "$lock_kill_path")
+[[ -f "$lock_kill_parent/$lock_kill_target/owner-v1" ]] ||
+  fail "SIGKILL after v1 lock publication lost the owner record"
+
+CHECKOUT_TEST_LOG="$tmp/lock-kill-recover.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=2 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_kill_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null ||
+  fail "v1 checkout lock did not recover a killed owner"
+grep -Fqx 'checkout_lock_kind=v1' "$tmp/lock-kill-recover.log" ||
+  fail "killed-owner recovery did not acquire a fresh v1 generation"
+[[ ! -e "$lock_kill_path" && ! -L "$lock_kill_path" ]] ||
+  fail "killed-owner recovery left the canonical lock"
+[[ ! -e "$lock_kill_parent/$lock_kill_target" ]] ||
+  fail "killed-owner recovery left the stale owner directory"
+
+create_killed_v1_lock() {
+  local managed=$1 log=$2 parent=${1%/*} path status
+  path="$parent/.${managed##*/}.install.lock"
+  set +e
+  CHECKOUT_TEST_LOG="$log" \
+    PATH="$lock_kill_bin:$platform_tool_path" \
+    CHECKOUT_TEST_REAL_LN="$lock_real_ln" \
+    CHECKOUT_TEST_KILL_LOCK="$path" \
+    CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
+    CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+    "$active_bash" -s <"$lock_source/install.sh" >/dev/null 2>&1
+  status=$?
+  set -e
+  [[ "$status" -eq 137 ]] ||
+    fail "v1 checkout lock fixture did not SIGKILL its owner: $managed"
+  [[ -L "$path" ]] ||
+    fail "v1 checkout lock fixture did not publish its canonical lock: $managed"
+}
+
+lock_reuse_managed="$tmp/lock-reuse/example-tool"
+lock_reuse_parent="$tmp/lock-reuse"
+lock_reuse_path="$lock_reuse_parent/.example-tool.install.lock"
+create_killed_v1_lock "$lock_reuse_managed" "$tmp/lock-reuse.log"
+lock_reuse_target=$(readlink "$lock_reuse_path")
+lock_reuse_record="$lock_reuse_parent/$lock_reuse_target/owner-v1"
+sed \
+  -e "s/^pid=.*/pid=$$/" \
+  -e 's/^start_token_hex=.*/start_token_hex=00/' \
+  "$lock_reuse_record" >"$lock_reuse_record.next"
+mv "$lock_reuse_record.next" "$lock_reuse_record"
+chmod 0600 "$lock_reuse_record"
+CHECKOUT_TEST_LOG="$tmp/lock-reuse-recover.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=0 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_reuse_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null ||
+  fail "v1 checkout lock did not recover a reused PID generation"
+[[ ! -e "$lock_reuse_path" && ! -L "$lock_reuse_path" ]] ||
+  fail "PID-reuse recovery left the canonical lock"
+
+lock_remote_host_managed="$tmp/lock-remote-host/example-tool"
+lock_remote_host_parent="$tmp/lock-remote-host"
+lock_remote_host_path="$lock_remote_host_parent/.example-tool.install.lock"
+create_killed_v1_lock \
+  "$lock_remote_host_managed" "$tmp/lock-remote-host.log"
+lock_remote_host_target=$(readlink "$lock_remote_host_path")
+lock_remote_host_record="$lock_remote_host_parent/$lock_remote_host_target/owner-v1"
+sed 's/^host_hex=.*/host_hex=00/' \
+  "$lock_remote_host_record" >"$lock_remote_host_record.next"
+mv "$lock_remote_host_record.next" "$lock_remote_host_record"
+chmod 0600 "$lock_remote_host_record"
+set +e
+lock_remote_host_output=$(CHECKOUT_TEST_LOG="$tmp/lock-remote-host-retry.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=0 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_remote_host_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" 2>&1)
+lock_remote_host_status=$?
+set -e
+[[ "$lock_remote_host_status" -ne 0 &&
+  "$lock_remote_host_output" == *'timed out after 0s'* ]] ||
+  fail "v1 checkout lock did not fail closed for a different owner host"
+[[ -L "$lock_remote_host_path" ]] ||
+  fail "remote-host lock classification changed the canonical lock"
+
+lock_malformed_managed="$tmp/lock-malformed/example-tool"
+lock_malformed_parent="$tmp/lock-malformed"
+lock_malformed_path="$lock_malformed_parent/.example-tool.install.lock"
+create_killed_v1_lock \
+  "$lock_malformed_managed" "$tmp/lock-malformed.log"
+lock_malformed_target=$(readlink "$lock_malformed_path")
+lock_malformed_record="$lock_malformed_parent/$lock_malformed_target/owner-v1"
+printf 'unexpected=field\n' >>"$lock_malformed_record"
+set +e
+lock_malformed_output=$(CHECKOUT_TEST_LOG="$tmp/lock-malformed-retry.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=0 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_malformed_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" 2>&1)
+lock_malformed_status=$?
+set -e
+[[ "$lock_malformed_status" -ne 0 &&
+  "$lock_malformed_output" == *'managed checkout lock is malformed'* ]] ||
+  fail "v1 checkout lock accepted an owner record with an extra field"
+[[ -L "$lock_malformed_path" &&
+  $(tail -n 1 "$lock_malformed_record") == 'unexpected=field' ]] ||
+  fail "malformed v1 owner rejection changed the diagnostic state"
+
+lock_extra_managed="$tmp/lock-extra/example-tool"
+lock_extra_parent="$tmp/lock-extra"
+lock_extra_path="$lock_extra_parent/.example-tool.install.lock"
+create_killed_v1_lock "$lock_extra_managed" "$tmp/lock-extra.log"
+lock_extra_target=$(readlink "$lock_extra_path")
+lock_extra_owner="$lock_extra_parent/${lock_extra_target%/.}"
+: >"$lock_extra_owner/unexpected-child"
+set +e
+lock_extra_output=$(CHECKOUT_TEST_LOG="$tmp/lock-extra-retry.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=0 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_extra_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" 2>&1)
+lock_extra_status=$?
+set -e
+[[ "$lock_extra_status" -ne 0 &&
+  "$lock_extra_output" == *'managed checkout lock is malformed'* ]] ||
+  fail "v1 checkout lock accepted an unexpected active-owner child"
+[[ -L "$lock_extra_path" && -f "$lock_extra_owner/unexpected-child" ]] ||
+  fail "unexpected active-owner rejection changed the diagnostic state"
+
+lock_hostile_managed="$tmp/lock-hostile/example-tool"
+lock_hostile_path="$tmp/lock-hostile/.example-tool.install.lock"
+mkdir -p "$tmp/lock-hostile"
+ln -s ../../escape "$lock_hostile_path"
+set +e
+lock_hostile_output=$(CHECKOUT_TEST_LOG="$tmp/lock-hostile.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=0 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_hostile_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" 2>&1)
+lock_hostile_status=$?
+set -e
+[[ "$lock_hostile_status" -ne 0 &&
+  "$lock_hostile_output" == *'managed checkout lock is malformed'* ]] ||
+  fail "v1 checkout lock accepted a hostile symlink target"
+[[ -L "$lock_hostile_path" && $(readlink "$lock_hostile_path") == ../../escape ]] ||
+  fail "v1 checkout lock changed a hostile symlink target"
+
+lock_race_managed="$tmp/lock-race/example-tool"
+lock_race_parent="$tmp/lock-race"
+lock_race_path="$lock_race_parent/.example-tool.install.lock"
+create_killed_v1_lock "$lock_race_managed" "$tmp/lock-race-stale.log"
+lock_race_ready="$tmp/lock-race.ready"
+blocking_release="$tmp/lock-race.release"
+CHECKOUT_TEST_LOG="$tmp/lock-race-one.log" \
+  CHECKOUT_TEST_BLOCK_READY="$lock_race_ready" \
+  CHECKOUT_TEST_BLOCK_RELEASE="$blocking_release" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=5 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_race_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" \
+  >"$tmp/lock-race-one.out" 2>&1 &
+blocking_pid=$!
+CHECKOUT_TEST_LOG="$tmp/lock-race-two.log" \
+  CHECKOUT_TEST_BLOCK_READY="$lock_race_ready" \
+  CHECKOUT_TEST_BLOCK_RELEASE="$blocking_release" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=5 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_race_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" \
+  >"$tmp/lock-race-two.out" 2>&1 &
+lock_wait_pid=$!
+for _ in {1..100}; do
+  [[ -e "$lock_race_ready" ]] &&
+    { grep -Fq 'waiting for managed checkout lock' "$tmp/lock-race-one.out" 2>/dev/null ||
+      grep -Fq 'waiting for managed checkout lock' "$tmp/lock-race-two.out" 2>/dev/null; } &&
+    break
+  kill -0 "$blocking_pid" 2>/dev/null || break
+  kill -0 "$lock_wait_pid" 2>/dev/null || break
+  sleep 0.05
+done
+[[ -e "$lock_race_ready" ]] ||
+  fail "competing stale-lock reclaimers did not elect a checkout owner"
+if ! grep -Fq 'waiting for managed checkout lock' "$tmp/lock-race-one.out" &&
+  ! grep -Fq 'waiting for managed checkout lock' "$tmp/lock-race-two.out"; then
+  fail "competing stale-lock reclaimers did not serialize the second writer"
+fi
+if mkdir "$lock_race_path" 2>/dev/null; then
+  rmdir "$lock_race_path"
+  fail "legacy mkdir acquired while a v1 checkout lock was held"
+fi
+: >"$blocking_release"
+wait "$blocking_pid" || {
+  sed -n '1,120p' "$tmp/lock-race-one.out" >&2
+  fail "first competing stale-lock reclaimer failed"
+}
+blocking_pid=
+wait "$lock_wait_pid" || {
+  sed -n '1,120p' "$tmp/lock-race-two.out" >&2
+  fail "second competing stale-lock reclaimer failed"
+}
+lock_wait_pid=
+blocking_release=
+grep -Fqx 'checkout_lock_kind=v1' "$tmp/lock-race-one.log" ||
+  fail "first competing writer did not acquire v1"
+grep -Fqx 'checkout_lock_kind=v1' "$tmp/lock-race-two.log" ||
+  fail "second competing writer did not acquire v1"
+[[ ! -e "$lock_race_path" && ! -L "$lock_race_path" ]] ||
+  fail "competing stale-lock reclaimers left the canonical lock"
+if compgen -G "$lock_race_parent/.example-tool.install.lock.claim.*" \
+  >/dev/null; then
+  fail "competing stale-lock reclaimers left a claim directory"
+fi
+
+lock_claim_kill_bin="$tmp/lock-claim-kill-bin"
+lock_real_mv=$(PATH="$platform_tool_path" command -v mv)
+mkdir -p "$lock_claim_kill_bin"
+cat >"$lock_claim_kill_bin/mv" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+"${CHECKOUT_TEST_REAL_MV:?}" "$@"
+if [[ $# -eq 2 ]]; then
+  source_path=$1
+  destination_path=$2
+  case "${CHECKOUT_TEST_LOCK_MV_KILL_MODE:-}:$source_path:$destination_path" in
+    prepare:*.install.lock.claim.prepare.*:*/.example-tool.install.lock.claim.*.*)
+      kill -KILL "$PPID"
+      ;;
+    claim:*.install.lock.owner.*:*/.example-tool.install.lock.claim.*.*/owner)
+      kill -KILL "$PPID"
+      ;;
+    detach:"${CHECKOUT_TEST_LOCK_MV_CANONICAL:?}":*/owner/canonical)
+      kill -KILL "$PPID"
+      ;;
+  esac
+fi
+EOF
+chmod 0755 "$lock_claim_kill_bin/mv"
+
+lock_claim_prepare_managed="$tmp/lock-claim-prepare/example-tool"
+lock_claim_prepare_parent="$tmp/lock-claim-prepare"
+lock_claim_prepare_path="$lock_claim_prepare_parent/.example-tool.install.lock"
+set +e
+CHECKOUT_TEST_LOG="$tmp/lock-claim-prepare.log" \
+  PATH="$lock_claim_kill_bin:$platform_tool_path" \
+  CHECKOUT_TEST_REAL_MV="$lock_real_mv" \
+  CHECKOUT_TEST_LOCK_MV_KILL_MODE=prepare \
+  CHECKOUT_TEST_LOCK_MV_CANONICAL="$lock_claim_prepare_path" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_claim_prepare_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null 2>&1
+lock_claim_prepare_status=$?
+set -e
+[[ "$lock_claim_prepare_status" -eq 137 ]] ||
+  fail "v1 checkout lock claim-preparation fixture did not SIGKILL its claimant"
+[[ -L "$lock_claim_prepare_path" && -d "$lock_claim_prepare_path" ]] ||
+  fail "killed claim preparer changed the live canonical owner"
+lock_claim_prepare_orphan=$(compgen -G \
+  "$lock_claim_prepare_parent/.example-tool.install.lock.claim.*.*/claim-v1" || true)
+lock_claim_prepare_orphan=${lock_claim_prepare_orphan%%$'\n'*}
+[[ -f "$lock_claim_prepare_orphan" &&
+  ! -e "${lock_claim_prepare_orphan%/claim-v1}/owner" ]] ||
+  fail "killed claim preparer did not leave one inert empty claim"
+CHECKOUT_TEST_LOG="$tmp/lock-claim-prepare-recover.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=2 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_claim_prepare_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null ||
+  fail "an interrupted empty claim blocked stale-owner recovery"
+[[ ! -e "$lock_claim_prepare_path" && ! -L "$lock_claim_prepare_path" ]] ||
+  fail "claim-preparation recovery left the canonical lock"
+[[ -f "$lock_claim_prepare_orphan" ]] ||
+  fail "claim-preparation recovery removed an unrelated empty claim"
+rm -f "$lock_claim_prepare_orphan"
+rmdir "${lock_claim_prepare_orphan%/claim-v1}"
+
+lock_claim_managed="$tmp/lock-claim/example-tool"
+lock_claim_parent="$tmp/lock-claim"
+lock_claim_path="$lock_claim_parent/.example-tool.install.lock"
+set +e
+CHECKOUT_TEST_LOG="$tmp/lock-claim.log" \
+  PATH="$lock_claim_kill_bin:$platform_tool_path" \
+  CHECKOUT_TEST_REAL_MV="$lock_real_mv" \
+  CHECKOUT_TEST_LOCK_MV_KILL_MODE=claim \
+  CHECKOUT_TEST_LOCK_MV_CANONICAL="$lock_claim_path" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_claim_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null 2>&1
+lock_claim_kill_status=$?
+set -e
+[[ "$lock_claim_kill_status" -eq 137 ]] ||
+  fail "v1 checkout lock claim fixture did not SIGKILL its claimant"
+[[ -L "$lock_claim_path" && ! -e "$lock_claim_path" ]] ||
+  fail "killed claimant did not leave the canonical lock safely dangling"
+lock_claim_target=$(readlink "$lock_claim_path")
+[[ ! -e "$lock_claim_parent/$lock_claim_target" ]] ||
+  fail "killed claimant left the owner at its pre-claim path"
+compgen -G "$lock_claim_parent/.example-tool.install.lock.claim.*.*/owner/owner-v1" \
+  >/dev/null ||
+  fail "killed claimant did not preserve the nested owner record"
+
+lock_claim_original=$(compgen -G \
+  "$lock_claim_parent/.example-tool.install.lock.claim.*.*" || true)
+lock_claim_original=${lock_claim_original%%$'\n'*}
+: >"$lock_claim_original/unexpected-child"
+set +e
+lock_claim_extra_output=$(CHECKOUT_TEST_LOG="$tmp/lock-claim-extra.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=0 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_claim_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" 2>&1)
+lock_claim_extra_status=$?
+set -e
+[[ "$lock_claim_extra_status" -ne 0 &&
+  "$lock_claim_extra_output" == *'managed checkout lock is malformed'* ]] ||
+  fail "v1 checkout lock accepted an unexpected active-claim child"
+[[ -L "$lock_claim_path" && -f "$lock_claim_original/unexpected-child" ]] ||
+  fail "unexpected active-claim rejection changed the diagnostic state"
+rm -f "$lock_claim_original/unexpected-child"
+
+lock_claim_base=${lock_claim_original##*/}
+lock_claim_rest=${lock_claim_base#*.example-tool.install.lock.claim.}
+lock_claim_owner_nonce=${lock_claim_rest%%.*}
+lock_claim_second_nonce=11111111111111111111111111111111
+lock_claim_second="$lock_claim_parent/.example-tool.install.lock.claim.${lock_claim_owner_nonce}.${lock_claim_second_nonce}"
+cp -R "$lock_claim_original" "$lock_claim_second"
+sed "s/^nonce=.*/nonce=$lock_claim_second_nonce/" \
+  "$lock_claim_second/claim-v1" >"$lock_claim_second/claim-v1.next"
+mv "$lock_claim_second/claim-v1.next" "$lock_claim_second/claim-v1"
+chmod 0600 "$lock_claim_second/claim-v1"
+set +e
+lock_multiple_claims_output=$(CHECKOUT_TEST_LOG="$tmp/lock-multiple-claims.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=0 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_claim_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" 2>&1)
+lock_multiple_claims_status=$?
+set -e
+[[ "$lock_multiple_claims_status" -ne 0 &&
+  "$lock_multiple_claims_output" == *'managed checkout lock is malformed'* ]] ||
+  fail "v1 checkout lock did not fail closed for multiple owner-bearing claims"
+[[ -L "$lock_claim_path" && ! -e "$lock_claim_path" ]] ||
+  fail "multiple-claim rejection changed the dangling canonical lock"
+rm -f "$lock_claim_second/owner/owner-v1"
+rmdir "$lock_claim_second/owner"
+rm -f "$lock_claim_second/claim-v1"
+rmdir "$lock_claim_second"
+
+CHECKOUT_TEST_LOG="$tmp/lock-claim-recover.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=2 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_claim_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null ||
+  fail "v1 checkout lock did not recover a killed pre-detachment claimant"
+[[ ! -e "$lock_claim_path" && ! -L "$lock_claim_path" ]] ||
+  fail "claimant recovery left the canonical lock"
+if compgen -G "$lock_claim_parent/.example-tool.install.lock.claim.*" \
+  >/dev/null; then
+  fail "claimant recovery left a claim directory"
+fi
+
+lock_detach_managed="$tmp/lock-detach/example-tool"
+lock_detach_parent="$tmp/lock-detach"
+lock_detach_path="$lock_detach_parent/.example-tool.install.lock"
+set +e
+CHECKOUT_TEST_LOG="$tmp/lock-detach.log" \
+  PATH="$lock_claim_kill_bin:$platform_tool_path" \
+  CHECKOUT_TEST_REAL_MV="$lock_real_mv" \
+  CHECKOUT_TEST_LOCK_MV_KILL_MODE=detach \
+  CHECKOUT_TEST_LOCK_MV_CANONICAL="$lock_detach_path" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_detach_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null 2>&1
+lock_detach_kill_status=$?
+set -e
+[[ "$lock_detach_kill_status" -eq 137 ]] ||
+  fail "v1 checkout lock detach fixture did not SIGKILL its claimant"
+[[ ! -e "$lock_detach_path" && ! -L "$lock_detach_path" ]] ||
+  fail "killed post-detachment claimant republished the canonical lock"
+compgen -G "$lock_detach_parent/.example-tool.install.lock.claim.*.*/owner/canonical" \
+  >/dev/null ||
+  fail "killed post-detachment claimant did not preserve its tombstone"
+
+CHECKOUT_TEST_LOG="$tmp/lock-detach-recover-one.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=5 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_detach_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" \
+  >"$tmp/lock-detach-recover-one.out" 2>&1 &
+lock_detach_one_pid=$!
+CHECKOUT_TEST_LOG="$tmp/lock-detach-recover-two.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=5 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_detach_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" \
+  >"$tmp/lock-detach-recover-two.out" 2>&1 &
+lock_detach_two_pid=$!
+set +e
+wait "$lock_detach_one_pid"
+lock_detach_one_status=$?
+wait "$lock_detach_two_pid"
+lock_detach_two_status=$?
+set -e
+if [[ "$lock_detach_one_status" -ne 0 ||
+  "$lock_detach_two_status" -ne 0 ]]; then
+  sed -n '1,120p' "$tmp/lock-detach-recover-one.out" >&2
+  sed -n '1,120p' "$tmp/lock-detach-recover-two.out" >&2
+  fail "two v1 cleaners did not serialize a committed detached claim"
+fi
+[[ ! -e "$lock_detach_path" && ! -L "$lock_detach_path" ]] ||
+  fail "post-detachment cleanup changed the next lock generation"
+if compgen -G "$lock_detach_parent/.example-tool.install.lock.claim.*" \
+  >/dev/null; then
+  fail "post-detachment cleanup left a claim directory"
+fi
+
+# Recover a real interrupted publication only after the dead v1 owner has been
+# reclaimed and a fresh canonical generation is held. This couples the lock
+# boundary to the existing transaction protocol instead of testing each in
+# isolation.
+lock_transaction_managed="$tmp/lock-transaction/example-tool"
+lock_transaction_parent="$tmp/lock-transaction"
+lock_transaction_path="$lock_transaction_parent/.example-tool.install.transaction"
+lock_transaction_lock="$lock_transaction_parent/.example-tool.install.lock"
+CHECKOUT_TEST_LOG="$tmp/lock-transaction-initial.log" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_transaction_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null ||
+  fail "v1 transaction fixture could not install its initial checkout"
+printf 'lock-transaction-v2\n' >"$lock_source/version.txt"
+git -C "$lock_source" add version.txt
+git -C "$lock_source" commit --quiet -m 'v1 interrupted transaction fixture'
+git -C "$lock_source" push --quiet
+lock_transaction_bin="$tmp/lock-transaction-bin"
+mkdir -p "$lock_transaction_bin"
+cat >"$lock_transaction_bin/mv" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+destination=${!#}
+"${CHECKOUT_TEST_REAL_MV:?}" "$@"
+status=$?
+if [[ "$status" -eq 0 &&
+  "$destination" == "${CHECKOUT_TEST_TRANSACTION_DESTINATION:?}" ]]; then
+  kill -KILL "$PPID"
+fi
+exit "$status"
+EOF
+chmod 0755 "$lock_transaction_bin/mv"
+set +e
+CHECKOUT_TEST_LOG="$tmp/lock-transaction-crash.log" \
+  PATH="$lock_transaction_bin:$platform_tool_path" \
+  CHECKOUT_TEST_REAL_MV="$lock_real_mv" \
+  CHECKOUT_TEST_TRANSACTION_DESTINATION="$lock_transaction_managed" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_transaction_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null 2>&1
+lock_transaction_crash_status=$?
+set -e
+[[ "$lock_transaction_crash_status" -eq 137 ]] ||
+  fail "v1 transaction fixture did not SIGKILL after publication"
+[[ -L "$lock_transaction_lock" &&
+  -d "$lock_transaction_path/previous/.git" &&
+  -d "$lock_transaction_managed/.git" ]] ||
+  fail "v1 transaction crash did not preserve its lock and both revisions"
+CHECKOUT_TEST_LOG="$tmp/lock-transaction-recover.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=2 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_transaction_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null ||
+  fail "v1 stale-lock recovery did not finish the interrupted transaction"
+[[ ! -e "$lock_transaction_lock" && ! -L "$lock_transaction_lock" &&
+  ! -e "$lock_transaction_path" && ! -L "$lock_transaction_path" ]] ||
+  fail "v1 transaction recovery left lock or transaction state"
+grep -Fqx 'version=lock-transaction-v2' \
+  "$tmp/lock-transaction-recover.log" ||
+  fail "v1 transaction recovery did not delegate from the committed revision"
+
+# Execute the shared vectors against the same fragment rendered into consumer
+# installers. Shdeps vendors these exact TSV bytes, so this is the provider-side
+# guard against either implementation quietly assigning them different meaning.
+# shellcheck source=checkout-installer/lock-v1.sh.in
+. "$root/checkout-installer/lock-v1.sh.in"
+
+checkout_lock_parse_timeout 08 ||
+  fail "checkout lock rejected a valid leading-zero decimal timeout"
+[[ "$CHECKOUT_LOCK_TIMEOUT" -eq 8 ]] ||
+  fail "checkout lock did not normalize a leading-zero decimal timeout"
+if checkout_lock_parse_timeout 9999999999; then
+  fail "checkout lock accepted a timeout outside its arithmetic bound"
+fi
+
+# shellcheck disable=SC2034,SC2329 # Overrides are called by the sourced fragment.
+if ! (
+  checkout_lock_process_identity() {
+    # shellcheck disable=SC2030 # This probe is intentionally subshell-local.
+    CHECKOUT_LOCK_START_KIND_HEX=70732d6c7374617274
+    # shellcheck disable=SC2030 # This probe is intentionally subshell-local.
+    CHECKOUT_LOCK_START_TOKEN_HEX=313233
+    CHECKOUT_LOCK_PROCESS_STATE=S
+  }
+  CHECKOUT_LOCK_RECORD_HOST_HEX=$(checkout_lock_hex \
+    "$(LC_ALL=C command uname -n)")
+  # shellcheck disable=SC2030 # This probe is intentionally subshell-local.
+  CHECKOUT_LOCK_RECORD_PID=1
+  CHECKOUT_LOCK_RECORD_START_KIND_HEX=70726f632d73746174
+  CHECKOUT_LOCK_RECORD_START_TOKEN_HEX=313233
+  checkout_lock_record_liveness
+  [[ "$CHECKOUT_LOCK_LIVENESS" == unknown ]]
+); then
+  fail "checkout lock treated a process-probe backend change as PID reuse"
+fi
+
+# shellcheck disable=SC2329 # Overrides are called by the sourced fragment.
+if ! (
+  # A failed signal probe is not proof of death: EPERM and policy restrictions
+  # can hide a process whose PID is still observable. Force that ambiguity and
+  # require the liveness layer to stay fail-closed.
+  checkout_lock_process_identity() { return 1; }
+  kill() { return 1; }
+  CHECKOUT_LOCK_RECORD_HOST_HEX=$(checkout_lock_hex \
+    "$(LC_ALL=C command uname -n)")
+  # shellcheck disable=SC2030 # This probe is intentionally subshell-local.
+  CHECKOUT_LOCK_RECORD_PID=1
+  CHECKOUT_LOCK_RECORD_START_KIND_HEX=70726f632d73746174
+  CHECKOUT_LOCK_RECORD_START_TOKEN_HEX=30
+  checkout_lock_record_liveness
+  [[ "$CHECKOUT_LOCK_LIVENESS" == unknown ]]
+); then
+  fail "checkout lock treated an ambiguous process probe as positive death"
+fi
+
+lock_probe_bin="$tmp/lock-probe-bin"
+mkdir -p "$lock_probe_bin"
+cat >"$lock_probe_bin/ps" <<'EOF'
+#!/usr/bin/env bash
+exit 2
+EOF
+chmod 0755 "$lock_probe_bin/ps"
+# shellcheck disable=SC2329 # Overrides are called by the sourced fragment.
+if ! (
+  checkout_lock_process_identity() { return 1; }
+  checkout_lock_procfs_authoritative() { return 1; }
+  kill() { return 1; }
+  PATH="$lock_probe_bin:$PATH"
+  CHECKOUT_LOCK_RECORD_HOST_HEX=$(checkout_lock_hex \
+    "$(LC_ALL=C command uname -n)")
+  # shellcheck disable=SC2030 # This probe is intentionally subshell-local.
+  CHECKOUT_LOCK_RECORD_PID=1
+  CHECKOUT_LOCK_RECORD_START_KIND_HEX=70732d6c7374617274
+  CHECKOUT_LOCK_RECORD_START_TOKEN_HEX=30
+  checkout_lock_record_liveness
+  [[ "$CHECKOUT_LOCK_LIVENESS" == unknown ]]
+); then
+  fail "checkout lock trusted a non-authoritative procfs absence"
+fi
+
+# shellcheck disable=SC2034 # Record globals are read by the sourced fragment.
+if ! (
+  zombie_parent=
+  trap 'if [[ -n "$zombie_parent" ]]; then
+          kill -CONT "$zombie_parent" 2>/dev/null || true
+          wait "$zombie_parent" 2>/dev/null || true
+        fi' EXIT
+  zombie_pid_file="$tmp/lock-zombie.pid"
+  # shellcheck disable=SC2016 # The child shell owns these expansions.
+  "$active_bash" -c '
+    sleep 0.05 &
+    child=$!
+    printf "%s\n" "$child" >"$1"
+    kill -STOP "$$"
+    wait "$child"
+  ' _ "$zombie_pid_file" &
+  zombie_parent=$!
+  for _ in {1..100}; do
+    [[ -s "$zombie_pid_file" ]] && break
+    sleep 0.01
+  done
+  [[ -s "$zombie_pid_file" ]] || exit 1
+  zombie_pid=$(sed -n '1p' "$zombie_pid_file")
+  zombie_state=
+  for _ in {1..100}; do
+    zombie_state=$(LC_ALL=C command ps -o stat= -p "$zombie_pid" \
+      2>/dev/null | command awk 'NR == 1 { print substr($1, 1, 1) }')
+    [[ "$zombie_state" == Z ]] && break
+    sleep 0.01
+  done
+  [[ "$zombie_state" == Z ]] || exit 1
+  checkout_lock_process_identity "$zombie_pid" || exit 1
+  CHECKOUT_LOCK_RECORD_HOST_HEX=$(checkout_lock_hex \
+    "$(LC_ALL=C command uname -n)")
+  # shellcheck disable=SC2030 # This probe is intentionally subshell-local.
+  CHECKOUT_LOCK_RECORD_PID=$zombie_pid
+  # shellcheck disable=SC2031 # Values were freshly set by the real probe above.
+  CHECKOUT_LOCK_RECORD_START_KIND_HEX=$CHECKOUT_LOCK_START_KIND_HEX
+  # shellcheck disable=SC2031 # Values were freshly set by the real probe above.
+  CHECKOUT_LOCK_RECORD_START_TOKEN_HEX=$CHECKOUT_LOCK_START_TOKEN_HEX
+  checkout_lock_record_liveness
+  [[ "$CHECKOUT_LOCK_LIVENESS" == dead ]]
+); then
+  fail "checkout lock did not classify an actual zombie owner as dead"
+fi
+
+lock_record_fixture_dir="$tmp/lock-record-fixtures"
+mkdir -p "$lock_record_fixture_dir"
+checkout_dir=/tmp/tool
+checkout_parent=/tmp
+checkout_name=tool
+lock_fixture_count=0
+while IFS=$'\t' read -r \
+  lock_case fixture_role fixture_nonce fixture_owner_nonce fixture_pid \
+  fixture_host_hex fixture_start_kind_hex fixture_start_token_hex \
+  fixture_checkout_hex fixture_expected; do
+  [[ -n "$lock_case" && "$lock_case" != \#* ]] || continue
+  lock_fixture_count=$((lock_fixture_count + 1))
+  fixture_record="$lock_record_fixture_dir/$lock_case"
+  case "$fixture_role" in
+    owner)
+      fixture_role_hex=6f776e6572
+      fixture_expected_role=owner
+      ;;
+    claim)
+      fixture_role_hex=636c61696d
+      fixture_expected_role=claim
+      ;;
+    *)
+      fixture_role_hex=$(checkout_lock_hex "$fixture_role")
+      fixture_expected_role=owner
+      ;;
+  esac
+  [[ "$fixture_owner_nonce" != - ]] || fixture_owner_nonce=
+  {
+    printf '%s\n' 'cgraf78 checkout mutation lock v1'
+    printf 'role=%s\n' "$fixture_role_hex"
+    printf 'nonce=%s\n' "$fixture_nonce"
+    printf 'owner_nonce=%s\n' "$fixture_owner_nonce"
+    printf 'pid=%s\n' "$fixture_pid"
+    printf 'host_hex=%s\n' "$fixture_host_hex"
+    printf 'start_kind_hex=%s\n' "$fixture_start_kind_hex"
+    printf 'start_token_hex=%s\n' "$fixture_start_token_hex"
+    printf 'checkout_hex=%s\n' "$fixture_checkout_hex"
+  } >"$fixture_record"
+  chmod 0600 "$fixture_record"
+  if checkout_lock_load_record \
+    "$fixture_record" "$fixture_expected_role" "$fixture_nonce" \
+    "$fixture_owner_nonce"; then
+    fixture_actual=valid
+  else
+    fixture_actual=invalid
+  fi
+  [[ "$fixture_actual" == "$fixture_expected" ]] ||
+    fail "checkout lock record fixture $lock_case: expected $fixture_expected, got $fixture_actual"
+done <"$root/checkout-installer/fixtures/checkout-lock-v1-records.tsv"
+[[ "$lock_fixture_count" -ge 10 ]] ||
+  fail "checkout lock record conformance fixture is incomplete"
+
+for exact_record_role in owner claim; do
+  exact_record_source="$root/checkout-installer/fixtures/checkout-lock-v1-${exact_record_role}-record.txt"
+  exact_record="$lock_record_fixture_dir/exact-$exact_record_role"
+  cp "$exact_record_source" "$exact_record"
+  chmod 0600 "$exact_record"
+  if [[ "$exact_record_role" == owner ]]; then
+    exact_record_nonce=0123456789abcdef0123456789abcdef
+    exact_record_owner_nonce=
+  else
+    exact_record_nonce=fedcba9876543210fedcba9876543210
+    exact_record_owner_nonce=0123456789abcdef0123456789abcdef
+  fi
+  checkout_lock_load_record \
+    "$exact_record" "$exact_record_role" "$exact_record_nonce" \
+    "$exact_record_owner_nonce" ||
+    fail "checkout lock rejected the exact $exact_record_role wire fixture"
+done
+
+nul_record="$lock_record_fixture_dir/nul-owner"
+{
+  sed -n '1p' \
+    "$root/checkout-installer/fixtures/checkout-lock-v1-owner-record.txt"
+  printf 'role=6f776e6572\0\n'
+  sed -n '3,9p' \
+    "$root/checkout-installer/fixtures/checkout-lock-v1-owner-record.txt"
+} >"$nul_record"
+chmod 0600 "$nul_record"
+if checkout_lock_load_record \
+  "$nul_record" owner 0123456789abcdef0123456789abcdef ''; then
+  fail "checkout lock record parser silently discarded a NUL byte"
+fi
+
+unterminated_record="$lock_record_fixture_dir/unterminated-owner"
+sed -n '1,8p' \
+  "$root/checkout-installer/fixtures/checkout-lock-v1-owner-record.txt" \
+  >"$unterminated_record"
+printf 'checkout_hex=2f746d702f746f6f6c' >>"$unterminated_record"
+chmod 0600 "$unterminated_record"
+if checkout_lock_load_record \
+  "$unterminated_record" owner 0123456789abcdef0123456789abcdef ''; then
+  fail "checkout lock record parser accepted a missing final newline"
+fi
+
+lock_fixture_unhex() {
+  local value=$1 byte
+
+  [[ "$value" =~ ^([0-9a-f][0-9a-f])+$ ]] || return 1
+  while [[ -n "$value" ]]; do
+    byte=${value:0:2}
+    value=${value:2}
+    printf '%b' "\\x$byte"
+  done
+}
+
+lock_wire_fixture_count=0
+while IFS=$'\t' read -r lock_case fixture_input fixture_expected; do
+  [[ -n "$lock_case" && "$lock_case" != \#* ]] || continue
+  lock_wire_fixture_count=$((lock_wire_fixture_count + 1))
+  case "$lock_case" in
+    canonical-target)
+      fixture_name=${fixture_input%%|*}
+      fixture_nonce=${fixture_input#*|}
+      fixture_actual=".${fixture_name}.install.lock.owner.${fixture_nonce}/."
+      ;;
+    ps-lstart-normalize)
+      fixture_actual=$(lock_fixture_unhex "$fixture_input" |
+        checkout_lock_normalize_ps_lstart)
+      fixture_actual=$(checkout_lock_hex "$fixture_actual")
+      ;;
+    *) fail "unknown checkout lock wire fixture: $lock_case" ;;
+  esac
+  [[ "$fixture_actual" == "$fixture_expected" ]] ||
+    fail "checkout lock wire fixture $lock_case: expected $fixture_expected, got $fixture_actual"
+done <"$root/checkout-installer/fixtures/checkout-lock-v1-wire.tsv"
+[[ "$lock_wire_fixture_count" -eq 2 ]] ||
+  fail "checkout lock wire conformance fixture is incomplete"
+
+write_lock_state_record() {
+  local record=$1 role=$2 nonce=$3 owner_nonce=$4 pid=$5
+
+  checkout_lock_write_record "$record" "$role" "$nonce" "$owner_nonce" ||
+    return 1
+  sed "s/^pid=.*/pid=$pid/" "$record" >"$record.next" || return 1
+  mv "$record.next" "$record" || return 1
+  chmod 0600 "$record"
+}
+
+# State vectors control liveness explicitly. The record parser is still real;
+# only the platform process probe is replaced so every symbolic state is
+# deterministic on Linux, macOS, and Termux.
+checkout_lock_record_liveness() {
+  # shellcheck disable=SC2031 # Later fixture records set the main-shell value.
+  case "$CHECKOUT_LOCK_RECORD_PID" in
+    111) CHECKOUT_LOCK_LIVENESS=$fixture_owner_liveness ;;
+    222) CHECKOUT_LOCK_LIVENESS=$fixture_claim_liveness ;;
+    *) return 1 ;;
+  esac
+}
+
+lock_state_fixture_root="$tmp/lock-state-fixtures"
+mkdir -p "$lock_state_fixture_root"
+lock_state_fixture_count=0
+while IFS=$'\t' read -r \
+  lock_case fixture_canonical fixture_owner_record fixture_owner_liveness \
+  fixture_claim_count fixture_claim_liveness fixture_tombstone \
+  fixture_expected; do
+  [[ -n "$lock_case" && "$lock_case" != \#* ]] || continue
+  lock_state_fixture_count=$((lock_state_fixture_count + 1))
+  checkout_parent="$lock_state_fixture_root/$lock_case"
+  checkout_name=tool
+  # shellcheck disable=SC2034 # Read by the sourced lock fragment.
+  checkout_dir="$checkout_parent/$checkout_name"
+  lock_dir="$checkout_parent/.tool.install.lock"
+  fixture_owner_nonce=0123456789abcdef0123456789abcdef
+  fixture_owner_basename=".tool.install.lock.owner.$fixture_owner_nonce"
+  fixture_owner_target="$fixture_owner_basename/."
+  fixture_owner_dir="$checkout_parent/$fixture_owner_basename"
+  mkdir -p "$checkout_parent"
+
+  case "$fixture_canonical" in
+    missing) ;;
+    legacy-directory) mkdir "$lock_dir" ;;
+    hostile-symlink) ln -s ../../escape "$lock_dir" ;;
+    valid-symlink | dangling-symlink)
+      ln -s "$fixture_owner_target" "$lock_dir"
+      ;;
+    *) fail "unknown checkout lock canonical fixture: $fixture_canonical" ;;
+  esac
+
+  if [[ "$fixture_canonical" == valid-symlink &&
+    "$fixture_claim_count" -eq 0 &&
+    "$fixture_owner_record" != - ]]; then
+    mkdir "$fixture_owner_dir"
+    chmod 0700 "$fixture_owner_dir"
+    write_lock_state_record \
+      "$fixture_owner_dir/owner-v1" owner "$fixture_owner_nonce" '' 111 ||
+      fail "cannot create owner fixture: $lock_case"
+    if [[ "$fixture_owner_record" == malformed ]]; then
+      printf 'extra=field\n' >>"$fixture_owner_dir/owner-v1"
+    fi
+  fi
+
+  fixture_claim_index=0
+  while [[ "$fixture_claim_index" -lt "$fixture_claim_count" ]]; do
+    fixture_claim_index=$((fixture_claim_index + 1))
+    fixture_claim_nonce=$(printf '%032x' "$fixture_claim_index")
+    fixture_claim_dir="$checkout_parent/.tool.install.lock.claim.${fixture_owner_nonce}.${fixture_claim_nonce}"
+    mkdir -p "$fixture_claim_dir/owner"
+    chmod 0700 "$fixture_claim_dir" "$fixture_claim_dir/owner"
+    write_lock_state_record \
+      "$fixture_claim_dir/claim-v1" claim "$fixture_claim_nonce" \
+      "$fixture_owner_nonce" 222 ||
+      fail "cannot create claim fixture: $lock_case"
+    write_lock_state_record \
+      "$fixture_claim_dir/owner/owner-v1" owner "$fixture_owner_nonce" '' \
+      111 || fail "cannot create nested owner fixture: $lock_case"
+    if [[ "$fixture_tombstone" == present ]]; then
+      ln -s "$fixture_owner_target" "$fixture_claim_dir/owner/canonical"
+    fi
+  done
+
+  checkout_lock_classify ||
+    fail "cannot classify checkout lock state fixture: $lock_case"
+  case "$CHECKOUT_LOCK_STATE" in
+    missing)
+      if [[ "$fixture_expected" == cleanup-acquire ]]; then
+        checkout_lock_cleanup_detached_claims ||
+          fail "cannot clean detached checkout lock fixture: $lock_case"
+        fixture_actual=cleanup-acquire
+      else
+        fixture_actual=acquire
+      fi
+      ;;
+    legacy) fixture_actual=wait-legacy ;;
+    malformed) fixture_actual=fail ;;
+    owner-live | owner-unknown | claim-live | claim-unknown)
+      fixture_actual='wait'
+      ;;
+    owner-dead) fixture_actual=claim ;;
+    claim-dead) fixture_actual=reclaim ;;
+    retry) fixture_actual=retry ;;
+    *) fixture_actual="unexpected-$CHECKOUT_LOCK_STATE" ;;
+  esac
+  [[ "$fixture_actual" == "$fixture_expected" ]] ||
+    fail "checkout lock state fixture $lock_case: expected $fixture_expected, got $fixture_actual"
+done <"$root/checkout-installer/fixtures/checkout-lock-v1-states.tsv"
+[[ "$lock_state_fixture_count" -ge 12 ]] ||
+  fail "checkout lock state conformance fixture is incomplete"
 
 standalone="$tmp/standalone"
 standalone_marker="$tmp/standalone-delegate-ran"

@@ -19,6 +19,10 @@
   checkout_post_install_delegate='@CHECKOUT_POST_INSTALL_DELEGATE@'
   active_child_pid=
   # @CHECKOUT_POST_INSTALL_END@
+  # @CHECKOUT_LOCK_V1_BEGIN@
+  # shellcheck disable=SC2034 # Used by the rendered lock-v1 fragment.
+  checkout_lock_timeout_default=1800
+  # @CHECKOUT_LOCK_V1_END@
   default_repo_url="https://github.com/${checkout_repo}.git"
 
   die() {
@@ -147,6 +151,9 @@
     exit "$status"
   }
   # @CHECKOUT_POST_INSTALL_END@
+  # @CHECKOUT_LOCK_V1_BEGIN@
+  # @CHECKOUT_LOCK_V1_LIBRARY@
+  # @CHECKOUT_LOCK_V1_END@
 
   exec_bootstrap_git() {
     [[ -n ${CHECKOUT_INSTALLER_GIT_HOME:-} ]] ||
@@ -425,6 +432,7 @@
   update_transaction_created=0
   lock_held=0
 
+  # @CHECKOUT_LEGACY_LOCK_BEGIN@
   # shellcheck disable=SC2329 # Called by cleanup through the EXIT trap.
   release_lock() {
     if [[ "$lock_held" -eq 1 ]]; then
@@ -432,11 +440,22 @@
       lock_held=0
     fi
   }
+  # @CHECKOUT_LEGACY_LOCK_END@
+  # @CHECKOUT_LOCK_V1_BEGIN@
+  # shellcheck disable=SC2329 # Called by cleanup through the EXIT trap.
+  release_lock() {
+    release_checkout_lock_v1 || true
+  }
+  # @CHECKOUT_LOCK_V1_END@
   # @CHECKOUT_POST_INSTALL_BEGIN@
   # The ordinary EXIT cleanup remains deliberately best effort. The transition
   # to post-install is different: nested tooling may need this exact lock, so
   # failing to prove its removal must stop before any second-phase code runs.
   release_lock_for_post_install() {
+    if declare -F release_checkout_lock_v1_strict >/dev/null 2>&1; then
+      release_checkout_lock_v1_strict
+      return
+    fi
     [[ "$lock_held" -eq 1 ]] || return 0
     rmdir "$lock_dir" 2>/dev/null || return 1
     lock_held=0
@@ -802,10 +821,16 @@
   trap 'forward_signal INT 130' INT
   trap 'forward_signal TERM 143' TERM
 
+  # @CHECKOUT_LOCK_V1_BEGIN@
+  acquire_checkout_lock_v1 ||
+    die "cannot acquire managed checkout lock: $lock_dir"
+  # @CHECKOUT_LOCK_V1_END@
+  # @CHECKOUT_LEGACY_LOCK_BEGIN@
   if ! mkdir "$lock_dir" 2>/dev/null; then
     die "another install may be using the managed checkout lock: $lock_dir; if no install is running, remove that exact empty directory with rmdir and retry"
   fi
   lock_held=1
+  # @CHECKOUT_LEGACY_LOCK_END@
 
   recover_update_transaction ||
     die "cannot recover interrupted managed checkout update: $update_transaction"

@@ -15,6 +15,7 @@ program	.github/actions/verify-consumer-sync/verify.sh
 program	.github/actions/verify-release-scripts/verify.sh
 program	consumer-ci/sync.sh
 program	checkout-installer/install.sh.in
+program	checkout-installer/lock-v1.sh.in
 program	checkout-installer/render.sh
 program	examples/release.conf
 program	release-installer/install.sh.in

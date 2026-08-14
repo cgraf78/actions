@@ -34,6 +34,7 @@ esac
 
 source_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 template="$source_dir/install.sh.in"
+lock_v1_fragment="$source_dir/lock-v1.sh.in"
 consumer=$1
 config="$consumer/scripts/checkout-installer.conf"
 output="$consumer/install.sh"
@@ -54,6 +55,7 @@ CHECKOUT_INSTALLER_REF=
 CHECKOUT_INSTALLER_DELEGATE=
 CHECKOUT_INSTALLER_DEFAULT_DESTINATION=
 CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE=
+CHECKOUT_INSTALLER_LOCK_PROTOCOL=
 
 # shellcheck source=/dev/null
 . "$config"
@@ -87,6 +89,7 @@ done
 : "${CHECKOUT_INSTALLER_DELEGATE:=support/install-checkout.sh}"
 : "${CHECKOUT_INSTALLER_DEFAULT_DESTINATION:=xdg}"
 : "${CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE:=}"
+: "${CHECKOUT_INSTALLER_LOCK_PROTOCOL:=}"
 
 case "$CHECKOUT_INSTALLER_REF" in
   '' | -* | /* | */ | *//* | *..* | *[!A-Za-z0-9._/-]*)
@@ -117,6 +120,12 @@ case "$CHECKOUT_INSTALLER_DEFAULT_DESTINATION" in
     die 'CHECKOUT_INSTALLER_DEFAULT_DESTINATION must be xdg or shdeps'
     ;;
 esac
+case "$CHECKOUT_INSTALLER_LOCK_PROTOCOL" in
+  '' | v1) ;;
+  *)
+    die 'CHECKOUT_INSTALLER_LOCK_PROTOCOL must be v1 when set'
+    ;;
+esac
 
 delegate="$consumer/$CHECKOUT_INSTALLER_DELEGATE"
 [[ -f "$delegate" && ! -L "$delegate" ]] ||
@@ -136,25 +145,70 @@ fi
 tmp=$(mktemp "$consumer/.install.sh.XXXXXX")
 trap 'rm -f "$tmp"' EXIT
 
-post_install_block=false
+template_block=
+template_block_enabled=true
 while IFS= read -r line || [[ -n "$line" ]]; do
   marker_line=${line#"${line%%[![:space:]]*}"}
   case "$marker_line" in
     '# @CHECKOUT_POST_INSTALL_BEGIN@')
-      [[ "$post_install_block" == false ]] ||
-        die 'installer template contains a nested post-install block'
-      post_install_block=true
+      [[ -z "$template_block" ]] ||
+        die 'installer template contains a nested conditional block'
+      template_block=post-install
+      [[ -n "$CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE" ]] &&
+        template_block_enabled=true || template_block_enabled=false
       continue
       ;;
     '# @CHECKOUT_POST_INSTALL_END@')
-      [[ "$post_install_block" == true ]] ||
-        die 'installer template closes an unopened post-install block'
-      post_install_block=false
+      [[ "$template_block" == post-install ]] ||
+        die 'installer template closes the wrong post-install block'
+      template_block=
+      template_block_enabled=true
+      continue
+      ;;
+    '# @CHECKOUT_LOCK_V1_BEGIN@')
+      [[ -z "$template_block" ]] ||
+        die 'installer template contains a nested conditional block'
+      template_block=lock-v1
+      [[ "$CHECKOUT_INSTALLER_LOCK_PROTOCOL" == v1 ]] &&
+        template_block_enabled=true || template_block_enabled=false
+      continue
+      ;;
+    '# @CHECKOUT_LOCK_V1_END@')
+      [[ "$template_block" == lock-v1 ]] ||
+        die 'installer template closes the wrong lock-v1 block'
+      template_block=
+      template_block_enabled=true
+      continue
+      ;;
+    '# @CHECKOUT_LEGACY_LOCK_BEGIN@')
+      [[ -z "$template_block" ]] ||
+        die 'installer template contains a nested conditional block'
+      template_block=legacy-lock
+      [[ -z "$CHECKOUT_INSTALLER_LOCK_PROTOCOL" ]] &&
+        template_block_enabled=true || template_block_enabled=false
+      continue
+      ;;
+    '# @CHECKOUT_LEGACY_LOCK_END@')
+      [[ "$template_block" == legacy-lock ]] ||
+        die 'installer template closes the wrong legacy-lock block'
+      template_block=
+      template_block_enabled=true
+      continue
+      ;;
+    '# @CHECKOUT_LOCK_V1_LIBRARY@')
+      [[ "$template_block" == lock-v1 ]] ||
+        die 'checkout lock v1 library marker is outside its conditional block'
+      if [[ "$template_block_enabled" == true ]]; then
+        [[ -f "$lock_v1_fragment" && ! -L "$lock_v1_fragment" ]] ||
+          die "checkout lock v1 fragment must be a regular file: $lock_v1_fragment"
+        while IFS= read -r fragment_line || [[ -n "$fragment_line" ]]; do
+          printf '%s\n' "$fragment_line" >>"$tmp"
+        done <"$lock_v1_fragment"
+      fi
       continue
       ;;
   esac
-  if [[ "$post_install_block" == true &&
-    -z "$CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE" ]]; then
+  if [[ -n "$template_block" && "$template_block_enabled" != true ]]; then
     continue
   fi
   line=${line//@CHECKOUT_REPO@/$CHECKOUT_INSTALLER_REPO}
@@ -165,8 +219,8 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   line=${line//@CHECKOUT_POST_INSTALL_DELEGATE@/$CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE}
   printf '%s\n' "$line" >>"$tmp"
 done <"$template"
-[[ "$post_install_block" == false ]] ||
-  die 'installer template contains an unterminated post-install block'
+[[ -z "$template_block" ]] ||
+  die "installer template contains an unterminated $template_block block"
 
 if grep -Eq '@[A-Z][A-Z0-9_]*@' "$tmp"; then
   die 'installer template contains an unresolved token'
