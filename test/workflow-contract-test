@@ -167,7 +167,7 @@ contracts() {
   check '.on.workflow_call.inputs.install-musl-tools.default == false' rust-release.yml
   check '.on.workflow_call.inputs.install-musl-tools.required == false' rust-release.yml
   check '.on.workflow_call.inputs.install-musl-tools.type == "boolean"' rust-release.yml
-  check '.jobs.build.steps[] | select(.name == "Upload release assets").uses == "cgraf78/actions/.github/actions/upload-release-assets@f39ca190e87dea4a06382e09efb94f29f4af8d27"' rust-release.yml
+  check '.jobs.build.steps[] | select(.name == "Upload release assets").uses == "cgraf78/actions/.github/actions/upload-release-assets@ee0ed2d1b88c5216a5e3c7e12e3682d39fc75daa"' rust-release.yml
   check '.jobs.build.steps[] | select(.name == "Upload release assets").with."asset-glob" == "${{ inputs.asset-glob }}"' rust-release.yml
   check '.jobs.build.steps[] | select(.name == "Upload release assets").with."github-token" == "${{ github.token }}"' rust-release.yml
   check '.jobs.build.steps[] | select(.name == "Upload release assets").with.tag == "${{ github.ref_name }}"' rust-release.yml

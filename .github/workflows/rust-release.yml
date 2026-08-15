@@ -282,7 +282,7 @@ jobs:
 
       - name: Upload release assets
         if: matrix.enabled
-        uses: cgraf78/actions/.github/actions/upload-release-assets@f39ca190e87dea4a06382e09efb94f29f4af8d27
+        uses: cgraf78/actions/.github/actions/upload-release-assets@ee0ed2d1b88c5216a5e3c7e12e3682d39fc75daa
         with:
           asset-glob: ${{ inputs.asset-glob }}
           github-token: ${{ github.token }}
