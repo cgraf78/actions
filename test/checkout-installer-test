@@ -1944,6 +1944,57 @@ grep -Fqx 'version=lock-transaction-v2' \
 # shellcheck source=checkout-installer/lock-v1.sh.in
 . "$root/checkout-installer/lock-v1.sh.in"
 
+# Classification must snapshot a canonical symlink before probing the object
+# forms that can replace it. This DEBUG trap is deliberately structural: the
+# old missing -> directory -> symlink order reaches the directory probe, where
+# the trap commits detachment and exposes the false `malformed` result. With
+# symlink-first classification the directory probe is never reached for this
+# generation; the readlink boundary is covered by the gated integration cases
+# above.
+lock_preread_parent="$tmp/lock-preread"
+checkout_dir="$lock_preread_parent/example-tool"
+checkout_parent=$lock_preread_parent
+checkout_name=example-tool
+lock_dir="$checkout_parent/.example-tool.install.lock"
+mkdir -p "$checkout_parent"
+# These globals are the sourced lock helper's state interface. ShellCheck sees
+# only the fixture's direct references, not the helper's indirect reads/writes.
+# shellcheck disable=SC2034
+lock_held=0
+# shellcheck disable=SC2034
+lock_owner_nonce=
+lock_owner_target=
+# shellcheck disable=SC2034
+lock_owner_dir=
+# shellcheck disable=SC2034
+lock_claim_dir=
+checkout_lock_prepare_owner ||
+  fail "pre-read classification fixture could not prepare an owner"
+ln -s "$lock_owner_target" "$lock_dir" ||
+  fail "pre-read classification fixture could not publish its owner"
+# shellcheck disable=SC2034 # Consumed by release_checkout_lock_v1_strict.
+lock_held=1
+lock_preread_armed=1
+lock_preread_detached="$lock_preread_parent/detached-canonical"
+lock_preread_debug() {
+  # shellcheck disable=SC2016 # Match the literal command text seen by DEBUG.
+  if [[ "$lock_preread_armed" -eq 1 &&
+    "$BASH_COMMAND" == '[[ -d "$lock_dir" && ! -L "$lock_dir" ]]' ]]; then
+    lock_preread_armed=0
+    mv "$lock_dir" "$lock_preread_detached"
+  fi
+}
+set -T
+trap lock_preread_debug DEBUG
+checkout_lock_classify
+trap - DEBUG
+set +T
+[[ "$lock_preread_armed" -eq 1 &&
+  "$CHECKOUT_LOCK_STATE" == owner-live ]] ||
+  fail "checkout lock inspected non-symlink forms before its symlink snapshot"
+release_checkout_lock_v1_strict ||
+  fail "pre-read classification fixture could not release its owner"
+
 checkout_lock_parse_timeout 08 ||
   fail "checkout lock rejected a valid leading-zero decimal timeout"
 [[ "$CHECKOUT_LOCK_TIMEOUT" -eq 8 ]] ||

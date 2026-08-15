@@ -565,24 +565,32 @@ checkout_lock_classify() {
 
   CHECKOUT_LOCK_STATE=
   CHECKOUT_LOCK_STATE_DETAIL=
-  if [[ ! -e "$lock_dir" && ! -L "$lock_dir" ]]; then
-    CHECKOUT_LOCK_STATE=missing
-    return 0
-  fi
-  if [[ -d "$lock_dir" && ! -L "$lock_dir" ]]; then
-    CHECKOUT_LOCK_STATE=legacy
-    return 0
-  fi
-  [[ -L "$lock_dir" ]] || {
-    CHECKOUT_LOCK_STATE=malformed
-    return 0
-  }
-  if ! target=$(readlink "$lock_dir" 2>/dev/null); then
-    # The canonical symlink may have been detached or replaced after the
-    # preceding type check. Any failed read is therefore ambiguous: retrying
-    # validates the current generation, while a stable unreadable object stays
-    # fail-closed behind the bounded acquisition timeout.
-    CHECKOUT_LOCK_STATE=retry
+  if [[ -L "$lock_dir" ]]; then
+    if ! target=$(readlink "$lock_dir" 2>/dev/null); then
+      # The canonical symlink may have been detached or replaced after the
+      # type snapshot. Any failed read is therefore ambiguous: retrying
+      # validates the current generation, while a stable unreadable object
+      # stays fail-closed behind the bounded acquisition timeout.
+      CHECKOUT_LOCK_STATE=retry
+      return 0
+    fi
+  else
+    # Snapshot symlinks first. Probing through `-e` or `-d` follows a live
+    # symlink; if release detaches it between those probes, an otherwise valid
+    # handoff can look like an unsupported object and be falsely rejected.
+    if [[ ! -e "$lock_dir" && ! -L "$lock_dir" ]]; then
+      CHECKOUT_LOCK_STATE=missing
+      return 0
+    fi
+    if [[ -d "$lock_dir" && ! -L "$lock_dir" ]]; then
+      CHECKOUT_LOCK_STATE=legacy
+      return 0
+    fi
+    if [[ -L "$lock_dir" || ! -e "$lock_dir" || -d "$lock_dir" ]]; then
+      CHECKOUT_LOCK_STATE=retry
+    else
+      CHECKOUT_LOCK_STATE=malformed
+    fi
     return 0
   fi
   prefix=".${checkout_name}.install.lock.owner."
