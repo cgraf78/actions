@@ -211,6 +211,9 @@ contracts() {
   check '.jobs.checkout-installer-bash32.name == "Checkout installer / Bash 3.2"' ci.yml
   check '.jobs.checkout-installer-bash32.uses == "./.github/workflows/bash32-ci.yml"' ci.yml
   check '.jobs.checkout-installer-bash32.with.command == "/bin/bash test/checkout-installer-test"' ci.yml
+  check '.jobs.release-asset-upload-bash32.name == "Release asset upload / Bash 3.2"' ci.yml
+  check '.jobs.release-asset-upload-bash32.uses == "./.github/workflows/bash32-ci.yml"' ci.yml
+  check '.jobs.release-asset-upload-bash32.with.command == "/bin/bash test/release-asset-upload-test"' ci.yml
   check '.jobs.quality.steps[] | select(.name == "Install actionlint").run | contains("--retry 3 --retry-all-errors --retry-delay 1")' ci.yml
   check '.jobs.quality.steps[] | select(.name == "Install zizmor").env.ZIZMOR_VERSION == "1.29.0"' ci.yml
   check '.jobs.quality.steps[] | select(.name == "Lint shell inventory").uses == "./.github/actions/shellcheck-inventory"' ci.yml
@@ -230,13 +233,14 @@ contracts() {
   check '.jobs.termux-runtime == null' ci.yml
   check '.jobs.required.name == "Required"' ci.yml
   check '.jobs.required.if == "${{ always() }}"' ci.yml
-  check '.jobs.required.needs | join(",") == "shell-smoke,rust-smoke,matrix-contract,android-rust-toolchain,release-installer-bash32,checkout-installer-bash32,quality"' ci.yml
+  check '.jobs.required.needs | join(",") == "shell-smoke,rust-smoke,matrix-contract,android-rust-toolchain,release-installer-bash32,checkout-installer-bash32,release-asset-upload-bash32,quality"' ci.yml
   check '.jobs.required.steps[0].run | contains("test \"$SHELL_SMOKE_RESULT\" = success")' ci.yml
   check '.jobs.required.steps[0].run | contains("test \"$RUST_SMOKE_RESULT\" = success")' ci.yml
   check '.jobs.required.steps[0].run | contains("test \"$MATRIX_CONTRACT_RESULT\" = success")' ci.yml
   check '.jobs.required.steps[0].run | contains("test \"$ANDROID_TOOLCHAIN_RESULT\" = success")' ci.yml
   check '.jobs.required.steps[0].run | contains("test \"$RELEASE_INSTALLER_BASH32_RESULT\" = success")' ci.yml
   check '.jobs.required.steps[0].run | contains("test \"$CHECKOUT_INSTALLER_BASH32_RESULT\" = success")' ci.yml
+  check '.jobs.required.steps[0].run | contains("test \"$RELEASE_ASSET_UPLOAD_BASH32_RESULT\" = success")' ci.yml
   check '.jobs.required.steps[0].run | contains("test \"$QUALITY_RESULT\" = success")' ci.yml
 
   # The consumer gate intentionally has no configurable paths: one canonical
