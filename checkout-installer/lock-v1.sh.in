@@ -556,6 +556,7 @@ release_checkout_lock_v1_strict() {
   lock_claim_dir=
 }
 
+# shellcheck disable=SC2329 # Generated consumers reach this through trap cleanup.
 release_checkout_lock_v1() {
   release_checkout_lock_v1_strict
 }
