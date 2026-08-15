@@ -1669,7 +1669,20 @@ rmdir "$lock_claim_second/owner"
 rm -f "$lock_claim_second/claim-v1"
 rmdir "$lock_claim_second"
 
+lock_claim_cleanup_bin="$tmp/lock-claim-cleanup-bin"
+mkdir -p "$lock_claim_cleanup_bin"
+cat >"$lock_claim_cleanup_bin/rmdir" <<'EOF'
+#!/bin/sh
+if [ "${1:-}" = "${CHECKOUT_TEST_FAIL_RMDIR:-}" ]; then
+  exit 1
+fi
+exec "$CHECKOUT_TEST_REAL_RMDIR" "$@"
+EOF
+chmod 0755 "$lock_claim_cleanup_bin/rmdir"
 CHECKOUT_TEST_LOG="$tmp/lock-claim-recover.log" \
+  CHECKOUT_TEST_FAIL_RMDIR="$lock_claim_original" \
+  CHECKOUT_TEST_REAL_RMDIR="$(command -v rmdir)" \
+  PATH="$lock_claim_cleanup_bin:$platform_tool_path" \
   CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=2 \
   CGRAF78_CHECKOUT_INSTALL_DIR="$lock_claim_managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
@@ -1677,10 +1690,135 @@ CHECKOUT_TEST_LOG="$tmp/lock-claim-recover.log" \
   fail "v1 checkout lock did not recover a killed pre-detachment claimant"
 [[ ! -e "$lock_claim_path" && ! -L "$lock_claim_path" ]] ||
   fail "claimant recovery left the canonical lock"
-if compgen -G "$lock_claim_parent/.example-tool.install.lock.claim.*" \
-  >/dev/null; then
-  fail "claimant recovery left a claim directory"
+[[ -d "$lock_claim_original" &&
+  -z $(ls -A "$lock_claim_original" 2>/dev/null) ]] ||
+  fail "claimant recovery did not leave only the inert failed-cleanup claim"
+lock_claim_remaining=$(compgen -G \
+  "$lock_claim_parent/.example-tool.install.lock.claim.*" || true)
+[[ "$lock_claim_remaining" == "$lock_claim_original" ]] ||
+  fail "claimant recovery left an active or unrelated claim directory"
+rmdir "$lock_claim_original"
+
+# Both canonical reads follow a successful `-L` probe. Detachment between that
+# probe and read 1 invalidates the outer classification snapshot; detachment at
+# read 2 invalidates the claimant-count snapshot. A failed read while the path
+# still appears to be a symlink is equally ambiguous because a new generation
+# may already have replaced the detached one. Exercise all three boundaries
+# with the same condition-based gate.
+for lock_recheck_case in detach-1 detach-2 fail-1; do
+  lock_recheck_mode=${lock_recheck_case%-*}
+  lock_recheck_call=${lock_recheck_case#*-}
+  lock_recheck_parent="$tmp/lock-recheck-$lock_recheck_case"
+  lock_recheck_managed="$lock_recheck_parent/example-tool"
+  lock_recheck_path="$lock_recheck_parent/.example-tool.install.lock"
+  set +e
+  CHECKOUT_TEST_LOG="$tmp/lock-recheck-kill.log" \
+    PATH="$lock_claim_kill_bin:$platform_tool_path" \
+    CHECKOUT_TEST_REAL_MV="$lock_real_mv" \
+    CHECKOUT_TEST_LOCK_MV_KILL_MODE=claim \
+    CHECKOUT_TEST_LOCK_MV_CANONICAL="$lock_recheck_path" \
+    CGRAF78_CHECKOUT_INSTALL_DIR="$lock_recheck_managed" \
+    CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+    "$active_bash" -s <"$lock_source/install.sh" >/dev/null 2>&1
+  lock_recheck_kill_status=$?
+  set -e
+  [[ "$lock_recheck_kill_status" -eq 137 ]] ||
+    fail "canonical recheck fixture did not SIGKILL its claimant"
+  lock_recheck_owner_record=$(compgen -G \
+    "$lock_recheck_parent/.example-tool.install.lock.claim.*.*/owner/owner-v1" || true)
+  lock_recheck_owner_record=${lock_recheck_owner_record%%$'\n'*}
+  [[ -f "$lock_recheck_owner_record" && -L "$lock_recheck_path" ]] ||
+    fail "canonical recheck fixture did not leave one attached dead claim"
+  lock_recheck_claim=${lock_recheck_owner_record%/owner/owner-v1}
+  lock_recheck_tombstone="$lock_recheck_claim/owner/canonical"
+
+  lock_recheck_bin="$tmp/lock-recheck-bin"
+  lock_recheck_count="$tmp/lock-recheck-$lock_recheck_case.count"
+  lock_recheck_ready="$tmp/lock-recheck-$lock_recheck_case.ready"
+  lock_recheck_release="$tmp/lock-recheck-$lock_recheck_case.release"
+  lock_real_readlink=$(PATH="$platform_tool_path" command -v readlink)
+  mkdir -p "$lock_recheck_bin"
+  cat >"$lock_recheck_bin/readlink" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+target=${!#}
+if [[ "$target" == "${CHECKOUT_TEST_RECHECK_CANONICAL:?}" ]]; then
+  count=0
+  if [[ -f "${CHECKOUT_TEST_RECHECK_COUNT:?}" ]]; then
+    IFS= read -r count <"$CHECKOUT_TEST_RECHECK_COUNT"
+  fi
+  count=$((count + 1))
+  printf '%s\n' "$count" >"$CHECKOUT_TEST_RECHECK_COUNT"
+  if [[ "$count" -eq "${CHECKOUT_TEST_RECHECK_BLOCK_CALL:?}" ]]; then
+    : >"${CHECKOUT_TEST_RECHECK_READY:?}"
+    for _ in {1..500}; do
+      [[ -e "${CHECKOUT_TEST_RECHECK_RELEASE:?}" ]] && break
+      sleep 0.01
+    done
+    [[ -e "$CHECKOUT_TEST_RECHECK_RELEASE" ]] || exit 75
+    if [[ "${CHECKOUT_TEST_RECHECK_MODE:?}" == fail ]]; then
+      exit 1
+    fi
+  fi
 fi
+exec "${CHECKOUT_TEST_REAL_READLINK:?}" "$@"
+EOF
+  chmod 0755 "$lock_recheck_bin/readlink"
+
+  CHECKOUT_TEST_LOG="$tmp/lock-recheck-recover.log" \
+    PATH="$lock_recheck_bin:$platform_tool_path" \
+    CHECKOUT_TEST_REAL_READLINK="$lock_real_readlink" \
+    CHECKOUT_TEST_RECHECK_BLOCK_CALL="$lock_recheck_call" \
+    CHECKOUT_TEST_RECHECK_MODE="$lock_recheck_mode" \
+    CHECKOUT_TEST_RECHECK_CANONICAL="$lock_recheck_path" \
+    CHECKOUT_TEST_RECHECK_COUNT="$lock_recheck_count" \
+    CHECKOUT_TEST_RECHECK_READY="$lock_recheck_ready" \
+    CHECKOUT_TEST_RECHECK_RELEASE="$lock_recheck_release" \
+    CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=5 \
+    CGRAF78_CHECKOUT_INSTALL_DIR="$lock_recheck_managed" \
+    CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+    "$active_bash" -s <"$lock_source/install.sh" \
+    >"$tmp/lock-recheck-recover.out" 2>&1 &
+  lock_wait_pid=$!
+  for _ in {1..500}; do
+    [[ -e "$lock_recheck_ready" ]] && break
+    sleep 0.01
+  done
+  if [[ ! -e "$lock_recheck_ready" ]]; then
+    : >"$lock_recheck_release"
+    wait "$lock_wait_pid" 2>/dev/null || true
+    lock_wait_pid=
+    fail "canonical recheck fixture did not reach $lock_recheck_case"
+  fi
+  if [[ "$lock_recheck_mode" == detach ]]; then
+    "$lock_real_mv" "$lock_recheck_path" "$lock_recheck_tombstone" ||
+      fail "canonical recheck fixture could not commit detachment"
+  fi
+  : >"$lock_recheck_release"
+  set +e
+  wait "$lock_wait_pid"
+  lock_recheck_status=$?
+  set -e
+  lock_wait_pid=
+  if [[ "$lock_recheck_status" -ne 0 ]]; then
+    sed -n '1,120p' "$tmp/lock-recheck-recover.out" >&2
+    fail "canonical ambiguity at $lock_recheck_case was treated as malformed"
+  fi
+  if grep -Fq 'managed checkout lock is malformed' \
+    "$tmp/lock-recheck-recover.out"; then
+    fail "canonical recheck emitted a malformed-lock diagnostic"
+  fi
+  grep -Fqx 'checkout_lock_kind=v1' "$tmp/lock-recheck-recover.log" ||
+    fail "canonical recheck recovery did not acquire checkout lock v1"
+  [[ ! -e "$lock_recheck_path" && ! -L "$lock_recheck_path" ]] ||
+    fail "canonical recheck recovery left the canonical lock"
+  if compgen -G "$lock_recheck_parent/.example-tool.install.lock.claim.*" \
+    >/dev/null; then
+    fail "canonical recheck recovery left a claim directory"
+  fi
+done
 
 lock_detach_managed="$tmp/lock-detach/example-tool"
 lock_detach_parent="$tmp/lock-detach"

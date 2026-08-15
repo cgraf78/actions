@@ -433,7 +433,7 @@ checkout_lock_load_claim() {
 
 checkout_lock_find_claimed_owner() {
   local owner_nonce=$1 expected_target=$2 candidate count=0
-  local claim_liveness claim_pid nested_owner tombstone
+  local claim_liveness claim_pid current_target nested_owner tombstone
 
   CHECKOUT_LOCK_CLAIM_DIR=
   for candidate in \
@@ -487,17 +487,16 @@ checkout_lock_find_claimed_owner() {
     CHECKOUT_LOCK_CLAIM_LIVENESS=$claim_liveness
     CHECKOUT_LOCK_CLAIM_PID=$claim_pid
   done
-  if [[ "$count" -eq 0 ]]; then
-    return 2
-  fi
-  if [[ "$count" -ne 1 ]]; then
-    [[ ! -L "$lock_dir" ]] && return 2
-    return 1
-  fi
-  if [[ ! -L "$lock_dir" ]]; then
-    return 2
-  fi
-  [[ $(readlink "$lock_dir") == "$expected_target" ]]
+  # Claim cardinality is meaningful only while the canonical path still names
+  # the generation we scanned. Release atomically moves that symlink into the
+  # claimant after `-L` can succeed, so a failed or changed read is a transient
+  # handoff snapshot rather than stable malformation.
+  [[ -L "$lock_dir" ]] || return 2
+  current_target=$(readlink "$lock_dir" 2>/dev/null) || return 2
+  [[ "$current_target" == "$expected_target" ]] || return 2
+  [[ "$count" -ne 0 ]] || return 2
+  [[ "$count" -eq 1 ]] || return 1
+  return 0
 }
 
 checkout_lock_detach_claimed_owner() {
@@ -578,10 +577,14 @@ checkout_lock_classify() {
     CHECKOUT_LOCK_STATE=malformed
     return 0
   }
-  target=$(readlink "$lock_dir") || {
-    CHECKOUT_LOCK_STATE=malformed
+  if ! target=$(readlink "$lock_dir" 2>/dev/null); then
+    # The canonical symlink may have been detached or replaced after the
+    # preceding type check. Any failed read is therefore ambiguous: retrying
+    # validates the current generation, while a stable unreadable object stays
+    # fail-closed behind the bounded acquisition timeout.
+    CHECKOUT_LOCK_STATE=retry
     return 0
-  }
+  fi
   prefix=".${checkout_name}.install.lock.owner."
   case "$target" in
     "$prefix"*'/.')
@@ -695,7 +698,10 @@ checkout_lock_recover_dead_claim() {
     checkout_lock_cleanup_empty_claim "$lock_claim_dir" || true
     return 1
   fi
-  checkout_lock_cleanup_empty_claim "$old_claim" || return 1
+  # The owner has already moved into our new claim, so the old claimant no
+  # longer participates in arbitration. Treat leaf cleanup as best effort;
+  # otherwise a harmless unlink failure makes us wait on our own live claim.
+  checkout_lock_cleanup_empty_claim "$old_claim" || true
   checkout_lock_detach_claimed_owner \
     "$lock_claim_dir" "$CHECKOUT_LOCK_CLASSIFIED_OWNER_TARGET" \
     "$CHECKOUT_LOCK_CLASSIFIED_OWNER_NONCE"
