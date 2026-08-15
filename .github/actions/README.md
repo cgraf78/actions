@@ -36,3 +36,8 @@ coverage decisions but are not linted as standalone programs. The caller must
 check out one repository at the `GITHUB_WORKSPACE` root and pass a normalized,
 repository-relative inventory path. Newline-containing paths cannot be encoded
 in the line-oriented inventory and therefore fail closed.
+
+A tracked shell-program symlink is accepted only as an alias to an inventoried,
+tracked, regular shell program inside the same repository. The alias itself is
+not an inventory row and is not linted twice. Absolute, broken, external,
+chained, or untracked targets remain errors.

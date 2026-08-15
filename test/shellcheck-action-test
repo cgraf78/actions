@@ -250,6 +250,23 @@ assert_status 1 "shell program symlink"
 assert_contains "shell program is a symbolic link: external.sh" \
   "shell program symlink"
 
+internal_symlink_repo="$tmp/internal-symlink-repo"
+new_repo "$internal_symlink_repo"
+mkdir -p "$internal_symlink_repo/.github" \
+  "$internal_symlink_repo/bin" "$internal_symlink_repo/lib/tests"
+printf '#!/usr/bin/env bash\nprintf "ok\\n"\n' \
+  >"$internal_symlink_repo/lib/tests/run"
+ln -s ../lib/tests/run "$internal_symlink_repo/bin/tool-test"
+printf 'program\tlib/tests/run\n' \
+  >"$internal_symlink_repo/.github/shellcheck-files.txt"
+git -C "$internal_symlink_repo" add bin/tool-test lib/tests/run \
+  .github/shellcheck-files.txt
+run_gate "$internal_symlink_repo" \
+  "$internal_symlink_repo/.github/shellcheck-files.txt"
+assert_status 0 "internal inventoried shell-program symlink"
+assert_contains "internal shell alias: bin/tool-test -> lib/tests/run" \
+  "internal inventoried shell-program symlink"
+
 broken_symlink_repo="$tmp/broken-symlink-repo"
 new_repo "$broken_symlink_repo"
 mkdir -p "$broken_symlink_repo/.github"
@@ -351,8 +368,13 @@ assert_contains "ShellCheck 0.11 or newer is required for BusyBox dialect" \
 printf 'program\tbin/tool\nfixture\ttest/fixtures/invalid.sh\n' >"$inventory"
 mock_bin="$tmp/bin"
 mkdir -p "$mock_bin"
-for command in bash git mktemp rm; do
+for command in bash mktemp rm; do
   ln -s "$(type -P "$command")" "$mock_bin/$command"
+done
+for system_git in /usr/bin/git /bin/git; do
+  [[ -x $system_git ]] || continue
+  ln -s "$system_git" "$mock_bin/git"
+  break
 done
 set +e
 gate_output=$(PATH="$mock_bin" "$validator" "$repo" \
