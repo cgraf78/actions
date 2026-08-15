@@ -4137,4 +4137,6 @@ cmp -s "$shdeps_handoff_sentinel_expected" \
 [[ $(LC_ALL=C ls -A1 "$shdeps_handoff_journal/previous") == sentinel ]] ||
   fail "checkout installer added state to the Shdeps parked generation"
 
+"$BASH" "$root/test/checkout-installer-development-test"
+
 printf 'checkout-installer-test: ok\n'

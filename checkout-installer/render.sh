@@ -74,6 +74,7 @@ CHECKOUT_INSTALLER_DEFAULT_DESTINATION=
 CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE=
 CHECKOUT_INSTALLER_LOCK_PROTOCOL=
 CHECKOUT_INSTALLER_BASH_RESOLVER=
+CHECKOUT_INSTALLER_DEVELOPMENT_POLICY=
 
 # shellcheck source=/dev/null
 . "$config"
@@ -124,6 +125,7 @@ done
 : "${CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE:=}"
 : "${CHECKOUT_INSTALLER_LOCK_PROTOCOL:=}"
 : "${CHECKOUT_INSTALLER_BASH_RESOLVER:=}"
+: "${CHECKOUT_INSTALLER_DEVELOPMENT_POLICY:=}"
 
 case "$CHECKOUT_INSTALLER_REF" in
   '' | -* | /* | */ | *//* | *..* | *[!A-Za-z0-9._/-]*)
@@ -166,6 +168,18 @@ case "$CHECKOUT_INSTALLER_BASH_RESOLVER" in
     die 'CHECKOUT_INSTALLER_BASH_RESOLVER must be v1 when set'
     ;;
 esac
+case "$CHECKOUT_INSTALLER_DEVELOPMENT_POLICY" in
+  '' | shdeps) ;;
+  *)
+    die 'CHECKOUT_INSTALLER_DEVELOPMENT_POLICY must be shdeps when set'
+    ;;
+esac
+if [[ "$CHECKOUT_INSTALLER_DEVELOPMENT_POLICY" == shdeps ]]; then
+  [[ "$CHECKOUT_INSTALLER_DEFAULT_DESTINATION" == shdeps ]] ||
+    die 'Shdeps development policy requires CHECKOUT_INSTALLER_DEFAULT_DESTINATION=shdeps'
+  [[ "$CHECKOUT_INSTALLER_LOCK_PROTOCOL" == v1 ]] ||
+    die 'Shdeps development policy requires CHECKOUT_INSTALLER_LOCK_PROTOCOL=v1'
+fi
 
 delegate="$consumer/$CHECKOUT_INSTALLER_DELEGATE"
 [[ -f "$delegate" && ! -L "$delegate" ]] ||
@@ -225,7 +239,11 @@ fi
 # renderer's own variables.
 # shellcheck disable=SC2016
 emit_bash_invocation() {
-  local marker=$1 indent=$2
+  local marker=$1 indent=$2 managed_root='$checkout_dir'
+
+  if [[ "$CHECKOUT_INSTALLER_DEVELOPMENT_POLICY" == shdeps ]]; then
+    managed_root='$checkout_runtime_root'
+  fi
 
   if [[ "$CHECKOUT_INSTALLER_BASH_RESOLVER" != v1 ]]; then
     case "$marker" in
@@ -239,10 +257,12 @@ emit_bash_invocation() {
         printf '%sexec "$BASH" "$checkout_root/$checkout_post_install_delegate" "$@"\n' "$indent"
         ;;
       CHECKOUT_BASH_RUN_DIR_DELEGATE)
-        printf '%s"$BASH" "$checkout_dir/$checkout_delegate" "$@" <&0 &\n' "$indent"
+        printf '%s"$BASH" "%s/$checkout_delegate" "$@" <&0 &\n' \
+          "$indent" "$managed_root"
         ;;
       CHECKOUT_BASH_EXEC_DIR_POST)
-        printf '%sexec "$BASH" "$checkout_dir/$checkout_post_install_delegate" "$@"\n' "$indent"
+        printf '%sexec "$BASH" "%s/$checkout_post_install_delegate" "$@"\n' \
+          "$indent" "$managed_root"
         ;;
       *) die "unknown Bash invocation marker: $marker" ;;
     esac
@@ -266,13 +286,17 @@ emit_bash_invocation() {
       printf '%sexec "$CHECKOUT_BASH_V1_INTERPRETER" "$CHECKOUT_BASH_V1_RUNTIME" "$@"\n' "$indent"
       ;;
     CHECKOUT_BASH_RUN_DIR_DELEGATE)
-      printf '%scheckout_bash_v1_bind "$checkout_dir/$checkout_delegate" ||\n' "$indent"
-      printf '%s  die "cannot bind checkout runtime: $checkout_dir/$checkout_delegate"\n' "$indent"
+      printf '%scheckout_bash_v1_bind "%s/$checkout_delegate" ||\n' \
+        "$indent" "$managed_root"
+      printf '%s  die "cannot bind checkout runtime: %s/$checkout_delegate"\n' \
+        "$indent" "$managed_root"
       printf '%s"$CHECKOUT_BASH_V1_INTERPRETER" "$CHECKOUT_BASH_V1_RUNTIME" "$@" <&0 &\n' "$indent"
       ;;
     CHECKOUT_BASH_EXEC_DIR_POST)
-      printf '%scheckout_bash_v1_bind "$checkout_dir/$checkout_post_install_delegate" ||\n' "$indent"
-      printf '%s  die "cannot bind checkout runtime: $checkout_dir/$checkout_post_install_delegate"\n' "$indent"
+      printf '%scheckout_bash_v1_bind "%s/$checkout_post_install_delegate" ||\n' \
+        "$indent" "$managed_root"
+      printf '%s  die "cannot bind checkout runtime: %s/$checkout_post_install_delegate"\n' \
+        "$indent" "$managed_root"
       printf '%sexec "$CHECKOUT_BASH_V1_INTERPRETER" "$CHECKOUT_BASH_V1_RUNTIME" "$@"\n' "$indent"
       ;;
     *) die "unknown Bash invocation marker: $marker" ;;
@@ -366,6 +390,56 @@ while IFS= read -r line || [[ -n "$line" ]]; do
       fi
       continue
       ;;
+    '# @CHECKOUT_DEVELOPMENT_BEGIN@')
+      [[ -z "$template_block" ]] ||
+        die 'installer template contains a nested conditional block'
+      template_block=development
+      [[ "$CHECKOUT_INSTALLER_DEVELOPMENT_POLICY" == shdeps ]] &&
+        template_block_enabled=true || template_block_enabled=false
+      continue
+      ;;
+    '# @CHECKOUT_DEVELOPMENT_END@')
+      [[ "$template_block" == development ]] ||
+        die 'installer template closes the wrong development block'
+      template_block=
+      template_block_enabled=true
+      continue
+      ;;
+    *' # @CHECKOUT_MANAGED_DESTINATION_IF@')
+      [[ -z "$template_block" ]] ||
+        die 'managed destination marker is inside a conditional block'
+      if [[ "$CHECKOUT_INSTALLER_DEVELOPMENT_POLICY" == shdeps ]]; then
+        # shellcheck disable=SC2016 # Literal generated shell source.
+        printf '%s\n' \
+          '  if [[ "$development_checkout_selected" == true ]]; then' \
+          '    :' \
+          '  elif [[ "$development_checkout_recovered" == true ]]; then' \
+          '    validate_managed_checkout "$checkout_dir"' \
+          '    require_tracked_delegate "$checkout_dir"' >>"$tmp"
+        if [[ -n "$CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE" ]]; then
+          # shellcheck disable=SC2016 # Literal generated shell source.
+          printf '%s\n' \
+            '    require_tracked_post_install_delegate "$checkout_dir"' >>"$tmp"
+        fi
+        # shellcheck disable=SC2016 # Literal generated shell source.
+        printf '%s\n' \
+          '  elif [[ -e "$checkout_dir" || -L "$checkout_dir" ]]; then' >>"$tmp"
+      else
+        # shellcheck disable=SC2016 # Literal generated shell source.
+        printf '%s\n' \
+          '  if [[ -e "$checkout_dir" || -L "$checkout_dir" ]]; then' >>"$tmp"
+      fi
+      continue
+      ;;
+    '# @CHECKOUT_DEVELOPMENT_REVALIDATE@')
+      if [[ "$CHECKOUT_INSTALLER_DEVELOPMENT_POLICY" == shdeps &&
+        (-z "$template_block" || "$template_block_enabled" == true) ]]; then
+        invocation_indent=${line%%#*}
+        printf '%srevalidate_selected_development_checkout\n' \
+          "$invocation_indent" >>"$tmp"
+      fi
+      continue
+      ;;
     '# @CHECKOUT_BASH_EXEC_ROOT_DELEGATE@' | '# @CHECKOUT_BASH_RUN_ROOT_DELEGATE@' | '# @CHECKOUT_BASH_EXEC_ROOT_POST@' | '# @CHECKOUT_BASH_RUN_DIR_DELEGATE@' | '# @CHECKOUT_BASH_EXEC_DIR_POST@')
       if [[ -z "$template_block" || "$template_block_enabled" == true ]]; then
         invocation_marker=${marker_line#\# @}
@@ -385,6 +459,12 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   line=${line//@CHECKOUT_DELEGATE@/$CHECKOUT_INSTALLER_DELEGATE}
   line=${line//@CHECKOUT_DEFAULT_DESTINATION@/$CHECKOUT_INSTALLER_DEFAULT_DESTINATION}
   line=${line//@CHECKOUT_POST_INSTALL_DELEGATE@/$CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE}
+  line=${line//@CHECKOUT_DEVELOPMENT_POLICY@/$CHECKOUT_INSTALLER_DEVELOPMENT_POLICY}
+  if [[ "$CHECKOUT_INSTALLER_DEVELOPMENT_POLICY" == shdeps ]]; then
+    line=${line//@CHECKOUT_RUNTIME_ROOT@/\$checkout_runtime_root}
+  else
+    line=${line//@CHECKOUT_RUNTIME_ROOT@/\$checkout_dir}
+  fi
   printf '%s\n' "$line" >>"$tmp"
 done <"$template"
 [[ -z "$template_block" ]] ||

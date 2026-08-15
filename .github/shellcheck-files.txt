@@ -30,6 +30,7 @@ program	release-scripts/smoke-release.sh
 program	release-scripts/sync.sh
 program	test/consumer-sync-test
 program	test/checkout-installer-bash32-test
+program	test/checkout-installer-development-test
 program	test/checkout-installer-test
 program	test/dotfiles-public-deps-test
 program	test/examples-test

@@ -15,6 +15,13 @@
   checkout_ref='@CHECKOUT_REF@'
   checkout_delegate='@CHECKOUT_DELEGATE@'
   checkout_default_destination='@CHECKOUT_DEFAULT_DESTINATION@'
+  # @CHECKOUT_DEVELOPMENT_BEGIN@
+  checkout_force_managed=false
+  if [[ ${1:-} == --managed ]]; then
+    checkout_force_managed=true
+    shift
+  fi
+  # @CHECKOUT_DEVELOPMENT_END@
   # @CHECKOUT_POST_INSTALL_BEGIN@
   checkout_post_install_delegate='@CHECKOUT_POST_INSTALL_DELEGATE@'
   active_child_pid=
@@ -59,6 +66,31 @@
     esac
   }
 
+  # @CHECKOUT_DEVELOPMENT_BEGIN@
+  resolve_expected_development_dir() {
+    local development_home
+
+    development_home=${SHDEPS_GIT_DEV_DIR:-$HOME/git}
+    while [[ "$development_home" != / && "$development_home" == */ ]]; do
+      development_home=${development_home%/}
+    done
+    case $development_home in
+      '' | *//* | */./* | */. | */../* | */.. | *$'\n'* | *$'\r'*)
+        die "Shdeps development root must be a normalized absolute path: $development_home"
+        ;;
+      /*) ;;
+      *)
+        die "Shdeps development root must be absolute: $development_home"
+        ;;
+    esac
+    if [[ "$development_home" == / ]]; then
+      printf '/%s\n' "$checkout_slug"
+    else
+      printf '%s/%s\n' "$development_home" "$checkout_slug"
+    fi
+  }
+
+  # @CHECKOUT_DEVELOPMENT_END@
   require_delegate() {
     local checkout_root=$1 delegate_path=${2:-$checkout_delegate} delegate
 
@@ -380,6 +412,11 @@
   # while a downloaded standalone copy has no adjacent delegate; both continue
   # into the managed-checkout bootstrap below.
   script_source=${BASH_SOURCE[0]:-}
+  # @CHECKOUT_DEVELOPMENT_BEGIN@
+  if [[ "$checkout_force_managed" == true ]]; then
+    script_source=
+  fi
+  # @CHECKOUT_DEVELOPMENT_END@
   if [[ -n "$script_source" ]] &&
     script_dir=$(checkout_source_root "$script_source"); then
     # @CHECKOUT_POST_INSTALL_BEGIN@
@@ -396,6 +433,9 @@
   if [[ -z "$checkout_dir" ]]; then
     checkout_dir=$(resolve_default_checkout_dir)
   fi
+  # @CHECKOUT_DEVELOPMENT_BEGIN@
+  expected_development_dir=$(resolve_expected_development_dir)
+  # @CHECKOUT_DEVELOPMENT_END@
 
   case "$checkout_dir" in
     '' | / | */ | *//* | */./* | */. | */../* | */..)
@@ -438,6 +478,15 @@
   update_next_marker=.git/cgraf78-update-next-identity
   update_previous_marker=.git/cgraf78-update-previous-identity
   update_transaction_created=0
+  # @CHECKOUT_DEVELOPMENT_BEGIN@
+  development_checkout_selected=false
+  development_checkout_recovered=false
+  development_validation_error=
+  development_recorded_target=
+  update_transaction_kind=managed
+  checkout_runtime_root=$checkout_dir
+  : "$development_checkout_recovered" "$checkout_runtime_root"
+  # @CHECKOUT_DEVELOPMENT_END@
   lock_held=0
 
   # @CHECKOUT_LEGACY_LOCK_BEGIN@
@@ -525,6 +574,233 @@
       die "managed Git checkout is dirty; refusing to update: $candidate"
   }
 
+  # @CHECKOUT_DEVELOPMENT_BEGIN@
+  canonical_github_repo_url() {
+    local url=$1 rest host path owner repository host_lower
+
+    case $url in
+      https://*)
+        rest=${url#https://}
+        host=${rest%%/*}
+        [[ "$rest" != "$host" ]] || return 1
+        path=${rest#*/}
+        ;;
+      ssh://git@*)
+        rest=${url#ssh://git@}
+        host=${rest%%/*}
+        [[ "$rest" != "$host" ]] || return 1
+        path=${rest#*/}
+        ;;
+      git@*:*)
+        rest=${url#git@}
+        host=${rest%%:*}
+        [[ "$rest" != "$host" ]] || return 1
+        path=${rest#*:}
+        ;;
+      *) return 1 ;;
+    esac
+    host_lower=$(printf '%s' "$host" | command tr '[:upper:]' '[:lower:]') ||
+      return 1
+    [[ "$host_lower" == github.com ]] || return 1
+    case $path in
+      '' | /* | */ | *//* | *$'\n'* | *$'\r'* | *[!A-Za-z0-9._/-]*)
+        return 1
+        ;;
+    esac
+    owner=${path%%/*}
+    [[ "$path" != "$owner" ]] || return 1
+    repository=${path#*/}
+    [[ "$repository" != */* ]] || return 1
+    case $owner:$repository in
+      .:* | ..:* | *:. | *:..) return 1 ;;
+    esac
+    case $repository in
+      *.git) repository=${repository%.git} ;;
+    esac
+    [[ -n "$repository" && "$repository" != . && "$repository" != .. ]] ||
+      return 1
+    printf '%s/%s\n' "$owner" "$repository"
+  }
+
+  development_origin_matches() {
+    local origin=$1 configured canonical
+
+    if configured=$(canonical_github_repo_url "$repo_url"); then
+      [[ "$configured" == "$checkout_repo" ]] || return 1
+      canonical=$(canonical_github_repo_url "$origin") || return 1
+      [[ "$canonical" == "$configured" ]]
+    else
+      [[ "$origin" == "$repo_url" ]]
+    fi
+  }
+
+  development_git() {
+    # Development validation may read the checkout's own config and object
+    # store, but it must not let replace refs reinterpret HEAD. Optional locks
+    # keep these proof-only calls from writing refresh state into a dirty tree.
+    GIT_OPTIONAL_LOCKS=0 bootstrap_git --no-replace-objects "$@"
+  }
+
+  validate_development_file() {
+    local candidate=$1 relative=$2 remaining component parent entry
+    local mode type object path
+
+    case $relative in
+      '' | -* | . | .. | /* | ./* | */./* | */. | *//* | ../* | */../* | */..)
+        development_validation_error="unsafe tracked path: $relative"
+        return 1
+        ;;
+    esac
+    parent=$candidate
+    remaining=$relative
+    while [[ "$remaining" == */* ]]; do
+      component=${remaining%%/*}
+      remaining=${remaining#*/}
+      parent=$parent/$component
+      if [[ ! -d "$parent" || -L "$parent" ]]; then
+        development_validation_error="tracked path has a non-directory or symlinked parent: $relative"
+        return 1
+      fi
+    done
+    if [[ ! -f "$candidate/$relative" || -L "$candidate/$relative" ||
+      ! -r "$candidate/$relative" ]]; then
+      development_validation_error="tracked path is not a live regular file: $relative"
+      return 1
+    fi
+    entry=$(development_git -C "$candidate" ls-tree HEAD -- \
+      "$relative" 2>/dev/null) || {
+      development_validation_error="cannot inspect tracked path at HEAD: $relative"
+      return 1
+    }
+    IFS=$' \t' read -r mode type object path <<<"$entry"
+    if [[ ("$mode" != 100644 && "$mode" != 100755) ||
+      "$type" != blob || -z "$object" || "$path" != "$relative" ]]; then
+      development_validation_error="tracked path is not a regular blob at HEAD: $relative"
+      return 1
+    fi
+  }
+
+  validate_development_checkout() {
+    local candidate=$1 top candidate_physical configured_repo raw_origin
+    local effective_origin
+
+    development_validation_error=
+    if [[ ! -d "$candidate" ]]; then
+      development_validation_error='path is not a directory'
+      return 1
+    fi
+    if [[ (! -d "$candidate/.git" && ! -f "$candidate/.git") ||
+      -L "$candidate/.git" ]]; then
+      development_validation_error='.git is not regular checkout metadata'
+      return 1
+    fi
+    top=$(development_git -C "$candidate" \
+      rev-parse --show-toplevel 2>/dev/null) || {
+      development_validation_error='path is not a Git checkout'
+      return 1
+    }
+    top=$(cd -P -- "$top" 2>/dev/null && pwd -P) || {
+      development_validation_error='cannot resolve Git checkout root'
+      return 1
+    }
+    candidate_physical=$(cd -P -- "$candidate" 2>/dev/null && pwd -P) || {
+      development_validation_error='cannot resolve development checkout'
+      return 1
+    }
+    if [[ "$top" != "$candidate_physical" ]]; then
+      development_validation_error='path is not the root of its Git checkout'
+      return 1
+    fi
+    if configured_repo=$(canonical_github_repo_url "$repo_url") &&
+      [[ "$configured_repo" != "$checkout_repo" ]]; then
+      development_validation_error='configured repository differs'
+      return 1
+    fi
+    raw_origin=$(development_git -C "$candidate" config --local --no-includes \
+      --get-all remote.origin.url 2>/dev/null) || {
+      development_validation_error='checkout has no local origin'
+      return 1
+    }
+    if [[ -z "$raw_origin" || "$raw_origin" == *$'\n'* ]] ||
+      ! development_origin_matches "$raw_origin"; then
+      development_validation_error='checkout local origin differs'
+      return 1
+    fi
+    effective_origin=$(development_git -C "$candidate" remote get-url --all \
+      origin 2>/dev/null) || {
+      development_validation_error='cannot resolve effective checkout origin'
+      return 1
+    }
+    if [[ -z "$effective_origin" || "$effective_origin" == *$'\n'* ]] ||
+      ! development_origin_matches "$effective_origin"; then
+      development_validation_error='checkout effective origin differs'
+      return 1
+    fi
+    validate_development_file "$candidate" install.sh || return 1
+    validate_development_file "$candidate" "$checkout_delegate" || return 1
+    if [[ -n ${checkout_post_install_delegate:-} ]]; then
+      validate_development_file \
+        "$candidate" "$checkout_post_install_delegate" || return 1
+    fi
+  }
+
+  development_symlink_matches() {
+    local link=$1 expected=$2 encoded actual
+
+    [[ -L "$link" ]] || return 1
+    encoded=$({ readlink "$link" && printf '\034'; }) || return 1
+    case $encoded in
+      *$'\034') encoded=${encoded%$'\034'} ;;
+      *) return 1 ;;
+    esac
+    [[ "$encoded" == *$'\n' ]] || return 1
+    actual=${encoded%$'\n'}
+    [[ "$actual" == "$expected" ]]
+  }
+
+  # shellcheck disable=SC2329 # Emitted through renderer call markers.
+  revalidate_selected_development_checkout() {
+    [[ "$development_checkout_selected" == true ]] || return 0
+    if ! development_symlink_matches \
+      "$checkout_dir" "$expected_development_dir" ||
+      ! validate_development_checkout "$expected_development_dir"; then
+      die "selected development checkout changed before execution: $expected_development_dir: ${development_validation_error:-link target changed}"
+    fi
+    checkout_runtime_root=$expected_development_dir
+  }
+
+  load_development_identity() {
+    local identity=$1 header
+
+    [[ -f "$identity" && ! -L "$identity" ]] || return 1
+    header=$(sed -n '1p' "$identity")
+    [[ "$header" == 'cgraf78 checkout installer development-to-managed transaction v1' ]] ||
+      return 1
+    development_recorded_target=$(sed -n '5p' "$identity")
+    update_recorded_delegate=$(sed -n '6p' "$identity")
+    update_recorded_post_install_delegate=$(sed -n '7p' "$identity")
+    case "$update_recorded_delegate" in
+      '' | install.sh | -* | . | .. | /* | ./* | */./* | */. | *[!A-Za-z0-9._/-]* | *//* | ../* | */../* | */..)
+        return 1
+        ;;
+    esac
+    if [[ -n "$update_recorded_post_install_delegate" ]]; then
+      case "$update_recorded_post_install_delegate" in
+        install.sh | -* | . | .. | /* | ./* | */./* | */. | *[!A-Za-z0-9._/-]* | *//* | ../* | */../* | */..)
+          return 1
+          ;;
+      esac
+      [[ "$update_recorded_post_install_delegate" != "$update_recorded_delegate" ]] ||
+        return 1
+    fi
+    [[ $(wc -l <"$identity" | command tr -d '[:space:]') == 7 &&
+    $(sed -n '2p' "$identity") == "$checkout_dir" &&
+    $(sed -n '3p' "$identity") == "$checkout_repo" &&
+    $(sed -n '4p' "$identity") == "$checkout_ref" &&
+    "$development_recorded_target" == "$expected_development_dir" ]]
+  }
+
+  # @CHECKOUT_DEVELOPMENT_END@
   locate_update_identity() {
     local candidate count=0
 
@@ -536,6 +812,14 @@
     done
     [[ "$count" -eq 1 && -f "$update_identity" &&
       ! -L "$update_identity" ]] || return 1
+    # @CHECKOUT_DEVELOPMENT_BEGIN@
+    update_transaction_kind=managed
+    if [[ $(sed -n '1p' "$update_identity") == 'cgraf78 checkout installer development-to-managed transaction v1' ]]; then
+      load_development_identity "$update_identity" || return 1
+      update_transaction_kind=development
+      return 0
+    fi
+    # @CHECKOUT_DEVELOPMENT_END@
     update_recorded_delegate=$(sed -n '5p' "$update_identity")
     case "$update_recorded_delegate" in
       '' | install.sh | -* | . | .. | /* | ./* | */./* | */. | *[!A-Za-z0-9._/-]* | *//* | ../* | */../* | */..)
@@ -604,6 +888,188 @@
     [[ "$actual" == "$expected" ]]
   }
 
+  # @CHECKOUT_DEVELOPMENT_BEGIN@
+  recover_development_preparation() {
+    local entry name preparation_count=0 current_marker
+
+    current_marker="$checkout_dir/$update_next_marker"
+    for entry in "$update_transaction"/* "$update_transaction"/.[!.]* \
+      "$update_transaction"/..?*; do
+      [[ -e "$entry" || -L "$entry" ]] || continue
+      name=${entry##*/}
+      case $name in
+        .identity.prepare.*)
+          [[ -f "$entry" && ! -L "$entry" ]] || return 1
+          preparation_count=$((preparation_count + 1))
+          ;;
+        identity.* | next | previous | candidate-head)
+          return 2
+          ;;
+        *) return 2 ;;
+      esac
+    done
+
+    if [[ "$preparation_count" -eq 0 &&
+      -d "$checkout_dir" && ! -L "$checkout_dir" &&
+      -f "$current_marker" && ! -L "$current_marker" ]] &&
+      load_development_identity "$current_marker"; then
+      validate_managed_checkout "$checkout_dir" || return 1
+      require_tracked_delegate "$checkout_dir" "$update_recorded_delegate"
+      if [[ -n "$update_recorded_post_install_delegate" ]]; then
+        require_tracked_post_install_delegate \
+          "$checkout_dir" "$update_recorded_post_install_delegate"
+      fi
+      rmdir "$update_transaction" || return 1
+      rm -f -- "$current_marker" || return 1
+      update_transaction_created=0
+      return 0
+    fi
+
+    development_symlink_matches \
+      "$checkout_dir" "$expected_development_dir" || return 2
+    for entry in "$update_transaction"/.identity.prepare.*; do
+      [[ -e "$entry" || -L "$entry" ]] || continue
+      rm -f -- "$entry" || return 1
+    done
+    rmdir "$update_transaction" || return 1
+    update_transaction_created=0
+    return 0
+  }
+
+  recover_orphaned_development_marker() {
+    local marker="$checkout_dir/$update_next_marker" header
+
+    [[ -e "$update_transaction" || -L "$update_transaction" ]] && return 0
+    [[ -d "$checkout_dir" && ! -L "$checkout_dir" ]] || return 0
+    [[ -f "$marker" && ! -L "$marker" ]] || return 0
+    header=$(sed -n '1p' "$marker")
+    [[ "$header" == 'cgraf78 checkout installer development-to-managed transaction v1' ]] ||
+      return 0
+    load_development_identity "$marker" || return 1
+    validate_managed_checkout "$checkout_dir" || return 1
+    require_tracked_delegate "$checkout_dir" "$update_recorded_delegate"
+    if [[ -n "$update_recorded_post_install_delegate" ]]; then
+      require_tracked_post_install_delegate \
+        "$checkout_dir" "$update_recorded_post_install_delegate"
+    fi
+    rm -f -- "$marker"
+  }
+
+  validate_development_transaction_entries() {
+    local entry name
+
+    for entry in "$update_transaction"/* "$update_transaction"/.[!.]* \
+      "$update_transaction"/..?*; do
+      [[ -e "$entry" || -L "$entry" ]] || continue
+      name=${entry##*/}
+      case $name in
+        identity.* | next | previous | candidate-head) ;;
+        *)
+          printf 'install.sh: development transaction has unexpected state: %s\n' \
+            "$entry" >&2
+          return 1
+          ;;
+      esac
+    done
+  }
+
+  reclaim_nested_development_links() {
+    local nested_parked="$update_previous/$checkout_name"
+    local nested_rollback="$checkout_dir/${update_previous##*/}"
+
+    # Portable mv nests a symlink when a directory wins at its destination.
+    # Restore only the exact recorded link to the side it came from. The late
+    # directory remains in place so the main classifier fails closed instead
+    # of treating a same-UID collision as transaction authority.
+    if [[ -d "$update_previous" && ! -L "$update_previous" &&
+      ! -e "$checkout_dir" && ! -L "$checkout_dir" &&
+      -L "$nested_parked" ]] &&
+      development_symlink_matches \
+        "$nested_parked" "$development_recorded_target"; then
+      mv -n "$nested_parked" "$checkout_dir" || return 1
+      development_symlink_matches \
+        "$checkout_dir" "$development_recorded_target" || return 1
+    fi
+    if [[ ! -e "$update_previous" && ! -L "$update_previous" &&
+      -d "$checkout_dir" && ! -L "$checkout_dir" &&
+      -L "$nested_rollback" ]] &&
+      development_symlink_matches \
+        "$nested_rollback" "$development_recorded_target"; then
+      mv -n "$nested_rollback" "$update_previous" || return 1
+      development_symlink_matches \
+        "$update_previous" "$development_recorded_target" || return 1
+    fi
+  }
+
+  recover_development_transaction() {
+    local current_marker nested_next committed=false
+
+    validate_development_transaction_entries || return 1
+    current_marker="$checkout_dir/$update_next_marker"
+    nested_next="$checkout_dir/${update_next##*/}"
+
+    if [[ ! -e "$update_next" && ! -L "$update_next" &&
+      -d "$nested_next" && ! -L "$nested_next" ]] &&
+      update_identity_matches "$nested_next/$update_next_marker"; then
+      reclaim_nested_update_checkout "$nested_next" "$update_next" \
+        "$update_next_marker" || return 1
+    fi
+    reclaim_nested_development_links || return 1
+
+    if [[ -e "$update_previous" || -L "$update_previous" ]]; then
+      if ! development_symlink_matches \
+        "$update_previous" "$development_recorded_target"; then
+        printf 'install.sh: development rollback link differs: %s\n' \
+          "$update_previous" >&2
+        return 1
+      fi
+      if update_identity_matches "$current_marker"; then
+        validate_recorded_checkout \
+          "$checkout_dir" "$update_candidate_head" true || return 1
+        committed=true
+        rm -f -- "$update_previous" || return 1
+      elif [[ ! -e "$checkout_dir" && ! -L "$checkout_dir" ]]; then
+        mv -n "$update_previous" "$checkout_dir" || return 1
+        if ! development_symlink_matches \
+          "$checkout_dir" "$development_recorded_target"; then
+          reclaim_nested_development_links || return 1
+          printf 'install.sh: cannot restore development checkout link: %s\n' \
+            "$checkout_dir" >&2
+          return 1
+        fi
+      else
+        printf 'install.sh: cannot safely recover development transition: %s\n' \
+          "$checkout_dir" >&2
+        return 1
+      fi
+    elif development_symlink_matches \
+      "$checkout_dir" "$development_recorded_target"; then
+      :
+    elif update_identity_matches "$current_marker"; then
+      validate_recorded_checkout \
+        "$checkout_dir" "$update_candidate_head" true || return 1
+      committed=true
+    else
+      printf 'install.sh: development transaction does not match checkout: %s\n' \
+        "$checkout_dir" >&2
+      return 1
+    fi
+
+    if [[ -e "$update_next" || -L "$update_next" ]]; then
+      [[ -d "$update_next" && ! -L "$update_next" ]] || return 1
+      rm -rf -- "$update_next" || return 1
+    fi
+    [[ ! -e "$update_previous" && ! -L "$update_previous" ]] || return 1
+    rm -f -- "$update_candidate_head" "$update_previous_head" || return 1
+    rm -f -- "$update_identity" || return 1
+    rmdir "$update_transaction" || return 1
+    update_transaction_created=0
+    if [[ "$committed" == true ]]; then
+      rm -f -- "$current_marker" || return 1
+    fi
+  }
+
+  # @CHECKOUT_DEVELOPMENT_END@
   # Finish or roll back an update transaction using inode identity markers.
   # Hard links are preferred, with symbolic links as a fallback on filesystems
   # that reject hard links. This also handles a transaction left after SIGKILL
@@ -612,6 +1078,9 @@
   recover_update_transaction() {
     local current_next current_previous nested_next nested_previous
     local previous_next previous_previous
+    # @CHECKOUT_DEVELOPMENT_BEGIN@
+    local development_preparation_status
+    # @CHECKOUT_DEVELOPMENT_END@
 
     [[ -e "$update_transaction" || -L "$update_transaction" ]] || return 0
     if [[ ! -d "$update_transaction" || -L "$update_transaction" ]]; then
@@ -619,6 +1088,14 @@
         "$update_transaction" >&2
       return 1
     fi
+    # @CHECKOUT_DEVELOPMENT_BEGIN@
+    if recover_development_preparation; then
+      return 0
+    else
+      development_preparation_status=$?
+      [[ "$development_preparation_status" -eq 2 ]] || return 1
+    fi
+    # @CHECKOUT_DEVELOPMENT_END@
     if ! locate_update_identity; then
       if [[ "$update_transaction_created" -eq 1 ]] &&
         rmdir "$update_transaction" 2>/dev/null; then
@@ -629,6 +1106,12 @@
         "$update_transaction" >&2
       return 1
     fi
+    # @CHECKOUT_DEVELOPMENT_BEGIN@
+    if [[ "$update_transaction_kind" == development ]]; then
+      recover_development_transaction
+      return
+    fi
+    # @CHECKOUT_DEVELOPMENT_END@
 
     current_next="$checkout_dir/$update_next_marker"
     current_previous="$checkout_dir/$update_previous_marker"
@@ -722,6 +1205,92 @@
     update_transaction_created=0
   }
 
+  # @CHECKOUT_DEVELOPMENT_BEGIN@
+  begin_development_to_managed() {
+    local identity_preparation identity_suffix current_marker
+    local nested_next candidate_head
+
+    development_symlink_matches \
+      "$checkout_dir" "$expected_development_dir" ||
+      die "development checkout link changed before managed recovery: $checkout_dir"
+    mkdir "$update_transaction" ||
+      die "cannot create development recovery transaction: $update_transaction"
+    update_transaction_created=1
+    identity_preparation=$(mktemp \
+      "$update_transaction/.identity.prepare.XXXXXX") ||
+      die "cannot create development recovery identity: $update_transaction"
+    if ! printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+      'cgraf78 checkout installer development-to-managed transaction v1' \
+      "$checkout_dir" "$checkout_repo" "$checkout_ref" \
+      "$expected_development_dir" "$checkout_delegate" \
+      "${checkout_post_install_delegate:-}" >"$identity_preparation" ||
+      ! chmod 0600 "$identity_preparation"; then
+      die "cannot write development recovery identity: $update_transaction"
+    fi
+    identity_suffix=${identity_preparation##*.}
+    update_identity="$update_transaction/identity.$identity_suffix"
+    mv -n "$identity_preparation" "$update_identity" ||
+      die "cannot publish development recovery identity: $update_transaction"
+    [[ -f "$update_identity" && ! -L "$update_identity" &&
+      ! -e "$identity_preparation" && ! -L "$identity_preparation" ]] ||
+      die "cannot verify development recovery identity: $update_transaction"
+    locate_update_identity && [[ "$update_transaction_kind" == development ]] ||
+      die "cannot validate development recovery identity: $update_transaction"
+
+    network_git -c init.templateDir= \
+      clone --quiet --depth 1 --single-branch --branch "$checkout_ref" \
+      --no-tags -- "$repo_url" "$update_next" </dev/null ||
+      die "cannot clone $checkout_repo branch $checkout_ref for managed recovery"
+    validate_managed_checkout "$update_next"
+    require_tree_delegate "$update_next" HEAD
+    require_tracked_delegate "$update_next"
+    if [[ -n ${checkout_post_install_delegate:-} ]]; then
+      require_tree_post_install_delegate "$update_next" HEAD
+      require_tracked_post_install_delegate "$update_next"
+    fi
+    candidate_head=$(bootstrap_git -C "$update_next" rev-parse HEAD) ||
+      die "cannot resolve managed recovery revision: $update_next"
+    printf '%s\n' "$candidate_head" >"$update_candidate_head" ||
+      die "cannot record managed recovery revision: $candidate_head"
+    # Recovery may need this proof after the transaction-side identity has
+    # already been retired. A hard link remains a regular, self-contained
+    # record; the general publication helper's symlink fallback would dangle at
+    # exactly that crash boundary. Both paths are siblings on one filesystem,
+    # so fail before touching the user-owned development link if hard links are
+    # unavailable.
+    ln "$update_identity" "$update_next/$update_next_marker" ||
+      die 'cannot hard-link managed recovery candidate identity'
+
+    mv -n "$checkout_dir" "$update_previous" ||
+      die "cannot park development checkout link: $checkout_dir"
+    if ! development_symlink_matches \
+      "$update_previous" "$expected_development_dir"; then
+      reclaim_nested_development_links || true
+      die "cannot verify parked development checkout link: $update_previous"
+    fi
+    [[ ! -e "$checkout_dir" && ! -L "$checkout_dir" ]] ||
+      die "managed checkout destination remained after parking development link: $checkout_dir"
+
+    mv -n "$update_next" "$checkout_dir" ||
+      die "cannot publish managed recovery checkout: $checkout_dir"
+    current_marker="$checkout_dir/$update_next_marker"
+    if ! update_identity_matches "$current_marker"; then
+      nested_next="$checkout_dir/${update_next##*/}"
+      if [[ ! -e "$update_next" && ! -L "$update_next" &&
+        -d "$nested_next" && ! -L "$nested_next" ]] &&
+        update_identity_matches "$nested_next/$update_next_marker"; then
+        reclaim_nested_update_checkout "$nested_next" "$update_next" \
+          "$update_next_marker" || true
+      fi
+      die "cannot verify published managed recovery checkout: $checkout_dir"
+    fi
+    recover_update_transaction ||
+      die "cannot finish development-to-managed recovery: $update_transaction"
+    development_checkout_recovered=true
+    checkout_runtime_root=$checkout_dir
+  }
+
+  # @CHECKOUT_DEVELOPMENT_END@
   # shellcheck disable=SC2329 # Installed as the EXIT trap below.
   cleanup() {
     local status=$?
@@ -842,8 +1411,37 @@
 
   recover_update_transaction ||
     die "cannot recover interrupted managed checkout update: $update_transaction"
+  # @CHECKOUT_DEVELOPMENT_BEGIN@
+  recover_orphaned_development_marker ||
+    die "cannot recover completed development-to-managed transaction: $checkout_dir"
 
-  if [[ -e "$checkout_dir" || -L "$checkout_dir" ]]; then
+  checkout_runtime_root=$checkout_dir
+  development_checkout_selected=false
+  development_checkout_recovered=false
+  if [[ -L "$checkout_dir" ]]; then
+    if ! development_symlink_matches \
+      "$checkout_dir" "$expected_development_dir"; then
+      die "managed checkout is a foreign symbolic link: $checkout_dir"
+    fi
+    if [[ "$checkout_force_managed" == true ]]; then
+      begin_development_to_managed
+    elif validate_development_checkout "$expected_development_dir"; then
+      development_checkout_selected=true
+      checkout_runtime_root=$expected_development_dir
+      printf 'install.sh: using development checkout %s\n' \
+        "$expected_development_dir"
+    else
+      die "selected development checkout is invalid: $expected_development_dir: $development_validation_error; rerun install.sh --managed to restore a managed checkout"
+    fi
+  elif [[ "$checkout_force_managed" != true &&
+    (-e "$expected_development_dir" || -L "$expected_development_dir") ]] &&
+    ! validate_development_checkout "$expected_development_dir"; then
+    printf 'install.sh: warning: ignoring invalid unselected development checkout %s: %s\n' \
+      "$expected_development_dir" "$development_validation_error" >&2
+  fi
+  # @CHECKOUT_DEVELOPMENT_END@
+
+  if [[ -e "$checkout_dir" || -L "$checkout_dir" ]]; then # @CHECKOUT_MANAGED_DESTINATION_IF@
     validate_managed_checkout "$checkout_dir"
     printf 'install.sh: updating %s\n' "$checkout_dir"
     mkdir "$update_transaction" ||
@@ -952,8 +1550,9 @@
     # @CHECKOUT_POST_INSTALL_END@
   fi
   # @CHECKOUT_POST_INSTALL_BEGIN@
-  require_delegate "$checkout_dir"
-  require_post_install_delegate "$checkout_dir"
+  # @CHECKOUT_DEVELOPMENT_REVALIDATE@
+  require_delegate "@CHECKOUT_RUNTIME_ROOT@"
+  require_post_install_delegate "@CHECKOUT_RUNTIME_ROOT@"
   umask "$caller_umask"
   set +e
   # @CHECKOUT_BASH_RUN_DIR_DELEGATE@
@@ -963,6 +1562,7 @@
   active_child_pid=
   set -e
   [[ "$delegate_status" -eq 0 ]] || exit "$delegate_status"
+  # @CHECKOUT_DEVELOPMENT_REVALIDATE@
 
   # Every checkout mutation and recovery resource must be settled before the
   # lock is released. The post-install delegate can then safely invoke another
@@ -977,7 +1577,8 @@
   # @CHECKOUT_BASH_EXEC_DIR_POST@
   # @CHECKOUT_POST_INSTALL_END@
 
-  require_delegate "$checkout_dir"
+  # @CHECKOUT_DEVELOPMENT_REVALIDATE@
+  require_delegate "@CHECKOUT_RUNTIME_ROOT@"
   umask "$caller_umask"
   set +e
   # @CHECKOUT_BASH_RUN_DIR_DELEGATE@

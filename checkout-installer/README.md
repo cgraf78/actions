@@ -52,6 +52,43 @@ nonnegative decimal integer of at most nine digits, with zero performing one
 immediate classify/recover/acquire attempt. The wire format and recovery state
 machine are documented in [checkout-lock-v1.md](checkout-lock-v1.md).
 
+A Shdeps-managed consumer may additionally recognize Shdeps' selected local
+development checkout:
+
+```bash
+CHECKOUT_INSTALLER_DEVELOPMENT_POLICY=shdeps
+```
+
+This policy requires both `CHECKOUT_INSTALLER_DEFAULT_DESTINATION=shdeps` and
+`CHECKOUT_INSTALLER_LOCK_PROTOCOL=v1`; it is not a standalone source-selection
+switch. The expected literal link target is
+`${SHDEPS_GIT_DEV_DIR:-$HOME/git}/<repository>`, with a normalized absolute
+development root. The installer accepts development mode only when the
+canonical managed root is a symlink whose raw target is exactly that path.
+Shdeps remains the sole publisher of the link. An existing valid but
+unselected development checkout is ignored, while an invalid unselected path
+produces a warning and leaves managed installation available.
+
+The selected checkout must be its repository root, use regular non-symlink Git
+metadata, have exactly one raw and effective origin matching the configured
+repository identity, and keep `install.sh`, the primary delegate, and any post
+delegate as tracked regular blobs at `HEAD` with live readable regular paths.
+Dirty and staged edits, detached HEAD, and live tracked script bytes are
+deliberately allowed. Validation is read-only: it disables Git optional locks
+and replacement objects and never fetches, pulls, resets, checks out, or writes
+inside the user-owned development tree. Supported GitHub URL spellings are
+versioned in `fixtures/github-repo-identity-v1.tsv`, which Shdeps consumes as
+the same ownership contract. A non-GitHub runtime override instead requires an
+exact raw and effective origin match.
+
+For opted consumers, one leading `--managed` is an installer control argument.
+It bypasses direct-checkout dispatch and replaces only an exact Shdeps-owned
+development link with a fresh managed checkout; remaining arguments are
+forwarded unchanged. The target is never dereferenced or executed, so this
+also repairs a broken exact link. A wrong-target link or any other foreign
+object is preserved and rejected. Non-opted consumers and nonleading
+`--managed` arguments retain their original meaning.
+
 A consumer that needs a second, unlocked phase may set one additional tracked
 script path:
 
@@ -139,6 +176,26 @@ The versioned symbolic cases in
 and Shdeps; neither implementation should maintain an independent precedence
 table.
 
+With the Shdeps development policy enabled, a normal piped/downloaded run may
+delegate from the exact selected development link while holding checkout-lock
+v1 through the primary phase. It revalidates the literal link, repository
+identity, and tracked live scripts immediately before primary execution and
+again before an optional unlocked post phase. Invoking a real checkout's
+`./install.sh` without `--managed` remains an explicit direct-source trust path;
+the installer does not try to infer that the source was reached through the
+canonical Shdeps link.
+
+`--managed` uses a separate same-parent development-to-managed transaction.
+The complete identity and validated managed candidate become durable before
+the canonical link moves to `previous`; publishing the candidate directory is
+the commit point. Recovery either restores the exact recorded link or finishes
+the marked managed generation, and removes only the parked link itself—never
+its target. Candidate identity uses a hard link so a crash after transaction
+record retirement still leaves a regular self-contained recovery marker. If
+the filesystem cannot create that proof, recovery fails before moving the
+development link. Existing managed-directory update transactions retain their
+original format and behavior.
+
 The initial clone is shallow but durable. A rerun validates the exact origin
 and branch; refuses a dirty, detached, symlinked, nested, or foreign
 destination; and prepares a separate candidate checkout without Git hooks. It
@@ -209,8 +266,11 @@ truncated input, dirty and foreign destination refusal, missing and migrating
 delegates, concurrent installs, signal forwarding, Git-environment isolation,
 hard-link rejection fallback, failed and interrupted update transactions,
 publication races, legacy and v1 stale-lock recovery, cleanup/acquisition
-races, unlocked post-install ordering and status propagation, Bash 3.2-to-4+
-selection, private hint refresh, resolver artifact drift/no-clobber, and
-failed-clone cleanup. CI runs the
+races, selected dirty development checkout execution, origin and tracked-file
+validation, literal development-root conformance, `--managed` no-clobber and
+broken-link recovery, killed development-transition boundaries, unlocked
+post-install ordering and status propagation, Bash 3.2-to-4+ selection,
+private hint refresh, resolver artifact drift/no-clobber, and failed-clone
+cleanup. CI runs the
 suite across the full shared Linux/macOS matrix, real Android/Termux, and macOS
 system Bash 3.2.
