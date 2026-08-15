@@ -23,7 +23,7 @@ fi
 asset_names=()
 for asset in "${assets[@]}"; do
   asset_name=${asset##*/}
-  for existing_name in "${asset_names[@]}"; do
+  for existing_name in ${asset_names[@]+"${asset_names[@]}"}; do
     if [[ "$existing_name" == "$asset_name" ]]; then
       printf 'duplicate release asset name: %s\n' "$asset_name" >&2
       exit 1
