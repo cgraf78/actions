@@ -158,6 +158,12 @@ jobs:
     with:
       command: /bin/bash test/checkout-installer-test
 
+  release-asset-upload-bash32:
+    name: Release asset upload / Bash 3.2
+    uses: ./.github/workflows/bash32-ci.yml
+    with:
+      command: /bin/bash test/release-asset-upload-test
+
   quality:
     name: Quality / Ubuntu
     runs-on: ubuntu-24.04
@@ -261,7 +267,7 @@ jobs:
   required:
     name: Required
     if: ${{ always() }}
-    needs: [shell-smoke, rust-smoke, matrix-contract, android-rust-toolchain, release-installer-bash32, checkout-installer-bash32, quality]
+    needs: [shell-smoke, rust-smoke, matrix-contract, android-rust-toolchain, release-installer-bash32, checkout-installer-bash32, release-asset-upload-bash32, quality]
     runs-on: ubuntu-24.04
     env:
       SHELL_SMOKE_RESULT: ${{ needs.shell-smoke.result }}
@@ -270,6 +276,7 @@ jobs:
       ANDROID_TOOLCHAIN_RESULT: ${{ needs.android-rust-toolchain.result }}
       RELEASE_INSTALLER_BASH32_RESULT: ${{ needs.release-installer-bash32.result }}
       CHECKOUT_INSTALLER_BASH32_RESULT: ${{ needs.checkout-installer-bash32.result }}
+      RELEASE_ASSET_UPLOAD_BASH32_RESULT: ${{ needs.release-asset-upload-bash32.result }}
       QUALITY_RESULT: ${{ needs.quality.result }}
     steps:
       - name: Require successful Actions CI
@@ -281,6 +288,7 @@ jobs:
           printf 'Android toolchain: %s\n' "$ANDROID_TOOLCHAIN_RESULT"
           printf 'Release installer Bash 3.2: %s\n' "$RELEASE_INSTALLER_BASH32_RESULT"
           printf 'Checkout installer Bash 3.2: %s\n' "$CHECKOUT_INSTALLER_BASH32_RESULT"
+          printf 'Release asset upload Bash 3.2: %s\n' "$RELEASE_ASSET_UPLOAD_BASH32_RESULT"
           printf 'Quality: %s\n' "$QUALITY_RESULT"
           test "$SHELL_SMOKE_RESULT" = success
           test "$RUST_SMOKE_RESULT" = success
@@ -288,4 +296,5 @@ jobs:
           test "$ANDROID_TOOLCHAIN_RESULT" = success
           test "$RELEASE_INSTALLER_BASH32_RESULT" = success
           test "$CHECKOUT_INSTALLER_BASH32_RESULT" = success
+          test "$RELEASE_ASSET_UPLOAD_BASH32_RESULT" = success
           test "$QUALITY_RESULT" = success

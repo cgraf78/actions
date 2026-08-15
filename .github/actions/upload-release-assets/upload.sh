@@ -20,14 +20,16 @@ if ((${#assets[@]} == 0)); then
   exit 1
 fi
 
-declare -A asset_names=()
+asset_names=()
 for asset in "${assets[@]}"; do
   asset_name=${asset##*/}
-  if [[ -n ${asset_names[$asset_name]:-} ]]; then
-    printf 'duplicate release asset name: %s\n' "$asset_name" >&2
-    exit 1
-  fi
-  asset_names[$asset_name]=1
+  for existing_name in ${asset_names[@]+"${asset_names[@]}"}; do
+    if [[ "$existing_name" == "$asset_name" ]]; then
+      printf 'duplicate release asset name: %s\n' "$asset_name" >&2
+      exit 1
+    fi
+  done
+  asset_names+=("$asset_name")
 done
 
 remote_size() {
