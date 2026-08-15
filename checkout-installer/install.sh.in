@@ -154,6 +154,9 @@
   # @CHECKOUT_LOCK_V1_BEGIN@
   # @CHECKOUT_LOCK_V1_LIBRARY@
   # @CHECKOUT_LOCK_V1_END@
+  # @CHECKOUT_BASH_RESOLVER_BEGIN@
+  # @CHECKOUT_BASH_RESOLVER_LIBRARY@
+  # @CHECKOUT_BASH_RESOLVER_END@
 
   exec_bootstrap_git() {
     [[ -n ${CHECKOUT_INSTALLER_GIT_HOME:-} ]] ||
@@ -340,7 +343,7 @@
 
     require_delegate "$checkout_root"
     umask "$caller_umask"
-    exec "$BASH" "$checkout_root/$checkout_delegate" "$@"
+    # @CHECKOUT_BASH_EXEC_ROOT_DELEGATE@
   }
   # @CHECKOUT_POST_INSTALL_BEGIN@
   run_direct_install_with_post() {
@@ -355,7 +358,7 @@
     trap 'post_install_forward_signal INT 130' INT
     trap 'post_install_forward_signal TERM 143' TERM
     set +e
-    "$BASH" "$checkout_root/$checkout_delegate" "$@" <&0 &
+    # @CHECKOUT_BASH_RUN_ROOT_DELEGATE@
     active_child_pid=$!
     wait "$active_child_pid"
     status=$?
@@ -363,9 +366,14 @@
     set -e
     trap - HUP INT TERM
     [[ "$status" -eq 0 ]] || exit "$status"
-    exec "$BASH" "$checkout_root/$checkout_post_install_delegate" "$@"
+    # @CHECKOUT_BASH_EXEC_ROOT_POST@
   }
   # @CHECKOUT_POST_INSTALL_END@
+  # @CHECKOUT_BASH_RESOLVER_BEGIN@
+  checkout_bash_v1_select "$checkout_slug" \
+    "${CGRAF78_CHECKOUT_INSTALL_BASH:-}" ||
+    die 'Bash 4 or newer is required before checkout installation'
+  # @CHECKOUT_BASH_RESOLVER_END@
 
   # A generated installer committed at the repository root keeps ordinary
   # checkout installs fast and offline. Piped Bash has no regular source file,
@@ -948,7 +956,7 @@
   require_post_install_delegate "$checkout_dir"
   umask "$caller_umask"
   set +e
-  "$BASH" "$checkout_dir/$checkout_delegate" "$@" <&0 &
+  # @CHECKOUT_BASH_RUN_DIR_DELEGATE@
   active_child_pid=$!
   wait "$active_child_pid"
   delegate_status=$?
@@ -966,13 +974,13 @@
   release_lock_for_post_install ||
     die "cannot release managed checkout lock before post-install: $lock_dir"
   trap - EXIT HUP INT TERM
-  exec "$BASH" "$checkout_dir/$checkout_post_install_delegate" "$@"
+  # @CHECKOUT_BASH_EXEC_DIR_POST@
   # @CHECKOUT_POST_INSTALL_END@
 
   require_delegate "$checkout_dir"
   umask "$caller_umask"
   set +e
-  "$BASH" "$checkout_dir/$checkout_delegate" "$@" <&0 &
+  # @CHECKOUT_BASH_RUN_DIR_DELEGATE@
   active_child_pid=$!
   wait "$active_child_pid"
   delegate_status=$?

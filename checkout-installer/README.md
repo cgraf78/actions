@@ -66,6 +66,38 @@ intentionally unsupported; product-specific argument interpretation belongs in
 the repository-owned wrapper. When unset, the rendered installer remains
 byte-for-byte identical to the legacy single-phase form.
 
+A consumer whose runtime requires Bash 4 or newer may opt into the shared
+resolver:
+
+```bash
+CHECKOUT_INSTALLER_BASH_RESOLVER=v1
+```
+
+The renderer embeds the resolver in `install.sh` for the piped first stage and
+also generates the tracked, sourceable `support/checkout-bash-v1.sh` from the
+same provider fragment. Existing consumers keep byte-identical installers and
+receive no extra file. The resolver accepts a strict
+`CGRAF78_CHECKOUT_INSTALL_BASH` override, then checks its private XDG-state
+hint, the current interpreter, every absolute PATH component in order, and
+common package-manager locations. It continues past macOS `/bin/bash` 3.2 and
+selects the first validated Bash 4+ runtime. The selected absolute path is
+persisted atomically as a private hint and revalidated immediately before each
+checkout-owned script is executed.
+
+The sourceable API is deliberately small:
+
+```bash
+checkout_bash_v1_select STATE_NAMESPACE EXPLICIT_OVERRIDE
+checkout_bash_v1_bind ABSOLUTE_RUNTIME
+```
+
+Successful selection sets `CHECKOUT_BASH_V1_INTERPRETER`; successful binding
+sets that interpreter and `CHECKOUT_BASH_V1_RUNTIME` together. The namespace
+selects `${XDG_STATE_HOME:-$HOME/.local/state}/<namespace>/bash-v1`. The
+runtime must be a readable regular non-symlink file. Functions return 2 for API
+misuse and 1 for operational failure; they never exit or modify the caller's
+traps, options, working directory, IFS, or umask.
+
 Run the normal synchronization command from a clean Actions checkout:
 
 ```bash
@@ -78,9 +110,14 @@ For focused provider development, render only the installer:
 checkout-installer/render.sh /path/to/example-tool
 ```
 
-The renderer refuses to overwrite a consumer-owned `install.sh`. Disabling the
-policy removes only a regular file carrying the exact generated-provider
-header; custom files and symlinks remain consumer-owned.
+The renderer refuses to overwrite a consumer-owned `install.sh` or Bash
+resolver. Disabling either policy removes only regular files carrying the
+exact generated-provider header; custom files and symlinks remain
+consumer-owned. When both generated files change, the resolver is published
+before the installer that depends on it; disabling uses the inverse order.
+An interruption can therefore leave only a harmless extra/newer resolver, and
+the next render converges the pair without exposing an installer whose runtime
+library is missing.
 
 ## Runtime behavior
 
@@ -152,6 +189,13 @@ all product policy and public symlink behavior remains in the consumer.
 `PREFIX`, `BIN_DIR`, `MAN_DIR`, other environment variables, and arguments pass
 through unchanged.
 
+For a Bash-resolver consumer, selection and hint publication finish before Git,
+checkout-parent creation, lock acquisition, clone/update, or delegate work.
+Failure to find or persist Bash 4+ therefore leaves the checkout untouched.
+Both direct and piped primary/post-install delegates run through the bound
+interpreter/runtime pair rather than the Bash that happened to launch
+`install.sh`.
+
 For hermetic tests, `CGRAF78_CHECKOUT_INSTALL_REPO_URL` overrides the clone URL
 and `CGRAF78_CHECKOUT_INSTALL_DIR` overrides the exact checkout path. Production
 users normally leave both unset.
@@ -165,7 +209,8 @@ truncated input, dirty and foreign destination refusal, missing and migrating
 delegates, concurrent installs, signal forwarding, Git-environment isolation,
 hard-link rejection fallback, failed and interrupted update transactions,
 publication races, legacy and v1 stale-lock recovery, cleanup/acquisition
-races, unlocked post-install ordering and status propagation, and failed-clone
-cleanup. CI runs the
+races, unlocked post-install ordering and status propagation, Bash 3.2-to-4+
+selection, private hint refresh, resolver artifact drift/no-clobber, and
+failed-clone cleanup. CI runs the
 suite across the full shared Linux/macOS matrix, real Android/Termux, and macOS
 system Bash 3.2.

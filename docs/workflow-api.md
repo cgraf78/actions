@@ -328,9 +328,11 @@ repo actually tests.
 
 ### Inputs
 
-| Input     | Default  | Contract                                                             |
-| --------- | -------- | -------------------------------------------------------------------- |
-| `command` | required | Caller-owned command run after checkout with `shell: /bin/bash {0}`. |
+| Input                       | Default  | Contract                                                                                   |
+| --------------------------- | -------- | ------------------------------------------------------------------------------------------ |
+| `command`                   | required | Caller-owned command run after checkout with `shell: /bin/bash {0}`.                       |
+| `provision_modern_bash`     | `false`  | Installs Homebrew Bash 4+ after the optional stock-shell preflight and exports its path.    |
+| `pre_provision_command`     | empty    | Optional caller command run under stock Bash before modern Bash provisioning.              |
 
 ### Secrets
 
@@ -344,6 +346,13 @@ The workflow prints `/bin/bash --version` before evaluating `command`. Callers
 should invoke their script with `/bin/bash` explicitly when the script is not
 directly executable or when the test is meant to verify the script under the
 stock shell regardless of its shebang.
+
+Modern Bash provisioning is opt-in so ordinary Bash 3.2 consumers retain the
+stock runner environment and avoid unrelated Homebrew/network work. A caller
+that exercises a Bash-runtime handoff can use `pre_provision_command` to prove
+its Bash-3.2-only failure contract before setting `provision_modern_bash: true`;
+the final `command` receives the validated candidate path in
+`CHECKOUT_INSTALLER_TEST_MODERN_BASH`.
 
 ## `rust-ci.yml`
 

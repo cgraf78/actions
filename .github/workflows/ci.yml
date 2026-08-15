@@ -157,6 +157,8 @@ jobs:
     uses: ./.github/workflows/bash32-ci.yml
     with:
       command: /bin/bash test/checkout-installer-test
+      provision_modern_bash: true
+      pre_provision_command: /bin/bash test/checkout-installer-bash32-test
 
   release-asset-upload-bash32:
     name: Release asset upload / Bash 3.2

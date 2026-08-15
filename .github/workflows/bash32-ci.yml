@@ -7,6 +7,16 @@ on:
         description: Command to run under stock macOS Bash 3.2 after checkout.
         required: true
         type: string
+      provision_modern_bash:
+        description: Provision a separate Bash 4+ candidate after the stock-Bash preflight.
+        required: false
+        default: false
+        type: boolean
+      pre_provision_command:
+        description: Optional stock-Bash command run before modern Bash is provisioned.
+        required: false
+        default: ''
+        type: string
     secrets:
       DEPENDENCY_GH_TOKEN:
         description: Optional GitHub token exposed to caller commands as GH_TOKEN and GITHUB_TOKEN for private dependency downloads or rate-limit avoidance.
@@ -23,6 +33,29 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Verify stock Bash resolver failure
+        if: inputs.provision_modern_bash && inputs.pre_provision_command != ''
+        shell: /bin/bash {0}
+        env:
+          PRE_PROVISION_COMMAND: ${{ inputs.pre_provision_command }}
+        run: eval "$PRE_PROVISION_COMMAND"
+
+      - name: Provision modern Bash candidate
+        if: inputs.provision_modern_bash
+        shell: /bin/bash {0}
+        run: |-
+          if modern_prefix=$(brew --prefix bash 2>/dev/null); then
+            :
+          else
+            brew install bash
+            modern_prefix=$(brew --prefix bash)
+          fi
+          modern_bash="$modern_prefix/bin/bash"
+          "$modern_bash" --noprofile --norc -c \
+            'test "${BASH_VERSINFO[0]}" -ge 4'
+          printf 'CHECKOUT_INSTALLER_TEST_MODERN_BASH=%s\n' "$modern_bash" \
+            >> "$GITHUB_ENV"
 
       - name: Run Bash 3.2 smoke
         shell: /bin/bash {0}

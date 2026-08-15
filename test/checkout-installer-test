@@ -77,6 +77,63 @@ esac
 [[ -x "$active_bash" ]] ||
   fail "active Bash is not executable: $active_bash"
 
+modern_bash_candidate() {
+  local candidate=$1 major
+
+  [[ "$candidate" == /* && -f "$candidate" && -x "$candidate" ]] || return 1
+  # shellcheck disable=SC2016 # Expanded only by the candidate interpreter.
+  major=$(BASH_ENV='' ENV='' "$candidate" --noprofile --norc -c \
+    'printf "%s\n" "${BASH_VERSINFO[0]-}"' 2>/dev/null) || return 1
+  [[ "$major" =~ ^[0-9]+$ && "$major" -ge 4 ]]
+}
+
+find_modern_bash() {
+  local candidate remaining entry more
+
+  for candidate in "${CHECKOUT_INSTALLER_TEST_MODERN_BASH:-}" "$active_bash" \
+    /opt/homebrew/bin/bash /usr/local/bin/bash /opt/local/bin/bash; do
+    [[ -n "$candidate" ]] || continue
+    if modern_bash_candidate "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  # Parse PATH literally so the test helper does not reproduce the globbing bug
+  # it is meant to catch in the provider fragment.
+  remaining=${PATH-}
+  while :; do
+    case $remaining in
+      *:*)
+        entry=${remaining%%:*}
+        remaining=${remaining#*:}
+        more=true
+        ;;
+      *)
+        entry=$remaining
+        more=false
+        ;;
+    esac
+    if [[ "$entry" == /* ]] && modern_bash_candidate "$entry/bash"; then
+      printf '%s\n' "$entry/bash"
+      return 0
+    fi
+    [[ "$more" == true ]] || break
+  done
+  return 1
+}
+
+modern_bash=$(find_modern_bash) ||
+  fail 'checkout resolver tests require an absolute Bash 4 or newer candidate'
+
+file_inode() {
+  if stat -c '%i' "$1" >/dev/null 2>&1; then
+    stat -c '%i' "$1"
+  else
+    stat -f '%i' "$1"
+  fi
+}
+
 interrupt_parent_of_ready_child() {
   local ready=$1 timeout_marker=$2 child parent
 
@@ -495,6 +552,19 @@ fi
 [[ ! -e "$invalid_lock_consumer/install.sh" ]] ||
   fail "invalid checkout lock protocol left a generated installer"
 
+invalid_bash_resolver_consumer="$tmp/invalid-bash-resolver-consumer"
+write_config "$invalid_bash_resolver_consumer"
+write_delegate "$invalid_bash_resolver_consumer"
+printf 'CHECKOUT_INSTALLER_BASH_RESOLVER=unknown\n' \
+  >>"$invalid_bash_resolver_consumer/scripts/checkout-installer.conf"
+if "$root/checkout-installer/render.sh" "$invalid_bash_resolver_consumer" \
+  >/dev/null 2>&1; then
+  fail "renderer accepted an unknown Bash resolver version"
+fi
+[[ ! -e "$invalid_bash_resolver_consumer/install.sh" &&
+  ! -e "$invalid_bash_resolver_consumer/support/checkout-bash-v1.sh" ]] ||
+  fail "invalid Bash resolver policy left generated artifacts"
+
 option_delegate_consumer="$tmp/option-delegate-consumer"
 write_config "$option_delegate_consumer"
 printf 'CHECKOUT_INSTALLER_DELEGATE=--stage\n' \
@@ -589,6 +659,560 @@ CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE=support/post-install.sh \
 [[ $(git hash-object "$ambient_post_consumer/install.sh") == 252c80d2fc4419e211ae31482cf888f2ad72fac6 ]] ||
   fail "ambient post-install policy changed generated installer bytes"
 
+# The Bash resolver is opt-in so every existing consumer keeps exact generated
+# bytes. An opted-in consumer receives the same reviewed function fragment in
+# both the self-contained installer and one tracked sourceable artifact for its
+# checkout-owned trampoline.
+resolver_preflight_consumer="$tmp/resolver-preflight-consumer"
+write_config "$resolver_preflight_consumer"
+printf '%s\n' \
+  'CHECKOUT_INSTALLER_DELEGATE=install-checkout.sh' \
+  'CHECKOUT_INSTALLER_BASH_RESOLVER=v1' \
+  >>"$resolver_preflight_consumer/scripts/checkout-installer.conf"
+printf '#!/usr/bin/env bash\nexit 0\n' \
+  >"$resolver_preflight_consumer/install-checkout.sh"
+chmod 0755 "$resolver_preflight_consumer/install-checkout.sh"
+printf 'consumer-owned installer\n' >"$resolver_preflight_consumer/install.sh"
+if "$root/checkout-installer/render.sh" "$resolver_preflight_consumer" \
+  >/dev/null 2>&1; then
+  fail "renderer overwrote a consumer-owned installer before resolver setup"
+fi
+grep -Fqx 'consumer-owned installer' \
+  "$resolver_preflight_consumer/install.sh" ||
+  fail "renderer changed a consumer-owned installer during preflight"
+[[ ! -e "$resolver_preflight_consumer/support" &&
+  ! -L "$resolver_preflight_consumer/support" ]] ||
+  fail "renderer created resolver state before no-clobber preflight completed"
+
+bash_resolver_consumer="$tmp/bash-resolver-consumer"
+bash_resolver_artifact="$bash_resolver_consumer/support/checkout-bash-v1.sh"
+bash_resolver_state="$tmp/bash-resolver-state"
+bash_resolver_direct_log="$tmp/bash-resolver-direct.log"
+bash_resolver_direct_post_log="$tmp/bash-resolver-direct-post.log"
+bash_resolver_pipe_log="$tmp/bash-resolver-pipe.log"
+bash_resolver_pipe_post_log="$tmp/bash-resolver-pipe-post.log"
+write_config "$bash_resolver_consumer"
+write_delegate "$bash_resolver_consumer"
+write_post_install "$bash_resolver_consumer"
+printf '%s\n' \
+  'CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE=support/post-install.sh' \
+  'CHECKOUT_INSTALLER_LOCK_PROTOCOL=v1' \
+  'CHECKOUT_INSTALLER_BASH_RESOLVER=v1' \
+  >>"$bash_resolver_consumer/scripts/checkout-installer.conf"
+"$root/checkout-installer/render.sh" "$bash_resolver_consumer" >/dev/null
+[[ -f "$bash_resolver_artifact" && ! -L "$bash_resolver_artifact" &&
+  ! -x "$bash_resolver_artifact" ]] ||
+  fail "renderer did not create a sourceable non-executable Bash resolver"
+grep -Fqx '# Generated by cgraf78/actions checkout Bash resolver. Do not edit.' \
+  "$bash_resolver_artifact" ||
+  fail "generated Bash resolver does not identify its provider"
+[[ $(tail -n +3 "$bash_resolver_artifact" | git hash-object --stdin) == $(git hash-object "$root/checkout-installer/bash-resolver-v1.sh.in") ]] ||
+  fail "generated Bash resolver does not contain the provider fragment exactly"
+
+git -C "$bash_resolver_consumer" init --quiet --initial-branch=main --template=''
+git -C "$bash_resolver_consumer" config core.hooksPath /dev/null
+git -C "$bash_resolver_consumer" config commit.gpgsign false
+git -C "$bash_resolver_consumer" config user.name 'Checkout Installer Test'
+git -C "$bash_resolver_consumer" config user.email checkout-installer@example.invalid
+git -C "$bash_resolver_consumer" add \
+  install.sh scripts/checkout-installer.conf \
+  support/install-checkout.sh support/post-install.sh
+set +e
+bash_resolver_untracked_output=$(
+  "$root/checkout-installer/render.sh" --check "$bash_resolver_consumer" 2>&1
+)
+bash_resolver_untracked_status=$?
+set -e
+[[ "$bash_resolver_untracked_status" -ne 0 &&
+  "$bash_resolver_untracked_output" == *'generated Bash resolver is not tracked'* ]] ||
+  fail "renderer check accepted an untracked Bash resolver"
+git -C "$bash_resolver_consumer" add support/checkout-bash-v1.sh
+git -C "$bash_resolver_consumer" commit --quiet -m 'Bash resolver fixture'
+# shellcheck disable=SC2012 # Controlled fixture names; -A includes leaked temps.
+LC_ALL=C ls -A1 "$bash_resolver_consumer/support" | LC_ALL=C sort \
+  >"$tmp/bash-resolver-support.before"
+for _ in 1 2 3; do
+  "$root/checkout-installer/render.sh" --check "$bash_resolver_consumer" \
+    >/dev/null ||
+    fail "freshly generated Bash resolver did not pass the render check"
+done
+# shellcheck disable=SC2012 # Controlled fixture names; -A includes leaked temps.
+LC_ALL=C ls -A1 "$bash_resolver_consumer/support" | LC_ALL=C sort \
+  >"$tmp/bash-resolver-support.after"
+cmp -s "$tmp/bash-resolver-support.before" \
+  "$tmp/bash-resolver-support.after" ||
+  fail "successful resolver checks leaked temporary artifacts"
+printf '\n# resolver drift\n' >>"$bash_resolver_artifact"
+if "$root/checkout-installer/render.sh" --check "$bash_resolver_consumer" \
+  >/dev/null 2>&1; then
+  fail "drifted generated Bash resolver unexpectedly passed the render check"
+fi
+"$root/checkout-installer/render.sh" "$bash_resolver_consumer" >/dev/null ||
+  fail "renderer did not restore a drifted Bash resolver"
+
+# The library must become live before the installer that references it. If the
+# second publication fails, the old installer remains runnable and a normal
+# rerender converges the harmless newer-library/older-installer state.
+printf '\n# installer publication drift\n' \
+  >>"$bash_resolver_consumer/install.sh"
+printf '\n# resolver publication drift\n' >>"$bash_resolver_artifact"
+bash_resolver_mv_wrapper="$tmp/bash-resolver-mv-wrapper"
+mkdir -p "$bash_resolver_mv_wrapper"
+real_mv=$(type -P mv)
+cat >"$bash_resolver_mv_wrapper/mv" <<EOF
+#!$active_bash
+case \${2:-} in
+  */install.sh) exit 73 ;;
+esac
+exec "$real_mv" "\$@"
+EOF
+chmod 0755 "$bash_resolver_mv_wrapper/mv"
+if PATH="$bash_resolver_mv_wrapper:$PATH" \
+  "$root/checkout-installer/render.sh" "$bash_resolver_consumer" \
+  >/dev/null 2>&1; then
+  fail "renderer ignored a failed installer publication"
+fi
+[[ $(tail -n +3 "$bash_resolver_artifact" | git hash-object --stdin) == $(git hash-object "$root/checkout-installer/bash-resolver-v1.sh.in") ]] ||
+  fail "renderer did not publish the resolver before the dependent installer"
+grep -Fqx '# installer publication drift' \
+  "$bash_resolver_consumer/install.sh" ||
+  fail "failed pair publication unexpectedly replaced the old installer"
+"$root/checkout-installer/render.sh" "$bash_resolver_consumer" >/dev/null ||
+  fail "renderer did not recover an interrupted generated pair publication"
+
+bash_resolver_installer_before=$(git hash-object \
+  "$bash_resolver_consumer/install.sh")
+bash_resolver_directory_mv_wrapper="$tmp/bash-resolver-directory-mv-wrapper"
+mkdir -p "$bash_resolver_directory_mv_wrapper"
+real_rm=$(type -P rm)
+real_mkdir=$(type -P mkdir)
+cat >"$bash_resolver_directory_mv_wrapper/mv" <<EOF
+#!$active_bash
+case \${2:-} in
+  */support/checkout-bash-v1.sh)
+    "$real_rm" -f "\$2"
+    "$real_mkdir" "\$2"
+    printf 'late renderer directory\n' >"\$2/foreign"
+    ;;
+esac
+exec "$real_mv" "\$@"
+EOF
+chmod 0755 "$bash_resolver_directory_mv_wrapper/mv"
+if PATH="$bash_resolver_directory_mv_wrapper:$PATH" \
+  "$root/checkout-installer/render.sh" "$bash_resolver_consumer" \
+  >/dev/null 2>&1; then
+  fail "renderer accepted a late directory at the resolver destination"
+fi
+[[ "$(git hash-object "$bash_resolver_consumer/install.sh")" == "$bash_resolver_installer_before" ]] ||
+  fail "failed resolver publication replaced the dependent installer"
+printf 'foreign\n' >"$tmp/bash-resolver-render-directory.expected"
+# shellcheck disable=SC2012 # Controlled fixture names; -A detects temp debris.
+LC_ALL=C ls -A1 "$bash_resolver_artifact" \
+  >"$tmp/bash-resolver-render-directory.actual"
+cmp -s "$tmp/bash-resolver-render-directory.expected" \
+  "$tmp/bash-resolver-render-directory.actual" ||
+  fail "failed resolver publication left generated directory debris"
+rm "$bash_resolver_artifact/foreign"
+rmdir "$bash_resolver_artifact"
+"$root/checkout-installer/render.sh" "$bash_resolver_consumer" >/dev/null ||
+  fail "renderer did not recover after a late resolver directory collision"
+
+bash_resolver_selected_dir="$tmp/bash resolver selected/bin"
+mkdir -p "$bash_resolver_selected_dir"
+ln -s "$modern_bash" "$bash_resolver_selected_dir/bash"
+bash_resolver_selected="$bash_resolver_selected_dir/bash"
+CHECKOUT_TEST_LOG="$bash_resolver_direct_log" \
+  CHECKOUT_TEST_POST_LOG="$bash_resolver_direct_post_log" \
+  XDG_STATE_HOME="$bash_resolver_state" \
+  CGRAF78_CHECKOUT_INSTALL_BASH="$bash_resolver_selected" \
+  "$active_bash" "$bash_resolver_consumer/install.sh" first 'two words' \
+  >/dev/null ||
+  fail "direct install did not use the shared Bash resolver"
+grep -Fqx "bash=$bash_resolver_selected" "$bash_resolver_direct_log" ||
+  fail "direct primary delegate did not use the selected Bash"
+grep -Fqx "bash=$bash_resolver_selected" "$bash_resolver_direct_post_log" ||
+  fail "direct post-install delegate did not use the selected Bash"
+bash_resolver_hint="$bash_resolver_state/example-tool/bash-v1"
+[[ -f "$bash_resolver_hint" && ! -L "$bash_resolver_hint" ]] ||
+  fail "Bash resolver did not persist a private regular hint"
+[[ $(sed -n '1p' "$bash_resolver_hint") == 'cgraf78 checkout Bash runtime v1' &&
+$(sed -n '2p' "$bash_resolver_hint") == "$bash_resolver_selected" &&
+-z $(sed -n '3p' "$bash_resolver_hint") ]] ||
+  fail "Bash resolver persisted malformed hint bytes"
+if stat -c '%a' "$bash_resolver_hint" >/dev/null 2>&1; then
+  bash_resolver_hint_mode=$(stat -c '%a' "$bash_resolver_hint")
+else
+  bash_resolver_hint_mode=$(stat -f '%Lp' "$bash_resolver_hint")
+fi
+[[ "$bash_resolver_hint_mode" == 600 ]] ||
+  fail "Bash resolver hint is not private: $bash_resolver_hint_mode"
+if stat -c '%a' "${bash_resolver_hint%/*}" >/dev/null 2>&1; then
+  bash_resolver_hint_parent_mode=$(stat -c '%a' "${bash_resolver_hint%/*}")
+else
+  bash_resolver_hint_parent_mode=$(stat -f '%Lp' "${bash_resolver_hint%/*}")
+fi
+[[ "$bash_resolver_hint_parent_mode" == 700 ]] ||
+  fail "Bash resolver state directory is not private: $bash_resolver_hint_parent_mode"
+
+bash_resolver_remote="$tmp/bash-resolver-tool.git"
+bash_resolver_managed="$tmp/bash-resolver-managed/example-tool"
+git init --quiet --bare --initial-branch=main "$bash_resolver_remote"
+git -C "$bash_resolver_consumer" remote add origin "$bash_resolver_remote"
+git -C "$bash_resolver_consumer" push --quiet --set-upstream origin main
+CHECKOUT_TEST_LOG="$bash_resolver_pipe_log" \
+  CHECKOUT_TEST_POST_LOG="$bash_resolver_pipe_post_log" \
+  XDG_STATE_HOME="$bash_resolver_state" \
+  CGRAF78_CHECKOUT_INSTALL_BASH="$bash_resolver_selected" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$bash_resolver_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$bash_resolver_remote" \
+  "$active_bash" -s -- first 'two words' \
+  <"$bash_resolver_consumer/install.sh" >/dev/null ||
+  fail "piped install did not use the shared Bash resolver"
+grep -Fqx "bash=$bash_resolver_selected" "$bash_resolver_pipe_log" ||
+  fail "piped primary delegate did not use the selected Bash"
+grep -Fqx "bash=$bash_resolver_selected" "$bash_resolver_pipe_post_log" ||
+  fail "piped post-install delegate did not use the selected Bash"
+grep -Fqx 'checkout_lock_kind=v1' "$bash_resolver_pipe_log" ||
+  fail "Bash resolver fixture did not retain the shared checkout lock"
+
+bash_resolver_invalid_managed="$tmp/bash-resolver-invalid-managed/example-tool"
+bash_resolver_invalid_state="$tmp/bash-resolver-invalid-state"
+bash_resolver_invalid_bin="$tmp/bash-resolver-invalid-bin"
+mkdir -p "$bash_resolver_invalid_bin"
+cat >"$bash_resolver_invalid_bin/bash" <<EOF
+#!$active_bash
+printf 'cgraf78-checkout-bash-v1:3\n'
+EOF
+chmod 0755 "$bash_resolver_invalid_bin/bash"
+set +e
+bash_resolver_invalid_output=$(CHECKOUT_TEST_LOG="$tmp/bash-resolver-invalid.log" \
+  CHECKOUT_TEST_POST_LOG="$tmp/bash-resolver-invalid-post.log" \
+  XDG_STATE_HOME="$bash_resolver_invalid_state" \
+  CGRAF78_CHECKOUT_INSTALL_BASH="$bash_resolver_invalid_bin/bash" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$bash_resolver_invalid_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$bash_resolver_remote" \
+  "$active_bash" -s <"$bash_resolver_consumer/install.sh" 2>&1)
+bash_resolver_invalid_status=$?
+set -e
+[[ "$bash_resolver_invalid_status" -ne 0 &&
+  "$bash_resolver_invalid_output" == *'explicit interpreter is not Bash 4 or newer'* ]] ||
+  fail "invalid explicit Bash did not fail without fallback"
+[[ ! -e "$bash_resolver_invalid_managed" &&
+  ! -e "$bash_resolver_invalid_state" ]] ||
+  fail "invalid explicit Bash mutated checkout or state"
+
+bash_resolver_old_dir="$tmp/bash-resolver-old/bin"
+bash_resolver_later_dir="$tmp/bash resolver later/bin"
+bash_resolver_path_state="$tmp/bash-resolver-path-state"
+mkdir -p "$bash_resolver_old_dir" "$bash_resolver_later_dir"
+cat >"$bash_resolver_old_dir/bash" <<EOF
+#!$active_bash
+printf 'cgraf78-checkout-bash-v1:3\n'
+EOF
+chmod 0755 "$bash_resolver_old_dir/bash"
+ln -s "$modern_bash" "$bash_resolver_later_dir/bash"
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+bash_resolver_path_result=$(XDG_STATE_HOME="$bash_resolver_path_state" \
+  "$active_bash" -c '
+    set -euo pipefail
+    . "$1"
+    BASH=$2
+    PATH=$3:$4:$5
+    checkout_bash_v1_select pathcase ""
+    printf "%s\n" "$CHECKOUT_BASH_V1_INTERPRETER"
+  ' -- "$bash_resolver_artifact" "$bash_resolver_old_dir/bash" \
+  "$bash_resolver_old_dir" "$bash_resolver_later_dir" "$platform_tool_path")
+[[ "$bash_resolver_path_result" == "$bash_resolver_later_dir/bash" ]] ||
+  fail "Bash resolver did not continue past an old first PATH entry"
+bash_resolver_hint_inode_before=$(file_inode \
+  "$bash_resolver_path_state/pathcase/bash-v1")
+
+# The second selection has no valid Bash on PATH. It must reuse the persisted
+# hint rather than accidentally depending on the caller's current interpreter.
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+bash_resolver_hint_result=$(XDG_STATE_HOME="$bash_resolver_path_state" \
+  "$active_bash" -c '
+    set -euo pipefail
+    . "$1"
+    BASH=$2
+    PATH=$3:$4
+    checkout_bash_v1_select pathcase ""
+    printf "%s\n" "$CHECKOUT_BASH_V1_INTERPRETER"
+  ' -- "$bash_resolver_artifact" "$bash_resolver_old_dir/bash" \
+  "$bash_resolver_old_dir" "$platform_tool_path")
+[[ "$bash_resolver_hint_result" == "$bash_resolver_later_dir/bash" ]] ||
+  fail "Bash resolver did not reuse its valid persisted hint"
+[[ "$(file_inode "$bash_resolver_path_state/pathcase/bash-v1")" == "$bash_resolver_hint_inode_before" ]] ||
+  fail "Bash resolver rewrote an unchanged valid hint"
+
+bash_resolver_glob_parent="$tmp/bash-resolver-glob-path"
+bash_resolver_glob_literal="$bash_resolver_glob_parent/[ab]"
+bash_resolver_glob_match="$bash_resolver_glob_parent/a"
+mkdir -p "$bash_resolver_glob_literal" "$bash_resolver_glob_match"
+ln -s "$modern_bash" "$bash_resolver_glob_literal/bash"
+ln -s "$modern_bash" "$bash_resolver_glob_match/bash"
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+bash_resolver_glob_result=$(XDG_STATE_HOME="$tmp/bash-resolver-glob-state" \
+  "$active_bash" -c '
+    set -euo pipefail
+    . "$1"
+    BASH=$2
+    PATH=$3:$4
+    checkout_bash_v1_select globcase ""
+    printf "%s\n" "$CHECKOUT_BASH_V1_INTERPRETER"
+  ' -- "$bash_resolver_artifact" "$bash_resolver_old_dir/bash" \
+  "$bash_resolver_glob_literal" "$platform_tool_path")
+[[ "$bash_resolver_glob_result" == "$bash_resolver_glob_literal/bash" ]] ||
+  fail "Bash resolver expanded glob characters in a literal PATH component"
+
+rm -f "$bash_resolver_later_dir/bash"
+bash_resolver_replacement_dir="$tmp/bash-resolver-replacement/bin"
+mkdir -p "$bash_resolver_replacement_dir"
+ln -s "$modern_bash" "$bash_resolver_replacement_dir/bash"
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+bash_resolver_refresh_result=$(XDG_STATE_HOME="$bash_resolver_path_state" \
+  "$active_bash" -c '
+    set -euo pipefail
+    . "$1"
+    BASH=$2
+    PATH=$3:$4:$5
+    checkout_bash_v1_select pathcase ""
+    printf "%s\n" "$CHECKOUT_BASH_V1_INTERPRETER"
+  ' -- "$bash_resolver_artifact" "$bash_resolver_old_dir/bash" \
+  "$bash_resolver_old_dir" "$bash_resolver_replacement_dir" \
+  "$platform_tool_path")
+[[ "$bash_resolver_refresh_result" == "$bash_resolver_replacement_dir/bash" &&
+  $(sed -n '2p' "$bash_resolver_path_state/pathcase/bash-v1") == "$bash_resolver_replacement_dir/bash" ]] ||
+  fail "Bash resolver did not refresh a stale persisted hint"
+
+bash_resolver_malformed_state="$tmp/bash-resolver-malformed-state"
+mkdir -p "$bash_resolver_malformed_state/pathcase"
+printf 'foreign hint bytes\n' \
+  >"$bash_resolver_malformed_state/pathcase/bash-v1"
+cp "$bash_resolver_malformed_state/pathcase/bash-v1" \
+  "$tmp/bash-resolver-malformed.expected"
+set +e
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+XDG_STATE_HOME="$bash_resolver_malformed_state" \
+  "$active_bash" -c '
+    . "$1"
+    BASH=$2
+    PATH=$3:$4:$5
+    checkout_bash_v1_select pathcase ""
+  ' -- "$bash_resolver_artifact" "$bash_resolver_old_dir/bash" \
+  "$bash_resolver_old_dir" "$bash_resolver_replacement_dir" \
+  "$platform_tool_path" >/dev/null 2>&1
+bash_resolver_malformed_status=$?
+set -e
+[[ "$bash_resolver_malformed_status" -ne 0 ]] ||
+  fail "Bash resolver accepted a malformed persisted hint"
+cmp -s "$tmp/bash-resolver-malformed.expected" \
+  "$bash_resolver_malformed_state/pathcase/bash-v1" ||
+  fail "Bash resolver overwrote a foreign malformed hint"
+
+# Explicit policy is strict about the interpreter, but it does not confer
+# ownership of an existing hint. Foreign regular files, symlinks, and
+# directories must all be preserved before the explicit candidate is used.
+set +e
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+XDG_STATE_HOME="$bash_resolver_malformed_state" \
+  "$active_bash" -c '
+    . "$1"
+    checkout_bash_v1_select pathcase "$2"
+  ' -- "$bash_resolver_artifact" "$modern_bash" >/dev/null 2>&1
+bash_resolver_explicit_malformed_status=$?
+set -e
+[[ "$bash_resolver_explicit_malformed_status" -ne 0 ]] ||
+  fail "explicit Bash overwrote a malformed runtime hint"
+cmp -s "$tmp/bash-resolver-malformed.expected" \
+  "$bash_resolver_malformed_state/pathcase/bash-v1" ||
+  fail "explicit Bash changed a malformed runtime hint"
+
+bash_resolver_oversized_state="$tmp/bash-resolver-oversized-state"
+mkdir -p "$bash_resolver_oversized_state/pathcase"
+printf '%05000d' 0 >"$bash_resolver_oversized_state/pathcase/bash-v1"
+cp "$bash_resolver_oversized_state/pathcase/bash-v1" \
+  "$tmp/bash-resolver-oversized.expected"
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+if XDG_STATE_HOME="$bash_resolver_oversized_state" \
+  "$active_bash" -c '
+    . "$1"
+    checkout_bash_v1_select pathcase "$2"
+  ' -- "$bash_resolver_artifact" "$modern_bash" >/dev/null 2>&1; then
+  fail "Bash resolver accepted an oversized runtime hint"
+fi
+cmp -s "$tmp/bash-resolver-oversized.expected" \
+  "$bash_resolver_oversized_state/pathcase/bash-v1" ||
+  fail "Bash resolver changed an oversized runtime hint"
+
+bash_resolver_symlink_state="$tmp/bash-resolver-symlink-state"
+mkdir -p "$bash_resolver_symlink_state/pathcase"
+printf 'foreign symlink target\n' >"$bash_resolver_symlink_state/foreign"
+ln -s ../foreign "$bash_resolver_symlink_state/pathcase/bash-v1"
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+if XDG_STATE_HOME="$bash_resolver_symlink_state" \
+  "$active_bash" -c '
+    . "$1"
+    checkout_bash_v1_select pathcase "$2"
+  ' -- "$bash_resolver_artifact" "$modern_bash" >/dev/null 2>&1; then
+  fail "explicit Bash accepted a symlinked runtime hint"
+fi
+[[ -L "$bash_resolver_symlink_state/pathcase/bash-v1" ]] ||
+  fail "explicit Bash replaced a symlinked runtime hint"
+grep -Fqx 'foreign symlink target' "$bash_resolver_symlink_state/foreign" ||
+  fail "explicit Bash changed a symlinked hint target"
+
+bash_resolver_directory_state="$tmp/bash-resolver-directory-state"
+mkdir -p "$bash_resolver_directory_state/pathcase/bash-v1"
+printf 'foreign directory entry\n' \
+  >"$bash_resolver_directory_state/pathcase/bash-v1/foreign"
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+if XDG_STATE_HOME="$bash_resolver_directory_state" \
+  "$active_bash" -c '
+    . "$1"
+    checkout_bash_v1_select pathcase "$2"
+  ' -- "$bash_resolver_artifact" "$modern_bash" >/dev/null 2>&1; then
+  fail "explicit Bash accepted a directory at the runtime hint"
+fi
+grep -Fqx 'foreign directory entry' \
+  "$bash_resolver_directory_state/pathcase/bash-v1/foreign" ||
+  fail "explicit Bash changed a foreign runtime hint directory"
+
+# Force a directory to appear after the initial missing-hint classification.
+# Portable ln may place its source inside that directory, so the resolver must
+# reject the canonical object and retire only its uniquely named child.
+bash_resolver_collision_state="$tmp/bash-resolver-collision-state"
+bash_resolver_ln_wrapper="$tmp/bash-resolver-ln-wrapper"
+mkdir -p "$bash_resolver_ln_wrapper"
+real_ln=$(type -P ln)
+real_mkdir=$(type -P mkdir)
+cat >"$bash_resolver_ln_wrapper/ln" <<EOF
+#!$active_bash
+case \${2:-} in
+  */bash-v1)
+    "$real_mkdir" "\$2"
+    printf 'late foreign entry\n' >"\$2/foreign"
+    ;;
+esac
+exec "$real_ln" "\$@"
+EOF
+chmod 0755 "$bash_resolver_ln_wrapper/ln"
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+if PATH="$bash_resolver_ln_wrapper:$PATH" \
+  XDG_STATE_HOME="$bash_resolver_collision_state" \
+  "$active_bash" -c '
+    . "$1"
+    checkout_bash_v1_select pathcase "$2"
+  ' -- "$bash_resolver_artifact" "$modern_bash" >/dev/null 2>&1; then
+  fail "Bash resolver accepted a late directory collision"
+fi
+printf 'foreign\n' >"$tmp/bash-resolver-collision.expected"
+# shellcheck disable=SC2012 # Controlled fixture names; -A detects temp debris.
+LC_ALL=C ls -A1 "$bash_resolver_collision_state/pathcase/bash-v1" \
+  >"$tmp/bash-resolver-collision.actual"
+cmp -s "$tmp/bash-resolver-collision.expected" \
+  "$tmp/bash-resolver-collision.actual" ||
+  fail "Bash resolver left generated debris in a late foreign directory"
+
+bash_resolver_runtime_dir="$tmp/bash resolver runtime"
+mkdir -p "$bash_resolver_runtime_dir"
+cp "$bash_resolver_consumer/support/install-checkout.sh" \
+  "$bash_resolver_runtime_dir/runtime.sh"
+ln -s "$bash_resolver_runtime_dir/runtime.sh" \
+  "$bash_resolver_runtime_dir/runtime-link.sh"
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+XDG_STATE_HOME="$tmp/bash-resolver-bind-state" \
+  "$active_bash" -c '
+    set -euo pipefail
+    . "$1"
+    checkout_bash_v1_select bindcase "$2"
+    checkout_bash_v1_bind "$3"
+    [[ "$CHECKOUT_BASH_V1_RUNTIME" == "$3" ]]
+    checkout_bash_v1_select bindcase "$2"
+    if checkout_bash_v1_bind "$4"; then
+      exit 90
+    fi
+    [[ -z "$CHECKOUT_BASH_V1_INTERPRETER" &&
+      -z "$CHECKOUT_BASH_V1_RUNTIME" ]]
+  ' -- "$bash_resolver_artifact" "$modern_bash" \
+  "$bash_resolver_runtime_dir/runtime.sh" \
+  "$bash_resolver_runtime_dir/runtime-link.sh" 2>/dev/null ||
+  fail "Bash resolver did not bind an exact regular runtime fail closed"
+
+foreign_bash_resolver_consumer="$tmp/foreign-bash-resolver-consumer"
+write_config "$foreign_bash_resolver_consumer"
+write_delegate "$foreign_bash_resolver_consumer"
+printf 'CHECKOUT_INSTALLER_BASH_RESOLVER=v1\n' \
+  >>"$foreign_bash_resolver_consumer/scripts/checkout-installer.conf"
+printf 'consumer owned\n' \
+  >"$foreign_bash_resolver_consumer/support/checkout-bash-v1.sh"
+if "$root/checkout-installer/render.sh" "$foreign_bash_resolver_consumer" \
+  >/dev/null 2>&1; then
+  fail "renderer overwrote a consumer-owned Bash resolver"
+fi
+grep -Fqx 'consumer owned' \
+  "$foreign_bash_resolver_consumer/support/checkout-bash-v1.sh" ||
+  fail "renderer changed a consumer-owned Bash resolver"
+
+late_resolver_consumer="$tmp/late-resolver-consumer"
+late_resolver_wrapper="$tmp/late-resolver-wrapper"
+write_config "$late_resolver_consumer"
+write_delegate "$late_resolver_consumer"
+printf 'CHECKOUT_INSTALLER_BASH_RESOLVER=v1\n' \
+  >>"$late_resolver_consumer/scripts/checkout-installer.conf"
+mkdir -p "$late_resolver_wrapper"
+real_ln=$(type -P ln)
+cat >"$late_resolver_wrapper/ln" <<EOF
+#!$active_bash
+case \${2:-} in
+  */support/checkout-bash-v1.sh)
+    printf 'late consumer-owned resolver\n' >"\$2"
+    ;;
+esac
+exec "$real_ln" "\$@"
+EOF
+chmod 0755 "$late_resolver_wrapper/ln"
+if PATH="$late_resolver_wrapper:$PATH" \
+  "$root/checkout-installer/render.sh" "$late_resolver_consumer" \
+  >/dev/null 2>&1; then
+  fail "renderer overwrote a resolver that appeared during publication"
+fi
+grep -Fqx 'late consumer-owned resolver' \
+  "$late_resolver_consumer/support/checkout-bash-v1.sh" ||
+  fail "renderer changed a late consumer-owned resolver"
+[[ ! -e "$late_resolver_consumer/install.sh" ]] ||
+  fail "failed resolver publication exposed a dependent installer"
+
+symlink_support_consumer="$tmp/symlink-support-consumer"
+symlink_support_target="$tmp/symlink-support-target"
+write_config "$symlink_support_consumer"
+write_delegate "$symlink_support_consumer"
+mv "$symlink_support_consumer/support" "$symlink_support_target"
+ln -s "$symlink_support_target" "$symlink_support_consumer/support"
+printf '#!/usr/bin/env bash\n%s\nforeign generated-looking bytes\n' \
+  '# Generated by cgraf78/actions checkout Bash resolver. Do not edit.' \
+  >"$symlink_support_target/checkout-bash-v1.sh"
+cp "$symlink_support_target/checkout-bash-v1.sh" \
+  "$tmp/symlink-support-resolver.expected"
+"$root/checkout-installer/render.sh" "$symlink_support_consumer" >/dev/null ||
+  fail "resolver-disabled consumer with symlinked support did not render"
+cmp -s "$tmp/symlink-support-resolver.expected" \
+  "$symlink_support_target/checkout-bash-v1.sh" ||
+  fail "renderer retired a resolver through a symlinked support parent"
+
+# Disabling the opt-in retires only the generated resolver and restores the
+# exact pre-feature installer bytes for the same post-install/v1 configuration.
+sed '/^CHECKOUT_INSTALLER_BASH_RESOLVER=/d' \
+  "$bash_resolver_consumer/scripts/checkout-installer.conf" \
+  >"$bash_resolver_consumer/scripts/checkout-installer.conf.tmp"
+mv "$bash_resolver_consumer/scripts/checkout-installer.conf.tmp" \
+  "$bash_resolver_consumer/scripts/checkout-installer.conf"
+"$root/checkout-installer/render.sh" "$bash_resolver_consumer" >/dev/null
+[[ ! -e "$bash_resolver_artifact" && ! -L "$bash_resolver_artifact" ]] ||
+  fail "disabled Bash resolver left its generated artifact"
+[[ $(git hash-object "$bash_resolver_consumer/install.sh") == 1f0f6c098c5e29373d1ddb43a60d7a280e68d51f ]] ||
+  fail "disabled Bash resolver did not restore prior generated bytes"
+
 source_work="$tmp/source-work"
 remote="$tmp/example-tool.git"
 write_config "$source_work"
@@ -624,6 +1248,8 @@ printf 'CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE=support/post-install.sh\n' \
   >>"$post_source/scripts/checkout-installer.conf"
 printf 'post\n' >"$post_source/version.txt"
 "$root/checkout-installer/render.sh" "$post_source" >/dev/null
+[[ $(git hash-object "$post_source/install.sh") == f07345e85e46d57c8a3a1c8e88f7d923aea2d05b ]] ||
+  fail "disabled Bash resolver changed post-install generated bytes"
 git -C "$post_source" init --quiet --initial-branch=main --template=''
 git -C "$post_source" config core.hooksPath /dev/null
 git -C "$post_source" config commit.gpgsign false
@@ -912,6 +1538,8 @@ printf '%s\n' \
   'CHECKOUT_INSTALLER_LOCK_PROTOCOL=v1' \
   >>"$post_v1_source/scripts/checkout-installer.conf"
 "$root/checkout-installer/render.sh" "$post_v1_source" >/dev/null
+[[ $(git hash-object "$post_v1_source/install.sh") == 1f0f6c098c5e29373d1ddb43a60d7a280e68d51f ]] ||
+  fail "disabled Bash resolver changed post-install v1 generated bytes"
 git -C "$post_v1_source" init --quiet --initial-branch=main --template=''
 git -C "$post_v1_source" config core.hooksPath /dev/null
 git -C "$post_v1_source" config commit.gpgsign false
@@ -953,6 +1581,8 @@ printf 'CHECKOUT_INSTALLER_LOCK_PROTOCOL=v1\n' \
   >>"$lock_source/scripts/checkout-installer.conf"
 printf 'lock-v1\n' >"$lock_source/version.txt"
 "$root/checkout-installer/render.sh" "$lock_source" >/dev/null
+[[ $(git hash-object "$lock_source/install.sh") == 0f3dc88bdecfc399fdd48d9211b247734c0040cf ]] ||
+  fail "disabled Bash resolver changed v1 generated bytes"
 git -C "$lock_source" init --quiet --initial-branch=main --template=''
 git -C "$lock_source" config core.hooksPath /dev/null
 git -C "$lock_source" config commit.gpgsign false
