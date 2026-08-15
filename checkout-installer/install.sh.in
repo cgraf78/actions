@@ -7,6 +7,11 @@
 
 {
   set -euo pipefail
+  # An inherited CDPATH may make a successful `cd` print to stdout, corrupting
+  # command substitutions that resolve the installer and checkout roots.
+  CDPATH=
+  # Exported BASHOPTS can otherwise make reserved CLI tokens case-insensitive.
+  shopt -u nocasematch
   caller_umask=$(umask)
   umask 077
 

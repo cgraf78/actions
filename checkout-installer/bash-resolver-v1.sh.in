@@ -99,9 +99,54 @@ _checkout_bash_v1_read_hint() {
   printf '%s\n' "$interpreter"
 }
 
+_checkout_bash_v1_detect_link_tool() {
+  local parent=$1 probe source ln_bin
+
+  ln_bin=$(type -P ln 2>/dev/null) || return 1
+  probe=$(mktemp -d "$parent/.bash-v1.tools.XXXXXX") || return 1
+  source=$probe/source
+  printf 'probe\n' >"$source"
+  if "$ln_bin" -T -- "$source" "$probe/link" 2>/dev/null &&
+    [[ "$source" -ef "$probe/link" ]]; then
+    _CHECKOUT_BASH_V1_LN_MODE=T
+  else
+    rm -f "$probe/link"
+    if "$ln_bin" -h "$source" "$probe/link" 2>/dev/null &&
+      [[ "$source" -ef "$probe/link" ]]; then
+      _CHECKOUT_BASH_V1_LN_MODE=h
+    else
+      rm -f "$probe/link" "$source"
+      rmdir "$probe" 2>/dev/null || true
+      _checkout_bash_v1_error 'ln lacks exact-destination hard-link publication'
+      return 1
+    fi
+  fi
+  rm -f "$probe/link" "$source"
+  rmdir "$probe" || return 1
+  _CHECKOUT_BASH_V1_LN_BIN=$ln_bin
+}
+
+_checkout_bash_v1_link_exact() {
+  if [[ $_CHECKOUT_BASH_V1_LN_MODE == T ]]; then
+    "$_CHECKOUT_BASH_V1_LN_BIN" -T -- "$1" "$2"
+  else
+    "$_CHECKOUT_BASH_V1_LN_BIN" -h "$1" "$2"
+  fi
+}
+
+_checkout_bash_v1_cleanup_nested_link() {
+  local container=$1 source=$2 nested
+
+  [[ -d "$container" && ! -L "$container" ]] || return 0
+  nested=$container/${source##*/}
+  [[ -f "$nested" && ! -L "$nested" && "$nested" -ef "$source" ]] ||
+    return 0
+  rm -f "$nested"
+}
+
 _checkout_bash_v1_write_hint() {
-  local hint=$1 interpreter=$2 had_hint=$3 prior=$4
-  local parent temporary temporary_name old_umask current
+  local hint=$1 interpreter=$2
+  local parent temporary old_umask current status=0
 
   parent=${hint%/*}
   old_umask=$(umask)
@@ -112,21 +157,21 @@ _checkout_bash_v1_write_hint() {
     _checkout_bash_v1_error "cannot create private runtime state: $parent"
     return 1
   fi
-  if [[ "$had_hint" == true ]]; then
+
+  if [[ -e "$hint" || -L "$hint" ]]; then
     current=$(_checkout_bash_v1_read_hint "$hint") || {
       umask "$old_umask"
       return 1
     }
-    if [[ "$current" != "$prior" ]]; then
-      umask "$old_umask"
-      _checkout_bash_v1_error "runtime hint changed during selection: $hint"
-      return 1
-    fi
-  elif [[ -e "$hint" || -L "$hint" ]]; then
     umask "$old_umask"
-    _checkout_bash_v1_error "refusing to replace a late runtime hint: $hint"
-    return 1
+    _checkout_bash_v1_probe "$current"
+    return
   fi
+
+  _checkout_bash_v1_detect_link_tool "$parent" || {
+    umask "$old_umask"
+    return 1
+  }
   temporary=$(mktemp "$parent/.bash-v1.XXXXXX") || {
     umask "$old_umask"
     _checkout_bash_v1_error "cannot allocate runtime hint beside: $hint"
@@ -139,44 +184,25 @@ _checkout_bash_v1_write_hint() {
     _checkout_bash_v1_error "cannot publish runtime hint: $hint"
     return 1
   fi
-  temporary_name=${temporary##*/}
-  if [[ "$had_hint" == true ]]; then
-    # Replacing a file with our exact v1 format is the only destructive hint
-    # operation. The second read above ensures malformed or foreign state is
-    # never used as replacement authority.
-    if ! mv -f "$temporary" "$hint"; then
-      rm -f "$temporary"
-      umask "$old_umask"
-      _checkout_bash_v1_error "cannot publish runtime hint: $hint"
-      return 1
-    fi
-  else
-    # A hard-link publication cannot overwrite a late regular file. Portable ln
-    # may still place the temp inside a late directory; the canonical-result
-    # validation below detects that shape and removes only our unique child.
-    if ! ln "$temporary" "$hint" 2>/dev/null; then
-      rm -f "$temporary"
-      umask "$old_umask"
-      _checkout_bash_v1_error "runtime hint appeared during selection: $hint"
-      return 1
-    fi
-    rm -f "$temporary"
+
+  _checkout_bash_v1_link_exact "$temporary" "$hint" 2>/dev/null || status=$?
+  if [[ ! -f "$hint" || -L "$hint" || ! "$hint" -ef "$temporary" ]]; then
+    _checkout_bash_v1_cleanup_nested_link "$hint" "$temporary" || true
   fi
+  rm -f "$temporary"
   umask "$old_umask"
+
   current=$(_checkout_bash_v1_read_hint "$hint") || {
-    # If a directory won a race against an owned-file replacement, portable
-    # mv may have nested our uniquely named temp inside it. Retire only that
-    # exact generated child and leave the foreign canonical object untouched.
-    if [[ -d "$hint" && ! -L "$hint" &&
-      -f "$hint/$temporary_name" && ! -L "$hint/$temporary_name" ]]; then
-      rm -f "$hint/$temporary_name"
-    fi
+    _checkout_bash_v1_error "runtime hint appeared during selection: $hint"
     return 1
   }
-  [[ "$current" == "$interpreter" ]] || {
-    _checkout_bash_v1_error "published runtime hint did not verify: $hint"
-    return 1
-  }
+  if [[ "$current" == "$interpreter" ]] ||
+    _checkout_bash_v1_probe "$current"; then
+    return 0
+  fi
+  _checkout_bash_v1_error "published runtime hint did not verify: $hint"
+  [[ "$status" -ne 0 ]] && return "$status"
+  return 1
 }
 
 # Selects and persists one Bash 4+ interpreter.
@@ -267,10 +293,8 @@ checkout_bash_v1_select() {
     _checkout_bash_v1_error 'Bash 4 or newer was not found; install it and retry'
     return 1
   fi
-  if [[ "$hint_selected" != true &&
-    ("$hint_present" != true || "$hinted" != "$candidate") ]]; then
-    _checkout_bash_v1_write_hint \
-      "$hint" "$candidate" "$hint_present" "${hinted:-}" || return 1
+  if [[ "$hint_selected" != true && "$hint_present" != true ]]; then
+    _checkout_bash_v1_write_hint "$hint" "$candidate" || return 1
   fi
   CHECKOUT_BASH_V1_INTERPRETER=$candidate
 }

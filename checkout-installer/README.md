@@ -117,9 +117,12 @@ receive no extra file. The resolver accepts a strict
 `CGRAF78_CHECKOUT_INSTALL_BASH` override, then checks its private XDG-state
 hint, the current interpreter, every absolute PATH component in order, and
 common package-manager locations. It continues past macOS `/bin/bash` 3.2 and
-selects the first validated Bash 4+ runtime. The selected absolute path is
-persisted atomically as a private hint and revalidated immediately before each
-checkout-owned script is executed.
+selects the first validated Bash 4+ runtime. A missing hint is published with
+exact-destination no-clobber semantics. A structurally valid hint whose
+interpreter has disappeared is preserved and bypassed—the newly discovered
+interpreter is used for that run, and later runs rescan rather than rewriting
+the stale file. Every selected interpreter is revalidated immediately before
+each checkout-owned script is executed.
 
 The sourceable API is deliberately small:
 
