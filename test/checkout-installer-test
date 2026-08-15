@@ -3384,7 +3384,9 @@ fi
 # Dot opts into the Shdeps destination contract. The generated installer must
 # use the same base-root precedence as Shdeps itself: SHDEPS_INSTALL_DIR wins,
 # otherwise HOME/.local/share is used, and XDG_DATA_HOME is irrelevant.
-printf 'CHECKOUT_INSTALLER_DEFAULT_DESTINATION=shdeps\n' \
+printf '%s\n' \
+  'CHECKOUT_INSTALLER_DEFAULT_DESTINATION=shdeps' \
+  'CHECKOUT_INSTALLER_LOCK_PROTOCOL=v1' \
   >>"$source_work/scripts/checkout-installer.conf"
 "$root/checkout-installer/render.sh" "$source_work" >/dev/null
 git -C "$source_work" add scripts/checkout-installer.conf install.sh
@@ -3464,5 +3466,45 @@ CHECKOUT_TEST_LOG="$tmp/shdeps-destination-override.log" \
 grep -Fqx "root=$(cd "$shdeps_override" && pwd -P)" \
   "$tmp/shdeps-destination-override.log" ||
   fail "explicit checkout destination did not win in Shdeps mode"
+
+# Shdeps deliberately owns a different repository-root transition journal.
+# An interrupted Shdeps directory-to-link handoff can leave its exact previous
+# generation parked while the canonical checkout path is absent. The generated
+# installer owns neither that format nor its backup: after acquiring the shared
+# checkout lock it may fill the absent canonical path with a new managed clone,
+# but it must leave the opaque Shdeps recovery authority byte-identical for
+# the Shdeps-owned recovery implementation to interpret or reject later.
+shdeps_handoff="$tmp/shdeps-handoff/example-tool"
+shdeps_handoff_journal="$tmp/shdeps-handoff/.example-tool.shdeps-repo-transition-v1"
+shdeps_handoff_record_expected="$tmp/shdeps-handoff-record.expected"
+shdeps_handoff_sentinel_expected="$tmp/shdeps-handoff-sentinel.expected"
+mkdir -p "$shdeps_handoff_journal/previous"
+printf 'opaque shdeps repository transition record\n' \
+  >"$shdeps_handoff_record_expected"
+printf 'parked generation\n' >"$shdeps_handoff_sentinel_expected"
+cp "$shdeps_handoff_record_expected" "$shdeps_handoff_journal/record"
+cp "$shdeps_handoff_sentinel_expected" \
+  "$shdeps_handoff_journal/previous/sentinel"
+CHECKOUT_TEST_LOG="$tmp/shdeps-handoff.log" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$shdeps_handoff" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
+  "$active_bash" -s <"$source_work/install.sh" >/dev/null ||
+  fail "checkout installer could not fill an interrupted Shdeps handoff"
+[[ -d "$shdeps_handoff/.git" && ! -L "$shdeps_handoff" ]] ||
+  fail "checkout installer did not publish a managed handoff generation"
+grep -Fqx "root=$(cd "$shdeps_handoff" && pwd -P)" \
+  "$tmp/shdeps-handoff.log" ||
+  fail "checkout installer delegated from the wrong handoff generation"
+grep -Fqx 'checkout_lock_kind=v1' "$tmp/shdeps-handoff.log" ||
+  fail "Shdeps handoff did not use the shared v1 checkout lock"
+cmp -s "$shdeps_handoff_record_expected" "$shdeps_handoff_journal/record" ||
+  fail "checkout installer changed Shdeps transition authority"
+cmp -s "$shdeps_handoff_sentinel_expected" \
+  "$shdeps_handoff_journal/previous/sentinel" ||
+  fail "checkout installer changed Shdeps parked generation"
+[[ $(LC_ALL=C ls -A1 "$shdeps_handoff_journal") == $'previous\nrecord' ]] ||
+  fail "checkout installer added state to the Shdeps transition journal"
+[[ $(LC_ALL=C ls -A1 "$shdeps_handoff_journal/previous") == sentinel ]] ||
+  fail "checkout installer added state to the Shdeps parked generation"
 
 printf 'checkout-installer-test: ok\n'
