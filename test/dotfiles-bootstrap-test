@@ -27,7 +27,7 @@ run_bootstrap() {
   (
     cd "$home"
     HOME="$home" \
-      PATH="$tmp/bin:$PATH" \
+      PATH="${DOTFILES_BOOTSTRAP_TEST_PATH_PREFIX:-}$tmp/bin:$PATH" \
       GITHUB_ENV="$github_env" \
       GITHUB_PATH="$github_path" \
       DOTFILES_BOOTSTRAP_TEST_LOG="$log" \
@@ -136,6 +136,99 @@ run_bootstrap "$stage_home" "$stage_log" "$stage_env" "$stage_path" \
 [[ $(git --git-dir="$stage_payload/dot-origin.git" rev-parse refs/heads/main) == "$dot_revision" ]] ||
   fail 'payload staging did not pin the cutover-locked Dot revision'
 
+failing_chmod_bin=$tmp/failing-chmod-bin
+mkdir "$failing_chmod_bin"
+DOTFILES_BOOTSTRAP_TEST_REAL_CHMOD=$(command -v chmod)
+export DOTFILES_BOOTSTRAP_TEST_REAL_CHMOD
+# shellcheck disable=SC2016 # Expanded only by the generated chmod fixture.
+write_tool "$failing_chmod_bin/chmod" '
+if [[ ${1:-} == 0400 ]]; then
+  case ${2:-} in
+    */payload-v1 | */.payload-v1.tmp) exit 86 ;;
+  esac
+fi
+exec "${DOTFILES_BOOTSTRAP_TEST_REAL_CHMOD:?}" "$@"'
+incomplete_payload=$tmp/incomplete-payload
+if DOTFILES_BOOTSTRAP_TEST_PATH_PREFIX="$failing_chmod_bin:" \
+  run_bootstrap "$stage_home" "$tmp/incomplete-stage.log" \
+  "$tmp/incomplete-stage.env" "$tmp/incomplete-stage.path" "$dot_repo" \
+  stage "$incomplete_payload" >/dev/null 2>&1; then
+  fail 'payload staging ignored completion-marker chmod failure'
+fi
+[[ ! -e "$incomplete_payload/payload-v1" &&
+  ! -L "$incomplete_payload/payload-v1" ]] ||
+  fail 'failed payload staging published its completion marker'
+incomplete_home=$tmp/incomplete-home
+incomplete_log=$tmp/incomplete.log
+incomplete_env=$tmp/incomplete.env
+prepare_cutover_client "$incomplete_home" \
+  "file://$tmp/incomplete-origin.git" "$dot_revision" detached
+: >"$incomplete_log"
+: >"$incomplete_env"
+if run_bootstrap "$incomplete_home" "$incomplete_log" "$incomplete_env" \
+  "$tmp/incomplete.path" "file://$tmp/unreachable-dot-origin.git" \
+  install-staged "$incomplete_payload" "$incomplete_payload/bootstrap.sh" \
+  >/dev/null 2>&1; then
+  fail 'install-staged accepted an incompletely published payload'
+fi
+[[ ! -s "$incomplete_log" && ! -s "$incomplete_env" &&
+  ! -e "$incomplete_home/.local/bin/dot" &&
+  ! -L "$incomplete_home/.local/bin/dot" ]] ||
+  fail 'incomplete staged payload mutated the client before rejection'
+
+unsafe_marker_home=$tmp/unsafe-marker-home
+unsafe_marker_log=$tmp/unsafe-marker.log
+unsafe_marker_env=$tmp/unsafe-marker.env
+prepare_cutover_client "$unsafe_marker_home" \
+  "file://$tmp/unsafe-marker-origin.git" "$dot_revision" detached
+: >"$unsafe_marker_log"
+: >"$unsafe_marker_env"
+chmod 0600 "$stage_payload/payload-v1"
+if run_bootstrap "$unsafe_marker_home" "$unsafe_marker_log" \
+  "$unsafe_marker_env" "$tmp/unsafe-marker.path" \
+  "file://$tmp/unreachable-dot-origin.git" install-staged "$stage_payload" \
+  "$stage_payload/bootstrap.sh" >/dev/null 2>&1; then
+  fail 'install-staged accepted an unsafe completion-marker mode'
+fi
+chmod 0400 "$stage_payload/payload-v1"
+[[ ! -s "$unsafe_marker_log" && ! -s "$unsafe_marker_env" &&
+  ! -e "$unsafe_marker_home/.local/bin/dot" &&
+  ! -L "$unsafe_marker_home/.local/bin/dot" ]] ||
+  fail 'unsafe staged payload mutated the client before rejection'
+
+for line_break in $'\n' $'\r'; do
+  multiline_stage_payload="${tmp}/staged-dot-bootstrap${line_break}INJECTED=value"
+  if run_bootstrap "$stage_home" "$tmp/multiline-stage.log" \
+    "$tmp/multiline-stage.env" "$tmp/multiline-stage.path" "$dot_repo" \
+    stage "$multiline_stage_payload" >/dev/null 2>&1; then
+    fail 'payload staging accepted a multiline destination'
+  fi
+  [[ ! -e "$multiline_stage_payload" && ! -L "$multiline_stage_payload" ]] ||
+    fail 'multiline payload staging published a destination before rejection'
+done
+
+newline_install_payload="${tmp}/"$'staged-dot-install\nINJECTED=value'
+newline_install_home=$tmp/newline-install-home
+newline_install_log=$tmp/newline-install.log
+newline_install_env=$tmp/newline-install.env
+prepare_cutover_client "$newline_install_home" \
+  "file://$tmp/newline-install-origin.git" "$dot_revision" detached
+: >"$newline_install_log"
+: >"$newline_install_env"
+mv "$stage_payload" "$newline_install_payload"
+if run_bootstrap "$newline_install_home" "$newline_install_log" \
+  "$newline_install_env" "$tmp/newline-install.path" \
+  "file://$tmp/unreachable-dot-origin.git" install-staged \
+  "$newline_install_payload" "$newline_install_payload/bootstrap.sh" \
+  >/dev/null 2>&1; then
+  fail 'staged payload installation accepted a multiline destination'
+fi
+mv "$newline_install_payload" "$stage_payload"
+[[ ! -s "$newline_install_log" && ! -s "$newline_install_env" &&
+  ! -e "$newline_install_home/.local/bin/dot" &&
+  ! -L "$newline_install_home/.local/bin/dot" ]] ||
+  fail 'multiline staged payload mutated the client before rejection'
+
 foreign_payload=$tmp/foreign-payload
 mkdir "$foreign_payload"
 printf 'foreign\n' >"$foreign_payload/owned"
@@ -146,6 +239,35 @@ if run_bootstrap "$stage_home" "$tmp/foreign-stage.log" \
 fi
 [[ $(<"$foreign_payload/owned") == foreign ]] ||
   fail 'failed payload staging changed a foreign destination'
+
+replacement_repo=$tmp/replacement-dot
+git clone --quiet --no-hardlinks "$dot_repo" "$replacement_repo"
+git -C "$replacement_repo" config user.name 'Dotfiles bootstrap replacement test'
+git -C "$replacement_repo" config user.email \
+  dotfiles-bootstrap-replacement@example.invalid
+git -C "$replacement_repo" config core.hooksPath /dev/null
+cat >"$replacement_repo/install.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf 'replacement-installer\n' >>"${DOTFILES_BOOTSTRAP_TEST_LOG:?}"
+exit 87
+EOF
+chmod 0755 "$replacement_repo/install.sh"
+git -C "$replacement_repo" add install.sh
+git -C "$replacement_repo" commit --quiet -m replacement-fixture
+replacement_revision=$(git -C "$replacement_repo" rev-parse HEAD)
+git --git-dir="$stage_payload/dot-origin.git" fetch --quiet --no-tags \
+  "$replacement_repo" "$replacement_revision"
+git --git-dir="$stage_payload/dot-origin.git" replace \
+  "$dot_revision" "$replacement_revision"
+[[ $(git --git-dir="$stage_payload/dot-origin.git" \
+  rev-parse refs/heads/main) == "$dot_revision" ]] ||
+  fail 'replacement-ref fixture changed the locked main ref'
+replacement_installer=$(git --git-dir="$stage_payload/dot-origin.git" \
+  show "$dot_revision:install.sh")
+[[ $replacement_installer == *replacement-installer* ]] ||
+  fail 'replacement-ref fixture does not substitute the locked installer'
 
 staged_home=$tmp/staged-home
 staged_log=$tmp/staged.log

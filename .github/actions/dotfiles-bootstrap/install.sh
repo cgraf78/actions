@@ -47,6 +47,27 @@ dotfiles_bootstrap_read_cutover() {
   printf '%s\n' "$revision_line"
 }
 
+dotfiles_bootstrap_file_has_mode() {
+  local path=$1 expected=$2 mode
+
+  if mode=$(stat -c '%a' "$path" 2>/dev/null); then
+    case $mode in
+      '' | *[!0-7]*) return 1 ;;
+    esac
+    [[ $mode == "$expected" || $mode == "0$expected" ]]
+    return
+  fi
+  mode=$(stat -f '%Lp' "$path" 2>/dev/null) || return 1
+  case $mode in
+    '' | *[!0-7]*) return 1 ;;
+  esac
+  [[ $mode == "$expected" || $mode == "0$expected" ]]
+}
+
+dotfiles_bootstrap_engine_git() {
+  GIT_NO_REPLACE_OBJECTS=1 git "$@"
+}
+
 dotfiles_bootstrap_verify_engine_origin() {
   local origin=$1 revision=$2 fetched head tree metadata path
 
@@ -54,18 +75,20 @@ dotfiles_bootstrap_verify_engine_origin() {
     echo "dot bootstrap origin is not a regular directory: $origin" >&2
     return 1
   }
-  fetched=$(git --git-dir="$origin" rev-parse --verify \
+  fetched=$(dotfiles_bootstrap_engine_git --git-dir="$origin" rev-parse --verify \
     'refs/heads/main^{commit}' 2>/dev/null) || return 1
   [[ $fetched == "$revision" ]] || {
     echo "dot bootstrap origin has $fetched, expected $revision" >&2
     return 1
   }
-  head=$(git --git-dir="$origin" symbolic-ref HEAD 2>/dev/null) || return 1
+  head=$(dotfiles_bootstrap_engine_git --git-dir="$origin" \
+    symbolic-ref HEAD 2>/dev/null) || return 1
   [[ $head == refs/heads/main ]] || {
     echo "dot bootstrap origin has an unexpected HEAD: $head" >&2
     return 1
   }
-  tree=$(git --git-dir="$origin" ls-tree "$revision" -- install.sh) || return 1
+  tree=$(dotfiles_bootstrap_engine_git --git-dir="$origin" \
+    ls-tree "$revision" -- install.sh) || return 1
   IFS=$'\t' read -r metadata path <<<"$tree"
   # shellcheck disable=SC2086 # The fixed three-field ls-tree header is parsed deliberately.
   set -- $metadata
@@ -83,16 +106,19 @@ dotfiles_bootstrap_prepare_engine_origin() {
   origin=$staging/dot-origin.git
   [[ ! -e "$origin" && ! -L "$origin" ]] || return 1
   repo_url=${DOTFILES_BOOTSTRAP_DOT_REPO_URL:-https://github.com/cgraf78/dot.git}
-  git init --quiet --bare "$origin"
-  retry git --git-dir="$origin" fetch --quiet --force --no-tags --depth=1 \
-    "$repo_url" "$revision"
-  fetched=$(git --git-dir="$origin" rev-parse --verify 'FETCH_HEAD^{commit}')
+  dotfiles_bootstrap_engine_git init --quiet --bare "$origin"
+  retry dotfiles_bootstrap_engine_git --git-dir="$origin" fetch --quiet \
+    --force --no-tags --depth=1 "$repo_url" "$revision"
+  fetched=$(dotfiles_bootstrap_engine_git --git-dir="$origin" \
+    rev-parse --verify 'FETCH_HEAD^{commit}')
   [[ $fetched == "$revision" ]] || {
     echo "dot bootstrap fetched $fetched, expected $revision" >&2
     return 1
   }
-  git --git-dir="$origin" update-ref refs/heads/main "$revision"
-  git --git-dir="$origin" symbolic-ref HEAD refs/heads/main
+  dotfiles_bootstrap_engine_git --git-dir="$origin" \
+    update-ref refs/heads/main "$revision"
+  dotfiles_bootstrap_engine_git --git-dir="$origin" \
+    symbolic-ref HEAD refs/heads/main
   dotfiles_bootstrap_verify_engine_origin "$origin" "$revision"
 }
 
@@ -103,7 +129,8 @@ dotfiles_bootstrap_install_engine_origin() {
   dotfiles_bootstrap_verify_engine_origin "$origin" "$revision" || return 1
   installer=$(mktemp "$stage_parent/dotfiles-bootstrap-installer.XXXXXXXX") ||
     return 1
-  git --git-dir="$origin" show "$revision:install.sh" >"$installer"
+  dotfiles_bootstrap_engine_git --git-dir="$origin" \
+    show "$revision:install.sh" >"$installer"
   chmod 0600 "$installer"
 
   export CGRAF78_CHECKOUT_INSTALL_REPO_URL=$origin
@@ -114,7 +141,7 @@ dotfiles_bootstrap_install_engine_origin() {
   if [[ -n ${GITHUB_ENV:-} ]]; then
     printf 'SHDEPS_DOT_REPO=%s\n' "$origin" >>"$GITHUB_ENV"
   fi
-  bash "$installer"
+  GIT_NO_REPLACE_OBJECTS=1 bash "$installer"
 }
 
 dotfiles_bootstrap_locked_engine() {
@@ -129,7 +156,7 @@ dotfiles_bootstrap_locked_engine() {
 }
 
 dotfiles_bootstrap_stage_payload() {
-  local revision=$1 destination=$2 parent
+  local revision=$1 destination=$2 parent marker_tmp
 
   case $destination in
     /*) ;;
@@ -159,9 +186,19 @@ dotfiles_bootstrap_stage_payload() {
     return 1
   cp "$0" "$destination/bootstrap.sh" || return 1
   chmod 0500 "$destination/bootstrap.sh"
-  printf '%s\n' 'cgraf78 dotfiles bootstrap payload v1' \
-    >"$destination/payload-v1" || return 1
-  chmod 0400 "$destination/payload-v1"
+  marker_tmp=$destination/.payload-v1.tmp
+  (
+    umask 077
+    printf '%s\n' 'cgraf78 dotfiles bootstrap payload v1' >"$marker_tmp"
+  ) || return 1
+  chmod 0400 "$marker_tmp" || return 1
+  dotfiles_bootstrap_file_has_mode "$marker_tmp" 400 || {
+    echo 'dotfiles bootstrap completion marker has an unsafe mode' >&2
+    return 1
+  }
+  # This rename is the payload commit point and deliberately remains the
+  # function's final filesystem operation.
+  mv "$marker_tmp" "$destination/payload-v1"
 }
 
 dotfiles_bootstrap_staged_origin() {
@@ -169,6 +206,10 @@ dotfiles_bootstrap_staged_origin() {
 
   [[ -d "$payload" && ! -L "$payload" ]] || return 1
   [[ -f "$payload/payload-v1" && ! -L "$payload/payload-v1" ]] || return 1
+  dotfiles_bootstrap_file_has_mode "$payload/payload-v1" 400 || {
+    echo 'staged dotfiles bootstrap marker has an unsafe mode' >&2
+    return 1
+  }
   {
     IFS= read -r marker || return 1
     if IFS= read -r extra || [[ -n $extra ]]; then
@@ -233,24 +274,35 @@ dotfiles_bootstrap_require_cutover_revision() {
   }
 }
 
+dotfiles_bootstrap_require_stage_directory() {
+  local mode=$1 destination=$2
+
+  [[ -n "$destination" ]] || {
+    echo "dotfiles bootstrap $mode mode requires a stage directory" >&2
+    return 1
+  }
+  case $destination in
+    *$'\n'* | *$'\r'*)
+      echo 'dotfiles bootstrap stage directory must be a single-line path' >&2
+      return 1
+      ;;
+  esac
+}
+
 bootstrap_mode=${DOTFILES_BOOTSTRAP_MODE:-full}
 stage_directory=${DOTFILES_BOOTSTRAP_STAGE_DIR:-}
 case $bootstrap_mode in
   stage)
-    [[ -n "$stage_directory" ]] || {
-      echo 'dotfiles bootstrap stage mode requires a stage directory' >&2
-      exit 2
-    }
+    dotfiles_bootstrap_require_stage_directory \
+      "$bootstrap_mode" "$stage_directory" || exit 2
     dotfiles_bootstrap_require_cutover_revision
     dotfiles_bootstrap_stage_payload \
       "$DOTFILES_BOOTSTRAP_CUTOVER_REVISION" "$stage_directory"
     exit 0
     ;;
   install-staged)
-    [[ -n "$stage_directory" ]] || {
-      echo 'dotfiles bootstrap install-staged mode requires a stage directory' >&2
-      exit 2
-    }
+    dotfiles_bootstrap_require_stage_directory \
+      "$bootstrap_mode" "$stage_directory" || exit 2
     dotfiles_bootstrap_require_cutover_revision
     dotfiles_bootstrap_staged_origin \
       "$stage_directory" "$DOTFILES_BOOTSTRAP_CUTOVER_REVISION"
