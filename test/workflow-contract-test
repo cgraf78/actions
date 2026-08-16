@@ -211,6 +211,7 @@ contracts() {
   check '.jobs.checkout-installer-bash32.name == "Checkout installer / Bash 3.2"' ci.yml
   check '.jobs.checkout-installer-bash32.uses == "./.github/workflows/bash32-ci.yml"' ci.yml
   check '.jobs.checkout-installer-bash32.with.command == "/bin/bash test/checkout-installer-test"' ci.yml
+  check '.jobs.smoke.steps[] | select(.name == "Provision modern Bash candidate").run | contains("[[ -z \"$modern_bash\" || ! -x \"$modern_bash\" ]]")' bash32-ci.yml
   check '.jobs.release-asset-upload-bash32.name == "Release asset upload / Bash 3.2"' ci.yml
   check '.jobs.release-asset-upload-bash32.uses == "./.github/workflows/bash32-ci.yml"' ci.yml
   check '.jobs.release-asset-upload-bash32.with.command == "/bin/bash test/release-asset-upload-test"' ci.yml

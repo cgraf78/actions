@@ -334,6 +334,18 @@ checkout_lock_discard_unpublished_owner() {
   rmdir "$lock_owner_dir"
 }
 
+checkout_lock_cleanup_nested_publication() {
+  local nested_name nested
+
+  [[ -d "$lock_dir" && ! -L "$lock_dir" ]] || return 1
+  nested_name=${lock_owner_target%/.}
+  nested_name=${nested_name##*/}
+  nested="$lock_dir/$nested_name"
+  [[ -L "$nested" &&
+    $(readlink "$nested" 2>/dev/null) == "$lock_owner_target" ]] || return 1
+  rm -f -- "$nested"
+}
+
 checkout_lock_prepare_claim() {
   local owner_nonce=$1 claim_nonce prepare final record
 
@@ -848,13 +860,20 @@ acquire_checkout_lock_v1() {
           lock_claim_dir=
           checkout_lock_prepare_owner || return 1
           if ln -s "$lock_owner_target" "$lock_dir"; then
-            [[ -L "$lock_dir" &&
-              $(readlink "$lock_dir") == "$lock_owner_target" ]] || return 1
-            checkout_lock_load_record \
-              "$lock_owner_dir/owner-v1" owner "$lock_owner_nonce" '' ||
-              return 1
-            lock_held=1
-            return 0
+            if [[ -L "$lock_dir" &&
+              $(readlink "$lock_dir") == "$lock_owner_target" ]]; then
+              checkout_lock_load_record \
+                "$lock_owner_dir/owner-v1" owner "$lock_owner_nonce" '' ||
+                return 1
+              lock_held=1
+              return 0
+            fi
+            # BSD ln treats an existing real directory as a container even
+            # for the nonce-bound `owner/.` wire target. Remove only the exact
+            # nested symlink that this publication attempt can have created;
+            # the winning directory itself remains untouched and is then
+            # classified as the legacy lock shape.
+            checkout_lock_cleanup_nested_publication || return 1
           fi
           checkout_lock_discard_unpublished_owner || true
         elif [[ "$cleanup_status" -ne 2 ]]; then

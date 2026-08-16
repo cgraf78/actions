@@ -551,8 +551,18 @@ publish_generated_file() {
     # A same-directory hard link is the portable no-clobber publication path.
     # A late regular file makes ln fail. A late directory may receive a nested
     # link, which the mandatory canonical-result verification removes safely.
+    # Android filesystems can reject hard links even within one directory, so
+    # fall back to the supported platforms' no-clobber move. A late regular
+    # file leaves the stage in place; a late directory can only receive that
+    # exact stage name, which the same verification path recognizes.
     if ! ln "$staged" "$destination"; then
-      die "$description destination appeared before publication: $destination"
+      [[ ! -e "$destination" && ! -L "$destination" ]] ||
+        die "$description destination appeared before publication: $destination"
+      mv -n "$staged" "$destination" ||
+        die "cannot publish $description: $destination"
+      [[ ! -e "$staged" && ! -L "$staged" ]] ||
+        die "$description destination appeared before publication: $destination"
+      return 0
     fi
     rm -f "$staged"
   fi

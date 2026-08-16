@@ -45,13 +45,13 @@ jobs:
         if: inputs.provision_modern_bash
         shell: /bin/bash {0}
         run: |-
-          if modern_prefix=$(brew --prefix bash 2>/dev/null); then
-            :
-          else
+          modern_prefix=$(brew --prefix bash 2>/dev/null || true)
+          modern_bash=${modern_prefix:+$modern_prefix/bin/bash}
+          if [[ -z "$modern_bash" || ! -x "$modern_bash" ]]; then
             brew install bash
             modern_prefix=$(brew --prefix bash)
+            modern_bash="$modern_prefix/bin/bash"
           fi
-          modern_bash="$modern_prefix/bin/bash"
           "$modern_bash" --noprofile --norc -c \
             'test "${BASH_VERSINFO[0]}" -ge 4'
           printf 'CHECKOUT_INSTALLER_TEST_MODERN_BASH=%s\n' "$modern_bash" \
