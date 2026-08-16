@@ -90,8 +90,11 @@ checkout_lock_stat_private() {
 checkout_lock_even_hex() {
   local value=$1 max_length=$2
 
+  # Bash 3.2 interprets ranges through the active collation locale, where
+  # `[a-f]` can also match uppercase letters. Enumerate the wire alphabet so
+  # lowercase hexadecimal remains exact on stock macOS Bash.
   [[ -n "$value" && ${#value} -le "$max_length" &&
-    $((${#value} % 2)) -eq 0 && "$value" != *[!0-9a-f]* ]]
+    $((${#value} % 2)) -eq 0 && "$value" != *[!0123456789abcdef]* ]]
 }
 
 checkout_lock_record_has_exact_text_framing() {
