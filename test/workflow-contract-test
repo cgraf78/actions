@@ -3,6 +3,11 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+actions_lock=$(<"$root/.github/cgraf78-actions.lock")
+[[ $actions_lock =~ ^[0-9a-f]{40}$ ]] || {
+  printf 'workflow contract failed: invalid internal actions lock\n' >&2
+  exit 1
+}
 
 check() {
   local expression=$1
@@ -43,12 +48,12 @@ contracts() {
   check '.jobs.shellcheck.name == "ShellCheck"' shell-ci.yml
   check '.jobs.shellcheck.if == "${{ inputs.shellcheck-inventory-path != '"'"''"'"' }}"' shell-ci.yml
   check '.jobs.shellcheck.runs-on == "ubuntu-24.04"' shell-ci.yml
-  check '.jobs.shellcheck.steps[] | select(.name == "Install ShellCheck prerequisites").uses == "cgraf78/actions/.github/actions/shell-ci-prereqs@8eaac8e384ae89e9c1aaf675dd23689cfe73fa7c"' shell-ci.yml
+  check ".jobs.shellcheck.steps[] | select(.name == \"Install ShellCheck prerequisites\").uses == \"cgraf78/actions/.github/actions/shell-ci-prereqs@$actions_lock\"" shell-ci.yml
   check '.jobs.shellcheck.steps[] | select(.name == "Install ShellCheck prerequisites").with."matrix-name" == "Ubuntu"' shell-ci.yml
   check '.jobs.shellcheck.steps[] | select(.name == "Install ShellCheck prerequisites").with.profiles == "base,shellcheck"' shell-ci.yml
   check '.jobs.shellcheck.steps[] | select(.name == "Install ShellCheck prerequisites").with.setup == "none"' shell-ci.yml
   check '.jobs.shellcheck.steps[] | select((.uses // "") | test("^actions/checkout@[0-9a-f]{40}$")).with."persist-credentials" == false' shell-ci.yml
-  check '.jobs.shellcheck.steps[] | select(.name == "Validate and lint shell inventory").uses == "cgraf78/actions/.github/actions/shellcheck-inventory@6ae8c87bdd20a901d550de9d97216d9761617ae8"' shell-ci.yml
+  check ".jobs.shellcheck.steps[] | select(.name == \"Validate and lint shell inventory\").uses == \"cgraf78/actions/.github/actions/shellcheck-inventory@$actions_lock\"" shell-ci.yml
   check '.jobs.shellcheck.steps[] | select(.name == "Validate and lint shell inventory").with."inventory-path" == "${{ inputs.shellcheck-inventory-path }}"' shell-ci.yml
   check '.jobs.shellcheck.steps[] | select(.name == "Validate and lint shell inventory").with."exclude-codes" == "${{ inputs.shellcheck-exclude-codes }}"' shell-ci.yml
   check '.jobs.termux.if == null' shell-ci.yml
@@ -63,7 +68,7 @@ contracts() {
   check '.on.workflow_call.inputs.force-dotfiles-update.default == false' _shell-platforms.yml
   check '.on.workflow_call.inputs.force-dotfiles-update.required == false' _shell-platforms.yml
   check '.on.workflow_call.inputs.force-dotfiles-update.type == "boolean"' _shell-platforms.yml
-  check '.jobs.platform.steps[] | select(.name == "Install OS prerequisites").uses == "cgraf78/actions/.github/actions/shell-ci-prereqs@8eaac8e384ae89e9c1aaf675dd23689cfe73fa7c"' _shell-platforms.yml
+  check ".jobs.platform.steps[] | select(.name == \"Install OS prerequisites\").uses == \"cgraf78/actions/.github/actions/shell-ci-prereqs@$actions_lock\"" _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env.SHDEPS_FORCE == "${{ inputs.force-dotfiles-update && '"'"'1'"'"' || '"'"'0'"'"' }}"' _shell-platforms.yml
   check '[.jobs.platform.steps[] | select((.uses // "") | contains("actions/cache@"))] | length == 2' _shell-platforms.yml
   check '[.jobs.platform.steps[] | select(.uses == "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9")] | length == 2' _shell-platforms.yml
@@ -161,13 +166,13 @@ contracts() {
   check '.jobs.quality.steps[] | select(.name == "Add package smoke Rust target").env.PACKAGE_SMOKE_MUSL_TARGET == "${{ inputs.package-smoke-musl-target }}"' rust-ci.yml
   check '.jobs.quality.steps[] | select(.name == "Add package smoke Rust target").run == "rustup target add \"$PACKAGE_SMOKE_MUSL_TARGET\""' rust-ci.yml
   check '.jobs.quality.steps[] | select(.name == "Install package smoke musl linker").if == "inputs.package-smoke-command != '"'"''"'"' && inputs.package-smoke-musl-target != '"'"''"'"' && inputs.package-smoke-install-musl-tools"' rust-ci.yml
-  check '.jobs.quality.steps[] | select(.name == "Install package smoke musl linker").uses == "cgraf78/actions/.github/actions/musl-build-prereqs@19065e7ecf3edda7386b6d867482d7ee179b875d"' rust-ci.yml
+  check ".jobs.quality.steps[] | select(.name == \"Install package smoke musl linker\").uses == \"cgraf78/actions/.github/actions/musl-build-prereqs@$actions_lock\"" rust-ci.yml
   check '.jobs.quality.steps[] | select(.name == "Smoke release package").env.RUST_TARGET == "${{ inputs.package-smoke-musl-target }}"' rust-ci.yml
 
   check '.on.workflow_call.inputs.install-musl-tools.default == false' rust-release.yml
   check '.on.workflow_call.inputs.install-musl-tools.required == false' rust-release.yml
   check '.on.workflow_call.inputs.install-musl-tools.type == "boolean"' rust-release.yml
-  check '.jobs.build.steps[] | select(.name == "Upload release assets").uses == "cgraf78/actions/.github/actions/upload-release-assets@ee0ed2d1b88c5216a5e3c7e12e3682d39fc75daa"' rust-release.yml
+  check ".jobs.build.steps[] | select(.name == \"Upload release assets\").uses == \"cgraf78/actions/.github/actions/upload-release-assets@$actions_lock\"" rust-release.yml
   check '.jobs.build.steps[] | select(.name == "Upload release assets").with."asset-glob" == "${{ inputs.asset-glob }}"' rust-release.yml
   check '.jobs.build.steps[] | select(.name == "Upload release assets").with."github-token" == "${{ github.token }}"' rust-release.yml
   check '.jobs.build.steps[] | select(.name == "Upload release assets").with.tag == "${{ github.ref_name }}"' rust-release.yml
@@ -188,7 +193,7 @@ contracts() {
   check '.jobs.build.strategy.matrix.include[] | select(."asset-platform" == "android-x86_64")."rust-target" == "x86_64-linux-android"' rust-release.yml
   check '.jobs.build.strategy.matrix.include[] | select(."asset-platform" == "android-x86_64").enabled == "${{ inputs.android-x86_64 }}"' rust-release.yml
   check '.jobs.build.steps[] | select(.name == "Configure Android NDK toolchain").if | contains("matrix.rust-target == '"'"'x86_64-linux-android'"'"'")' rust-release.yml
-  check '.jobs.build.steps[] | select(.name == "Configure Android NDK toolchain").uses == "cgraf78/actions/.github/actions/android-rust-toolchain@438864f7da4781edb0d5e5468835169e52fd4b32"' rust-release.yml
+  check ".jobs.build.steps[] | select(.name == \"Configure Android NDK toolchain\").uses == \"cgraf78/actions/.github/actions/android-rust-toolchain@$actions_lock\"" rust-release.yml
   check '.jobs.build.steps[] | select(.name == "Configure Android NDK toolchain").with."rust-target" == "${{ matrix.rust-target }}"' rust-release.yml
 
   check '.jobs.shell-smoke.with.termux-command != null' ci.yml
@@ -205,6 +210,7 @@ contracts() {
   check '.jobs.quality.steps[] | select(.name == "Test consumer synchronization").run == "test/consumer-sync-test"' ci.yml
   check '.jobs.quality.steps[] | select(.name == "Test generated release installer").run == "test/release-installer-test"' ci.yml
   check '.jobs.quality.steps[] | select(.name == "Test generated checkout installer").run == "test/checkout-installer-test"' ci.yml
+  check ".jobs.quality.steps[] | select(.name == \"Verify internal Actions sync\").uses == \"cgraf78/actions/.github/actions/verify-consumer-sync@$actions_lock\"" ci.yml
   check '.jobs.release-installer-bash32.name == "Release installer / Bash 3.2"' ci.yml
   check '.jobs.release-installer-bash32.uses == "./.github/workflows/bash32-ci.yml"' ci.yml
   check '.jobs.release-installer-bash32.with.command == "/bin/bash test/release-installer-test"' ci.yml

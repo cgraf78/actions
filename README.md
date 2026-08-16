@@ -257,9 +257,10 @@ than one worker are split into first-party composite actions:
 
 Callers pin reusable workflows to reviewed commit SHAs and use dependency PRs
 to roll shared fixes across the fleet. Consumer lock verification prevents a
-partial bump from mixing revisions. Internal self-pins remain an explicit
-bootstrap exception because a commit cannot contain its own hash; they point to
-earlier reviewed commits and are covered by this repository's tests.
+partial bump from mixing revisions. This repository uses the same lock and
+synchronizer for its internal self-pins; because a commit cannot contain its
+own hash, that lock names the immediately preceding reviewed commit and a
+follow-up commit contains only the synchronized refs and their verification.
 
 ## License
 
