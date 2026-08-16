@@ -4,6 +4,7 @@ set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d)
+tmp=$(cd -P -- "$tmp" && pwd -P)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 fail() {
@@ -167,6 +168,71 @@ while IFS=$'\t' read -r disposition url expected extra ||
     *) fail "identity fixture has unknown disposition: $disposition" ;;
   esac
 done <"$root/checkout-installer/fixtures/github-repo-identity-v1.tsv"
+
+# Recovery authority must be a regular candidate marker. A symbolic alias can
+# share the transaction identity's inode while still becoming dangling when
+# that record is retired, so the development matcher must reject it before any
+# state transition. A copied marker must also match every identity field; both
+# files being independently well-formed is not sufficient authority.
+for identity_function_name in \
+  load_development_identity \
+  update_identity_matches \
+  development_identity_matches; do
+  identity_function=$(sed -n \
+    "/^  $identity_function_name() {\$/,/^  }\$/p" \
+    "$root/checkout-installer/install.sh.in")
+  [[ -n "$identity_function" ]] ||
+    fail "cannot locate generated identity function: $identity_function_name"
+  eval "$identity_function"
+done
+identity_match_root="$tmp/identity-match"
+checkout_dir="$identity_match_root/managed/example-tool"
+checkout_repo=example/example-tool
+checkout_ref=main
+expected_development_dir="$identity_match_root/development/example-tool"
+update_identity="$identity_match_root/identity.record"
+mkdir -p "$identity_match_root"
+printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+  'cgraf78 checkout installer development-to-managed transaction v1' \
+  "$checkout_dir" "$checkout_repo" "$checkout_ref" \
+  "$expected_development_dir" 'support/install-checkout.sh' \
+  'support/post-install.sh' >"$update_identity"
+
+identity_symlink_marker="$identity_match_root/symlink-marker"
+ln -s "$update_identity" "$identity_symlink_marker"
+development_recorded_target=sentinel-target
+update_recorded_delegate=sentinel-delegate
+update_recorded_post_install_delegate=sentinel-post-delegate
+set +e
+development_identity_matches "$identity_symlink_marker"
+identity_symlink_status=$?
+set -e
+[[ "$identity_symlink_status" -ne 0 ]] ||
+  fail 'development identity matcher accepted a symbolic marker alias'
+[[ "$development_recorded_target" == sentinel-target &&
+  "$update_recorded_delegate" == sentinel-delegate &&
+  "$update_recorded_post_install_delegate" == sentinel-post-delegate ]] ||
+  fail 'rejected symbolic identity marker changed recorded identity state'
+
+identity_different_marker="$identity_match_root/different-marker"
+printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+  'cgraf78 checkout installer development-to-managed transaction v1' \
+  "$checkout_dir" "$checkout_repo" "$checkout_ref" \
+  "$expected_development_dir" 'support/different-install.sh' \
+  'support/different-post.sh' >"$identity_different_marker"
+development_recorded_target=sentinel-target
+update_recorded_delegate=sentinel-delegate
+update_recorded_post_install_delegate=sentinel-post-delegate
+set +e
+development_identity_matches "$identity_different_marker"
+identity_different_status=$?
+set -e
+[[ "$identity_different_status" -ne 0 ]] ||
+  fail 'development identity matcher accepted different valid identity fields'
+[[ "$development_recorded_target" == sentinel-target &&
+  "$update_recorded_delegate" == sentinel-delegate &&
+  "$update_recorded_post_install_delegate" == sentinel-post-delegate ]] ||
+  fail 'rejected copied identity changed recorded identity state'
 
 # An unopted consumer owns the meaning of every argument. In particular, the
 # provider must not globally reserve the recovery flag for unrelated tools.
@@ -642,14 +708,14 @@ EOF
 chmod 0755 "$hardlink_wrapper/ln"
 
 # The candidate marker is the ownership proof used after an uncatchable death.
-# A symlink fallback would become dangling if identity cleanup won the race, so
-# fail before parking the user link on filesystems that cannot hard-link it.
+# Android filesystems reject hard links even between siblings, so the
+# development-to-managed transaction must retain the same crash-safe contract
+# through its exclusive regular-copy fallback.
 hardlink_home="$tmp/hardlink-development"
 hardlink_root="$tmp/hardlink-recovery/example/example-tool"
 hardlink_transaction="$tmp/hardlink-recovery/example/.example-tool.install.transaction"
 mkdir -p "${hardlink_root%/*}"
 ln -s "$hardlink_home/example-tool" "$hardlink_root"
-set +e
 CHECKOUT_DEVELOPMENT_TEST_LOG="$tmp/hardlink.log" \
   CHECKOUT_DEVELOPMENT_TEST_POST_LOG="$tmp/hardlink-post.log" \
   CHECKOUT_DEVELOPMENT_REAL_LN="$real_ln" \
@@ -657,14 +723,61 @@ CHECKOUT_DEVELOPMENT_TEST_LOG="$tmp/hardlink.log" \
   SHDEPS_GIT_DEV_DIR="$hardlink_home" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$hardlink_root" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$source_remote" \
-  "$BASH" -s -- --managed <"$source_checkout/install.sh" >/dev/null 2>&1
-hardlink_status=$?
-set -e
-[[ "$hardlink_status" -ne 0 && -L "$hardlink_root" &&
-  $(readlink "$hardlink_root") == "$hardlink_home/example-tool" ]] ||
-  fail 'managed recovery used a symlink candidate marker or changed the dev link'
+  "$BASH" -s -- --managed <"$source_checkout/install.sh" >/dev/null ||
+  fail 'managed recovery required a hard-linked candidate marker'
+[[ -d "$hardlink_root/.git" && ! -L "$hardlink_root" &&
+  ! -e "$hardlink_home/example-tool" &&
+  ! -L "$hardlink_home/example-tool" ]] ||
+  fail 'no-hardlink recovery changed the development target or missed publication'
 [[ ! -e "$hardlink_transaction" && ! -L "$hardlink_transaction" ]] ||
-  fail 'candidate-marker failure left transaction state'
+  fail 'no-hardlink recovery left transaction state'
+
+corrupt_copy_wrapper="$tmp/corrupt-copy-wrapper"
+mkdir -p "$corrupt_copy_wrapper"
+cat >"$corrupt_copy_wrapper/cat" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+line_number=0
+while IFS= read -r line || [[ -n "$line" ]]; do
+  line_number=$((line_number + 1))
+  case $line_number in
+    6) line=support/different-install.sh ;;
+    7) line=support/different-post.sh ;;
+  esac
+  printf '%s\n' "$line"
+done <"${1:?}"
+EOF
+chmod 0755 "$corrupt_copy_wrapper/cat"
+
+# A command-path collision can only influence the still-private copy. Even if
+# it emits a different but independently valid identity, exact comparison must
+# fail before the canonical development link moves, and cleanup must discard
+# all installer-owned transaction state.
+corrupt_copy_home="$tmp/corrupt-copy-development"
+corrupt_copy_root="$tmp/corrupt-copy-recovery/example/example-tool"
+corrupt_copy_transaction="$tmp/corrupt-copy-recovery/example/.example-tool.install.transaction"
+mkdir -p "${corrupt_copy_root%/*}"
+ln -s "$corrupt_copy_home/example-tool" "$corrupt_copy_root"
+set +e
+CHECKOUT_DEVELOPMENT_TEST_LOG="$tmp/corrupt-copy.log" \
+  CHECKOUT_DEVELOPMENT_TEST_POST_LOG="$tmp/corrupt-copy-post.log" \
+  CHECKOUT_DEVELOPMENT_REAL_LN="$real_ln" \
+  PATH="$hardlink_wrapper:$corrupt_copy_wrapper:$PATH" \
+  SHDEPS_GIT_DEV_DIR="$corrupt_copy_home" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$corrupt_copy_root" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$source_remote" \
+  "$BASH" -s -- --managed <"$source_checkout/install.sh" >/dev/null 2>&1
+corrupt_copy_status=$?
+set -e
+[[ "$corrupt_copy_status" -ne 0 && -L "$corrupt_copy_root" &&
+  $(readlink "$corrupt_copy_root") == "$corrupt_copy_home/example-tool" ]] ||
+  fail 'different copied identity moved the canonical development link'
+[[ ! -e "$corrupt_copy_transaction" && ! -L "$corrupt_copy_transaction" &&
+  ! -e "$corrupt_copy_home/example-tool" &&
+  ! -L "$corrupt_copy_home/example-tool" ]] ||
+  fail 'different copied identity left transaction state or touched its target'
 
 real_mv=$(type -P mv)
 transition_wrapper="$tmp/transition-wrapper"
@@ -932,16 +1045,38 @@ cat >"$retirement_wrapper/rm" <<'EOF'
 
 set -euo pipefail
 
-destination=${!#}
+kill_parent=false
+for destination in "$@"; do
+  if [[ -n ${CHECKOUT_DEVELOPMENT_KILL_DESTINATION:-} &&
+    "$destination" == "$CHECKOUT_DEVELOPMENT_KILL_DESTINATION" ]] ||
+    [[ -n ${CHECKOUT_DEVELOPMENT_KILL_DESTINATION_PREFIX:-} &&
+    "$destination" == "$CHECKOUT_DEVELOPMENT_KILL_DESTINATION_PREFIX"* ]]; then
+    kill_parent=true
+  fi
+done
 "${CHECKOUT_DEVELOPMENT_REAL_RM:?}" "$@"
-if [[ -n ${CHECKOUT_DEVELOPMENT_KILL_DESTINATION:-} &&
-  "$destination" == "$CHECKOUT_DEVELOPMENT_KILL_DESTINATION" ]] ||
-  [[ -n ${CHECKOUT_DEVELOPMENT_KILL_DESTINATION_PREFIX:-} &&
-  "$destination" == "$CHECKOUT_DEVELOPMENT_KILL_DESTINATION_PREFIX"* ]]; then
+if [[ "$kill_parent" == true ]]; then
   kill -KILL "$PPID"
 fi
 EOF
 chmod 0755 "$retirement_wrapper/rm"
+
+real_rmdir=$(type -P rmdir)
+rmdir_wrapper="$tmp/rmdir-wrapper"
+mkdir -p "$rmdir_wrapper"
+cat >"$rmdir_wrapper/rmdir" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+destination=${!#}
+"${CHECKOUT_DEVELOPMENT_REAL_RMDIR:?}" "$@"
+if [[ -n ${CHECKOUT_DEVELOPMENT_KILL_RMDIR:-} &&
+  "$destination" == "$CHECKOUT_DEVELOPMENT_KILL_RMDIR" ]]; then
+  kill -KILL "$PPID"
+fi
+EOF
+chmod 0755 "$rmdir_wrapper/rmdir"
 
 # Publication is already committed when the parked link is retired. Recovery
 # must recognize the still-marked managed generation without recreating or
@@ -983,8 +1118,8 @@ CHECKOUT_DEVELOPMENT_TEST_LOG="$tmp/retire-recover.log" \
   fail 'old-link retirement recovery left transaction or lock state'
 
 # The hard-linked marker is intentionally self-contained after the transaction
-# identity is removed. Killing at that final record-retirement boundary proves
-# the orphan-marker recovery path rather than only the main transaction parser.
+# identity is removed. Killing at that boundary leaves candidate-head as the
+# exact revision proof, exercising recordless transaction recovery.
 final_home="$tmp/final-development"
 final_root="$tmp/final-recovery/example/example-tool"
 final_transaction="$tmp/final-recovery/example/.example-tool.install.transaction"
@@ -1020,6 +1155,158 @@ CHECKOUT_DEVELOPMENT_TEST_LOG="$tmp/final-recover.log" \
   ! -e "$final_transaction" && ! -L "$final_transaction" &&
   ! -e "$final_marker" && ! -L "$final_marker" &&
   ! -e "$final_lock" && ! -L "$final_lock" ]] ||
+  fail 'orphan-marker recovery left transaction, marker, or lock state'
+
+# On filesystems without hard links the still-private candidate receives an
+# exact regular copy of the transaction identity. Killing when the transaction
+# record is retired proves that copy remains a self-contained marker while the
+# remaining candidate-head proof completes recordless transaction recovery.
+fallback_final_home="$tmp/fallback-final-development"
+fallback_final_root="$tmp/fallback-final-recovery/example/example-tool"
+fallback_final_transaction="$tmp/fallback-final-recovery/example/.example-tool.install.transaction"
+fallback_final_marker="$fallback_final_root/.git/cgraf78-update-next-identity"
+fallback_final_lock="$tmp/fallback-final-recovery/example/.example-tool.install.lock"
+mkdir -p "${fallback_final_root%/*}"
+ln -s "$fallback_final_home/example-tool" "$fallback_final_root"
+set +e
+CHECKOUT_DEVELOPMENT_TEST_LOG="$tmp/fallback-final-crash.log" \
+  CHECKOUT_DEVELOPMENT_TEST_POST_LOG="$tmp/fallback-final-crash-post.log" \
+  CHECKOUT_DEVELOPMENT_REAL_LN="$real_ln" \
+  CHECKOUT_DEVELOPMENT_REAL_RM="$real_rm" \
+  CHECKOUT_DEVELOPMENT_KILL_DESTINATION_PREFIX="$fallback_final_transaction/identity." \
+  PATH="$hardlink_wrapper:$retirement_wrapper:$PATH" \
+  SHDEPS_GIT_DEV_DIR="$fallback_final_home" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$fallback_final_root" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$source_remote" \
+  "$BASH" -s -- --managed <"$source_checkout/install.sh" >/dev/null 2>&1
+fallback_final_crash_status=$?
+set -e
+[[ "$fallback_final_crash_status" -eq 137 &&
+  -d "$fallback_final_root/.git" && ! -L "$fallback_final_root" &&
+  -d "$fallback_final_transaction" &&
+  -f "$fallback_final_marker" && ! -L "$fallback_final_marker" ]] ||
+  fail 'no-hardlink identity copy did not preserve orphan recovery proof'
+CHECKOUT_DEVELOPMENT_TEST_LOG="$tmp/fallback-final-recover.log" \
+  CHECKOUT_DEVELOPMENT_TEST_POST_LOG="$tmp/fallback-final-recover-post.log" \
+  CHECKOUT_DEVELOPMENT_REAL_LN="$real_ln" \
+  PATH="$hardlink_wrapper:$PATH" \
+  SHDEPS_GIT_DEV_DIR="$fallback_final_home" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=2 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$fallback_final_root" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$source_remote" \
+  "$BASH" -s <"$source_checkout/install.sh" >/dev/null ||
+  fail 'normal rerun did not recover a copied no-hardlink marker'
+[[ -d "$fallback_final_root/.git" && ! -L "$fallback_final_root" &&
+  ! -e "$fallback_final_transaction" && ! -L "$fallback_final_transaction" &&
+  ! -e "$fallback_final_marker" && ! -L "$fallback_final_marker" &&
+  ! -e "$fallback_final_lock" && ! -L "$fallback_final_lock" ]] ||
+  fail 'no-hardlink recovery left transaction, marker, or lock state'
+
+# Once the transaction identity has been retired, the regular candidate marker
+# owns the committed generation. Removing its head proof is the next cleanup
+# boundary: a death there must leave an empty transaction that recovery can
+# retire for both inode-sharing and copied marker representations.
+run_post_head_removal_case() {
+  local name=$1 reject_hardlinks=$2
+  local case_home="$tmp/$name-development"
+  local case_root="$tmp/$name-recovery/example/example-tool"
+  local case_transaction="$tmp/$name-recovery/example/.example-tool.install.transaction"
+  local case_marker="$case_root/.git/cgraf78-update-next-identity"
+  local case_lock="$tmp/$name-recovery/example/.example-tool.install.lock"
+  local case_path="$retirement_wrapper:$PATH" case_recovery_path=$PATH
+  local case_status
+
+  if [[ "$reject_hardlinks" == true ]]; then
+    case_path="$hardlink_wrapper:$case_path"
+    case_recovery_path="$hardlink_wrapper:$case_recovery_path"
+  fi
+
+  mkdir -p "${case_root%/*}"
+  ln -s "$case_home/example-tool" "$case_root"
+  set +e
+  CHECKOUT_DEVELOPMENT_TEST_LOG="$tmp/$name-crash.log" \
+    CHECKOUT_DEVELOPMENT_TEST_POST_LOG="$tmp/$name-crash-post.log" \
+    CHECKOUT_DEVELOPMENT_REAL_LN="$real_ln" \
+    CHECKOUT_DEVELOPMENT_REAL_RM="$real_rm" \
+    CHECKOUT_DEVELOPMENT_KILL_DESTINATION="$case_transaction/candidate-head" \
+    PATH="$case_path" \
+    SHDEPS_GIT_DEV_DIR="$case_home" \
+    CGRAF78_CHECKOUT_INSTALL_DIR="$case_root" \
+    CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$source_remote" \
+    "$BASH" -s -- --managed <"$source_checkout/install.sh" >/dev/null 2>&1
+  case_status=$?
+  set -e
+  [[ "$case_status" -eq 137 && -d "$case_root/.git" &&
+    ! -L "$case_root" && -d "$case_transaction" &&
+    -f "$case_marker" && ! -L "$case_marker" &&
+    ! -e "$case_transaction/candidate-head" &&
+    ! -L "$case_transaction/candidate-head" ]] ||
+    fail "$name cleanup did not reach the post-head-removal boundary"
+  [[ -z $(LC_ALL=C ls -A1 "$case_transaction") ]] ||
+    fail "$name cleanup retired head proof before transaction identity"
+
+  CHECKOUT_DEVELOPMENT_TEST_LOG="$tmp/$name-recover.log" \
+    CHECKOUT_DEVELOPMENT_TEST_POST_LOG="$tmp/$name-recover-post.log" \
+    CHECKOUT_DEVELOPMENT_REAL_LN="$real_ln" \
+    PATH="$case_recovery_path" \
+    SHDEPS_GIT_DEV_DIR="$case_home" \
+    CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=2 \
+    CGRAF78_CHECKOUT_INSTALL_DIR="$case_root" \
+    CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$source_remote" \
+    "$BASH" -s <"$source_checkout/install.sh" >/dev/null ||
+    fail "$name rerun did not recover after head-proof retirement"
+  [[ -d "$case_root/.git" && ! -L "$case_root" &&
+    ! -e "$case_transaction" && ! -L "$case_transaction" &&
+    ! -e "$case_marker" && ! -L "$case_marker" &&
+    ! -e "$case_lock" && ! -L "$case_lock" ]] ||
+    fail "$name recovery left transaction, marker, or lock state"
+}
+
+run_post_head_removal_case post-head-hardlink false
+run_post_head_removal_case post-head-copy true
+
+# After the empty transaction directory is removed, only the regular copied
+# marker remains. A death before marker cleanup must be handled by the separate
+# orphan-marker path rather than either transaction parser.
+orphan_home="$tmp/orphan-development"
+orphan_root="$tmp/orphan-recovery/example/example-tool"
+orphan_transaction="$tmp/orphan-recovery/example/.example-tool.install.transaction"
+orphan_marker="$orphan_root/.git/cgraf78-update-next-identity"
+orphan_lock="$tmp/orphan-recovery/example/.example-tool.install.lock"
+mkdir -p "${orphan_root%/*}"
+ln -s "$orphan_home/example-tool" "$orphan_root"
+set +e
+CHECKOUT_DEVELOPMENT_TEST_LOG="$tmp/orphan-crash.log" \
+  CHECKOUT_DEVELOPMENT_TEST_POST_LOG="$tmp/orphan-crash-post.log" \
+  CHECKOUT_DEVELOPMENT_REAL_LN="$real_ln" \
+  CHECKOUT_DEVELOPMENT_REAL_RMDIR="$real_rmdir" \
+  CHECKOUT_DEVELOPMENT_KILL_RMDIR="$orphan_transaction" \
+  PATH="$hardlink_wrapper:$rmdir_wrapper:$PATH" \
+  SHDEPS_GIT_DEV_DIR="$orphan_home" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$orphan_root" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$source_remote" \
+  "$BASH" -s -- --managed <"$source_checkout/install.sh" >/dev/null 2>&1
+orphan_crash_status=$?
+set -e
+[[ "$orphan_crash_status" -eq 137 && -d "$orphan_root/.git" &&
+  ! -L "$orphan_root" && ! -e "$orphan_transaction" &&
+  ! -L "$orphan_transaction" && -f "$orphan_marker" &&
+  ! -L "$orphan_marker" ]] ||
+  fail 'post-transaction death did not preserve a regular orphan marker'
+CHECKOUT_DEVELOPMENT_TEST_LOG="$tmp/orphan-recover.log" \
+  CHECKOUT_DEVELOPMENT_TEST_POST_LOG="$tmp/orphan-recover-post.log" \
+  CHECKOUT_DEVELOPMENT_REAL_LN="$real_ln" \
+  PATH="$hardlink_wrapper:$PATH" \
+  SHDEPS_GIT_DEV_DIR="$orphan_home" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=2 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$orphan_root" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$source_remote" \
+  "$BASH" -s <"$source_checkout/install.sh" >/dev/null ||
+  fail 'normal rerun did not retire the orphaned candidate marker'
+[[ -d "$orphan_root/.git" && ! -L "$orphan_root" &&
+  ! -e "$orphan_transaction" && ! -L "$orphan_transaction" &&
+  ! -e "$orphan_marker" && ! -L "$orphan_marker" &&
+  ! -e "$orphan_lock" && ! -L "$orphan_lock" ]] ||
   fail 'orphan-marker recovery left transaction, marker, or lock state'
 
 invalid_development_home="$tmp/invalid-development"

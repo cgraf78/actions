@@ -193,11 +193,13 @@ The complete identity and validated managed candidate become durable before
 the canonical link moves to `previous`; publishing the candidate directory is
 the commit point. Recovery either restores the exact recorded link or finishes
 the marked managed generation, and removes only the parked link itself—never
-its target. Candidate identity uses a hard link so a crash after transaction
-record retirement still leaves a regular self-contained recovery marker. If
-the filesystem cannot create that proof, recovery fails before moving the
-development link. Existing managed-directory update transactions retain their
-original format and behavior.
+its target. Candidate identity prefers a hard link. On Android filesystems that
+reject hard links, the installer instead creates an exclusive private regular
+copy and validates its complete transaction identity before moving the
+development link. Either representation remains a self-contained recovery
+marker if a crash follows transaction-record retirement. Existing
+managed-directory update transactions retain their original format and
+behavior.
 
 The initial clone is shallow but durable. A rerun validates the exact origin
 and branch; refuses a dirty, detached, symlinked, nested, or foreign
