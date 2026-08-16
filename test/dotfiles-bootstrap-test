@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() {
+  printf 'not ok - %s\n' "$*" >&2
+  exit 1
+}
+
+write_tool() {
+  local path=$1 body=$2
+
+  printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' "$body" >"$path"
+  chmod 0755 "$path"
+}
+
+run_bootstrap() {
+  local home=$1 log=$2 github_env=$3 github_path=$4 repo_url=${5:-}
+
+  (
+    cd "$home"
+    HOME="$home" \
+      PATH="$tmp/bin:$PATH" \
+      GITHUB_ENV="$github_env" \
+      GITHUB_PATH="$github_path" \
+      DOTFILES_BOOTSTRAP_TEST_LOG="$log" \
+      DOTFILES_BOOTSTRAP_DOT_REPO_URL="$repo_url" \
+      bash "$root/.github/actions/dotfiles-bootstrap/install.sh"
+  )
+}
+
+mkdir -p "$tmp/bin"
+# shellcheck disable=SC2016 # Expanded only by the generated fixture program.
+write_tool "$tmp/bin/mise" '
+case ${1:-} in
+  --version | trust | install) exit 0 ;;
+  *) exit 1 ;;
+esac'
+for tool in actionlint ruff shellcheck shfmt zizmor; do
+  write_tool "$tmp/bin/$tool" 'exit 0'
+done
+
+dot_repo=$tmp/dot
+mkdir -p "$dot_repo"
+git -C "$dot_repo" init --quiet --initial-branch=main --template=''
+git -C "$dot_repo" config user.name 'Dotfiles bootstrap test'
+git -C "$dot_repo" config user.email dotfiles-bootstrap@example.invalid
+git -C "$dot_repo" config core.hooksPath /dev/null
+cat >"$dot_repo/install.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf 'installer\n' >>"${DOTFILES_BOOTSTRAP_TEST_LOG:?}"
+mkdir -p "$HOME/.local/bin"
+cat >"$HOME/.local/bin/dot" <<'DOT'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'dot:%s\n' "$*" >>"${DOTFILES_BOOTSTRAP_TEST_LOG:?}"
+DOT
+chmod 0755 "$HOME/.local/bin/dot"
+EOF
+chmod 0755 "$dot_repo/install.sh"
+git -C "$dot_repo" add install.sh
+git -C "$dot_repo" commit --quiet -m fixture
+dot_revision=$(git -C "$dot_repo" rev-parse HEAD)
+
+cutover_home=$tmp/cutover-home
+cutover_log=$tmp/cutover.log
+cutover_env=$tmp/cutover.env
+cutover_path=$tmp/cutover.path
+mkdir -p "$cutover_home/.local/lib/dotfiles"
+printf 'cgraf78 dot client cutover v1\nminimum_revision=%s\n' \
+  "$dot_revision" >"$cutover_home/.local/lib/dotfiles/dot-cutover.lock"
+: >"$cutover_log"
+: >"$cutover_env"
+: >"$cutover_path"
+run_bootstrap "$cutover_home" "$cutover_log" "$cutover_env" \
+  "$cutover_path" "$dot_repo" ||
+  fail 'cutover bootstrap failed'
+[[ $(cat "$cutover_log") == $'installer\ndot:update' ]] ||
+  fail 'cutover bootstrap did not install the locked engine before updating'
+cutover_origin=$(sed -n 's/^SHDEPS_DOT_REPO=//p' "$cutover_env")
+[[ -n "$cutover_origin" && -d "$cutover_origin" ]] ||
+  fail 'cutover bootstrap did not preserve its exact job-scoped dot origin'
+[[ $(git --git-dir="$cutover_origin" rev-parse refs/heads/main) == "$dot_revision" ]] ||
+  fail 'cutover bootstrap origin did not pin the reviewed dot revision'
+
+legacy_home=$tmp/legacy-home
+legacy_log=$tmp/legacy.log
+legacy_env=$tmp/legacy.env
+legacy_path=$tmp/legacy.path
+mkdir -p "$legacy_home/.local/bin"
+cat >"$legacy_home/.local/bin/dot" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'dot:%s\n' "$*" >>"${DOTFILES_BOOTSTRAP_TEST_LOG:?}"
+EOF
+chmod 0755 "$legacy_home/.local/bin/dot"
+: >"$legacy_log"
+: >"$legacy_env"
+: >"$legacy_path"
+run_bootstrap "$legacy_home" "$legacy_log" "$legacy_env" "$legacy_path" ||
+  fail 'legacy bootstrap failed'
+[[ $(cat "$legacy_log") == 'dot:update --skip-pull' ]] ||
+  fail 'legacy bootstrap changed its skip-pull contract'
+[[ ! -s "$legacy_env" ]] ||
+  fail 'legacy bootstrap exported standalone-engine state'
+
+malformed_home=$tmp/malformed-home
+malformed_log=$tmp/malformed.log
+mkdir -p "$malformed_home/.local/lib/dotfiles" "$malformed_home/.local/bin"
+printf 'foreign\n' >"$malformed_home/.local/lib/dotfiles/dot-cutover.lock"
+cp "$legacy_home/.local/bin/dot" "$malformed_home/.local/bin/dot"
+: >"$malformed_log"
+if run_bootstrap "$malformed_home" "$malformed_log" \
+  "$tmp/malformed.env" "$tmp/malformed.path" "$dot_repo" >/dev/null 2>&1; then
+  fail 'malformed cutover lock was accepted'
+fi
+[[ ! -s "$malformed_log" ]] ||
+  fail 'malformed cutover lock allowed bootstrap mutation'
+
+echo 'ok - dotfiles bootstrap supports legacy and locked standalone engines'

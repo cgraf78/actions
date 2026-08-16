@@ -233,6 +233,10 @@ jobs:
         shell: bash
         run: test/dotfiles-public-deps-test
 
+      - name: Test dotfiles bootstrap transitions
+        shell: bash
+        run: test/dotfiles-bootstrap-test
+
       - name: Test infrastructure retry classification
         shell: bash
         run: test/infra-retry-test
