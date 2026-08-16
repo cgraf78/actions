@@ -2099,9 +2099,21 @@ lock_publish_race_output=$(CHECKOUT_TEST_LOG="$tmp/lock-publish-race.log" \
   "$active_bash" -s <"$lock_source/install.sh" 2>&1)
 lock_publish_race_status=$?
 set -e
-[[ "$lock_publish_race_status" -ne 0 &&
-  "$lock_publish_race_output" == *'remove that exact empty directory with rmdir and retry'* ]] ||
+if [[ "$lock_publish_race_status" -eq 0 ||
+  "$lock_publish_race_output" != *'remove that exact empty directory with rmdir and retry'* ]]; then
+  printf 'lock publication diagnostic: status=%s output=%q\n' \
+    "$lock_publish_race_status" "$lock_publish_race_output" >&2
+  for candidate in \
+    "$lock_publish_race_path"/* \
+    "$lock_publish_race_path"/.[!.]* \
+    "$lock_publish_race_path"/..?*; do
+    [[ -e "$candidate" || -L "$candidate" ]] || continue
+    printf 'lock publication candidate: path=%q symlink=%s target=%q\n' \
+      "$candidate" "$([[ -L "$candidate" ]] && printf true || printf false)" \
+      "$(readlink "$candidate" 2>/dev/null || true)" >&2
+  done
   fail "v1 publication did not classify a legacy mkdir winner"
+fi
 if ! rmdir "$lock_publish_race_path"; then
   fail "v1 publication polluted a legacy directory that won the race"
 fi
