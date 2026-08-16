@@ -8,6 +8,7 @@ cmp() {
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d)
+tmp=$(cd -P -- "$tmp" && pwd -P)
 blocking_pid=
 blocking_release=
 signal_pid=
@@ -1203,6 +1204,7 @@ bash_resolver_collision_state="$tmp/bash-resolver-collision-state"
 bash_resolver_ln_wrapper="$tmp/bash-resolver-ln-wrapper"
 mkdir -p "$bash_resolver_ln_wrapper"
 real_ln=$(type -P ln)
+real_mv=$(type -P mv)
 real_mkdir=$(type -P mkdir)
 cat >"$bash_resolver_ln_wrapper/ln" <<EOF
 #!$active_bash
@@ -1218,7 +1220,21 @@ case \$target in
 esac
 exec "$real_ln" "\$@"
 EOF
-chmod 0755 "$bash_resolver_ln_wrapper/ln"
+cat >"$bash_resolver_ln_wrapper/mv" <<EOF
+#!$active_bash
+target=
+for argument in "\$@"; do
+  target=\$argument
+done
+case \$target in
+  */bash-v1)
+    "$real_mkdir" "\$target"
+    printf 'late foreign entry\n' >"\$target/foreign"
+    ;;
+esac
+exec "$real_mv" "\$@"
+EOF
+chmod 0755 "$bash_resolver_ln_wrapper/ln" "$bash_resolver_ln_wrapper/mv"
 # shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
 if PATH="$bash_resolver_ln_wrapper:$PATH" \
   XDG_STATE_HOME="$bash_resolver_collision_state" \
@@ -1259,7 +1275,21 @@ case \$target in
 esac
 exec "$real_ln" "\$@"
 EOF
-chmod 0755 "$bash_resolver_symlink_ln_wrapper/ln"
+cat >"$bash_resolver_symlink_ln_wrapper/mv" <<EOF
+#!$active_bash
+target=
+for argument in "\$@"; do
+  target=\$argument
+done
+case \$target in
+  */bash-v1)
+    "$real_ln" -s "$bash_resolver_symlink_collision_external" "\$target"
+    ;;
+esac
+exec "$real_mv" "\$@"
+EOF
+chmod 0755 "$bash_resolver_symlink_ln_wrapper/ln" \
+  "$bash_resolver_symlink_ln_wrapper/mv"
 # shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
 if PATH="$bash_resolver_symlink_ln_wrapper:$PATH" \
   XDG_STATE_HOME="$bash_resolver_symlink_collision_state" \
@@ -1301,7 +1331,23 @@ case \$target in
 esac
 exec "$real_ln" "\$@"
 EOF
-chmod 0755 "$bash_resolver_winner_wrapper/ln"
+cat >"$bash_resolver_winner_wrapper/mv" <<EOF
+#!$active_bash
+target=
+for argument in "\$@"; do
+  target=\$argument
+done
+case \$target in
+  */bash-v1)
+    printf 'cgraf78 checkout Bash runtime v1\n%s\n' \
+      '$bash_resolver_winner_dir/bash' >"\$target"
+    chmod 0600 "\$target"
+    ;;
+esac
+exec "$real_mv" "\$@"
+EOF
+chmod 0755 "$bash_resolver_winner_wrapper/ln" \
+  "$bash_resolver_winner_wrapper/mv"
 # shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
 PATH="$bash_resolver_winner_wrapper:$PATH" \
   XDG_STATE_HOME="$bash_resolver_winner_state" \
