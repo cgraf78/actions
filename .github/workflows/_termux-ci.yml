@@ -65,7 +65,7 @@ jobs:
 
       - name: Configure host Android NDK toolchain
         if: inputs.host-command != '' && inputs.rust-toolchain != ''
-        uses: cgraf78/actions/.github/actions/android-rust-toolchain@ae24730bc2b604ac14033e1c296e3745ad3b44d2
+        uses: cgraf78/actions/.github/actions/android-rust-toolchain@7672822962e3b13efbc01627b0245af93d9e20cc
         with:
           rust-target: x86_64-linux-android
 
