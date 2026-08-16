@@ -89,11 +89,43 @@ dotfiles_bootstrap_locked_engine() {
   bash "$installer"
 }
 
+dotfiles_bootstrap_adopt_client() {
+  local branch origin
+
+  [[ -d "$HOME/.git" && ! -L "$HOME/.git" ]] || {
+    echo "dotfiles bootstrap requires an ordinary Git checkout at HOME: $HOME" >&2
+    return 1
+  }
+  origin=$(git -C "$HOME" config --local --get-all remote.origin.url 2>/dev/null) || {
+    echo 'dotfiles bootstrap requires exactly one client origin URL' >&2
+    return 1
+  }
+  if [[ -z "$origin" || "$origin" == *$'\n'* || "$origin" == *$'\r'* ]]; then
+    echo 'dotfiles bootstrap requires exactly one single-line client origin URL' >&2
+    return 1
+  fi
+  # Keep the historical no-pull CI contract for both detached pull-request
+  # merges and attached push/schedule checkouts. A local branch at the exact
+  # tested commit lets dot bind durable ordinary-checkout identity while the
+  # missing upstream makes repository convergence preserve that generation.
+  branch=dot-ci-bootstrap
+  git -C "$HOME" checkout --quiet -B "$branch" HEAD || return 1
+  git -C "$HOME" config --local --unset-all "branch.$branch.remote" \
+    >/dev/null 2>&1 || true
+  git -C "$HOME" config --local --unset-all "branch.$branch.merge" \
+    >/dev/null 2>&1 || true
+  if git -C "$HOME" rev-parse --verify '@{u}' >/dev/null 2>&1; then
+    echo 'dotfiles bootstrap synthetic client branch unexpectedly has an upstream' >&2
+    return 1
+  fi
+  retry .local/bin/dot init --branch "$branch" "$origin"
+}
+
 # Retry the network-heavy bootstrap path. Once dot update installs mise,
 # explicitly verify the tools that later dotfiles checks rely on so a partial
 # bootstrap failure is reported at the source. Keep CI setup non-quiet: the
 # dependency logs are the evidence we need when bootstrap behavior regresses.
-dot_update_args=(--skip-pull)
+standalone_engine=false
 cutover_lock=$HOME/.local/lib/dotfiles/dot-cutover.lock
 if [[ -e "$cutover_lock" || -L "$cutover_lock" ]]; then
   dot_revision=$(dotfiles_bootstrap_read_cutover "$cutover_lock") || {
@@ -101,9 +133,13 @@ if [[ -e "$cutover_lock" || -L "$cutover_lock" ]]; then
     exit 1
   }
   dotfiles_bootstrap_locked_engine "$dot_revision"
-  dot_update_args=()
+  standalone_engine=true
 fi
-retry .local/bin/dot update "${dot_update_args[@]}"
+if [[ "$standalone_engine" == true ]]; then
+  dotfiles_bootstrap_adopt_client
+else
+  retry .local/bin/dot update --skip-pull
+fi
 
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
 if [ "Alpine" = "${MATRIX_NAME:-}" ]; then
