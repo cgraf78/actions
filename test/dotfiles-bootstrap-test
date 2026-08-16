@@ -38,6 +38,31 @@ run_bootstrap() {
   )
 }
 
+run_bootstrap_with_hostile_xdg() {
+  local environment_log=$1
+  shift
+
+  (
+    export DOTFILES_BOOTSTRAP_TEST_ENV_LOG=$environment_log
+    export DOTFILES_BOOTSTRAP_PRESERVE=preserved
+    export XDG_CONFIG_HOME=$tmp/host-xdg/config
+    export XDG_DATA_HOME=$tmp/host-xdg/data
+    export XDG_STATE_HOME=$tmp/host-xdg/state
+    export XDG_CACHE_HOME=$tmp/host-xdg/cache
+    export XDG_RUNTIME_DIR=$tmp/host-xdg/runtime
+    run_bootstrap "$@"
+  )
+}
+
+assert_checkout_xdg_environment() {
+  local environment_log=$1 label=$2
+  local expected
+
+  expected=$'XDG_CONFIG_HOME=<unset>\nXDG_DATA_HOME=<unset>\nXDG_STATE_HOME=<unset>\nXDG_CACHE_HOME=<unset>\nXDG_RUNTIME_DIR=<unset>\nDOTFILES_BOOTSTRAP_PRESERVE=preserved'
+  [[ $(cat "$environment_log") == "$expected" ]] ||
+    fail "$label did not isolate checkout-owned XDG roots"
+}
+
 prepare_cutover_client() {
   local home=$1 origin=$2 revision=$3 checkout_mode=${4:-attached}
 
@@ -95,6 +120,17 @@ cat >"$HOME/.local/share/cgraf78/dot/bin/dot" <<'DOT'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'dot:%s\n' "$*" >>"${DOTFILES_BOOTSTRAP_TEST_LOG:?}"
+if [[ -n ${DOTFILES_BOOTSTRAP_TEST_ENV_LOG:-} ]]; then
+  {
+    printf 'XDG_CONFIG_HOME=%s\n' "${XDG_CONFIG_HOME-<unset>}"
+    printf 'XDG_DATA_HOME=%s\n' "${XDG_DATA_HOME-<unset>}"
+    printf 'XDG_STATE_HOME=%s\n' "${XDG_STATE_HOME-<unset>}"
+    printf 'XDG_CACHE_HOME=%s\n' "${XDG_CACHE_HOME-<unset>}"
+    printf 'XDG_RUNTIME_DIR=%s\n' "${XDG_RUNTIME_DIR-<unset>}"
+    printf 'DOTFILES_BOOTSTRAP_PRESERVE=%s\n' \
+      "${DOTFILES_BOOTSTRAP_PRESERVE-<unset>}"
+  } >>"$DOTFILES_BOOTSTRAP_TEST_ENV_LOG"
+fi
 DOT
 chmod 0755 "$HOME/.local/share/cgraf78/dot/bin/dot"
 ln -s ../share/cgraf78/dot/bin/dot "$HOME/.local/bin/dot"
@@ -273,13 +309,16 @@ staged_home=$tmp/staged-home
 staged_log=$tmp/staged.log
 staged_env=$tmp/staged.env
 staged_path=$tmp/staged.path
+staged_xdg_env=$tmp/staged-xdg.env
 staged_client_origin=file://$tmp/staged-client-origin.git
 prepare_cutover_client "$staged_home" "$staged_client_origin" \
   "$dot_revision" detached
 : >"$staged_log"
 : >"$staged_env"
 : >"$staged_path"
-run_bootstrap "$staged_home" "$staged_log" "$staged_env" "$staged_path" \
+: >"$staged_xdg_env"
+run_bootstrap_with_hostile_xdg "$staged_xdg_env" \
+  "$staged_home" "$staged_log" "$staged_env" "$staged_path" \
   "file://$tmp/unreachable-dot-origin.git" install-staged "$stage_payload" \
   "$stage_payload/bootstrap.sh" ||
   fail 'staged Dot payload installation failed'
@@ -291,6 +330,7 @@ run_bootstrap "$staged_home" "$staged_log" "$staged_env" "$staged_path" \
   fail 'staged payload did not preserve its exact Dot origin for later commands'
 [[ ! -s "$staged_path" ]] ||
   fail 'staged payload unexpectedly published full-host PATH state'
+assert_checkout_xdg_environment "$staged_xdg_env" 'staged payload installation'
 
 mismatch_home=$tmp/mismatch-home
 mismatch_log=$tmp/mismatch.log
@@ -312,13 +352,16 @@ cutover_home=$tmp/cutover-home
 cutover_log=$tmp/cutover.log
 cutover_env=$tmp/cutover.env
 cutover_path=$tmp/cutover.path
+cutover_xdg_env=$tmp/cutover-xdg.env
 cutover_client_origin=file://$tmp/client-origin.git
 prepare_cutover_client "$cutover_home" "$cutover_client_origin" \
   "$dot_revision" detached
 : >"$cutover_log"
 : >"$cutover_env"
 : >"$cutover_path"
-run_bootstrap "$cutover_home" "$cutover_log" "$cutover_env" \
+: >"$cutover_xdg_env"
+run_bootstrap_with_hostile_xdg "$cutover_xdg_env" \
+  "$cutover_home" "$cutover_log" "$cutover_env" \
   "$cutover_path" "$dot_repo" ||
   fail 'cutover bootstrap failed'
 [[ $(cat "$cutover_log") == $'installer\ndot:init --branch dot-ci-bootstrap '"$cutover_client_origin" ]] ||
@@ -333,6 +376,7 @@ cutover_origin=$(sed -n 's/^SHDEPS_DOT_REPO=//p' "$cutover_env")
   fail 'cutover bootstrap did not preserve its exact job-scoped dot origin'
 [[ $(git --git-dir="$cutover_origin" rev-parse refs/heads/main) == "$dot_revision" ]] ||
   fail 'cutover bootstrap origin did not pin the reviewed dot revision'
+assert_checkout_xdg_environment "$cutover_xdg_env" 'full cutover bootstrap'
 
 attached_home=$tmp/attached-home
 attached_log=$tmp/attached.log

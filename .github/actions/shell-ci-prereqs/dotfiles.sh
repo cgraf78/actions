@@ -1,32 +1,41 @@
 #!/bin/sh
 
 install_dotfiles_bootstrap_prereqs() {
-  # Dotfiles CI intentionally installs only this exact package set from the
-  # workflow. The behavior under test is that dot update/shdeps can install the
-  # real toolchain itself, so do not route dotfiles through generic profiles.
+  # Keep the deliberately small bootstrap base here, while sourcing commands
+  # used by the portable dotfiles suites from capability profiles. This keeps
+  # package-name policy reusable and prevents the named setup from drifting
+  # away from normal shell CI on minimal images.
+  dotfiles_caller_profiles=${PROFILES:-}
+  reset_profile_prereqs
   case "$MATRIX_NAME" in
     macOS)
-      brew install bash
+      add_pkg brew_pkgs "bash"
       ;;
     Debian)
-      apt-get update && apt-get install -y git curl sudo openssh-client lsof netcat-openbsd procps
+      add_pkg apt_pkgs \
+        "git curl sudo openssh-client lsof netcat-openbsd procps"
       ;;
     Arch)
-      pacman-key --init && pacman-key --populate
-      pacman -Syu --noconfirm git curl sudo openssh lsof openbsd-netcat
+      add_pkg arch_pkgs "git curl sudo openssh lsof openbsd-netcat"
       ;;
     CentOS* | Fedora)
-      dnf install -y --allowerasing git curl sudo openssh-clients lsof nmap-ncat procps-ng
+      add_pkg dnf_pkgs \
+        "git curl sudo openssh-clients lsof nmap-ncat procps-ng"
       ;;
     Alpine)
-      apk add --no-cache git curl sudo bash coreutils shellcheck lua5.4 openssh-client lsof netcat-openbsd procps
-      # Dotfiles' Lua suite is a direct test contract. Alpine cannot run the
-      # bootstrapped glibc Neovim fallback, so provide the plain lua command.
-      ensure_lua_command
-      ;;
-    Ubuntu | WSL)
-      # Hosted Ubuntu/WSL runners keep their default image packages. This
-      # mirrors the original dotfiles workflow exactly.
+      add_pkg apk_pkgs \
+        "git curl sudo bash coreutils shellcheck lua5.4 openssh-client lsof netcat-openbsd procps"
       ;;
   esac
+
+  PROFILES=cron,fd,ripgrep,hostname
+  collect_profile_prereqs
+  install_package_lists
+  PROFILES=$dotfiles_caller_profiles
+
+  if [ "$MATRIX_NAME" = Alpine ]; then
+    # Dotfiles' Lua suite is a direct test contract. Alpine cannot run the
+    # bootstrapped glibc Neovim fallback, so provide the plain lua command.
+    ensure_lua_command
+  fi
 }

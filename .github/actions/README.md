@@ -33,7 +33,10 @@ consumer appears.
 private, self-contained payload at `stage-directory`; `mode: install-staged`
 validates and installs that payload against the destination client's cutover
 lock. The staged modes reuse the lock as the only Dot revision decision and do
-not run the full host Mise or doctor steps.
+not run the full host Mise or doctor steps. Before `full` or `install-staged`
+invokes Dot, the action clears inherited XDG path-root overrides so the client
+checkout under `HOME` remains the authoritative configuration; other client
+environment variables are preserved.
 
 `shellcheck-inventory` expects a tracked, nonsymlink inventory whose records
 are `program<TAB>path` or `fixture<TAB>path`. It discovers shell programs from

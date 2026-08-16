@@ -269,11 +269,14 @@ jobs:
 | `termux-profiles`     | `""`     | Android override. Empty reuses `profiles`, then falls back to `runtime`.            |
 
 Supported generic profiles are `base`, `jq`, `python`, `zsh`, `lua`, `neovim`,
-`tmux`, `openssh-netcat-lsof`, `procps`, and `shellcheck`. Termux additionally
-supports `runtime` as a lightweight alternative to `base`: both provide Bash
-and `termux-exec`, while `base` also provides Git and curl. The `procps`
-profile provides a full procps-compatible `ps` on Linux; macOS uses its system
-`ps` without an additional Homebrew package.
+`tmux`, `openssh-netcat-lsof`, `procps`, `cron`, `fd`, `ripgrep`, `hostname`,
+and `shellcheck`. Termux additionally supports `runtime` as a lightweight
+alternative to `base`: both provide Bash and `termux-exec`, while `base` also
+provides Git and curl. The `procps` profile provides a full procps-compatible
+`ps` on Linux; macOS uses its system `ps` without an additional Homebrew
+package. The command-oriented profiles intentionally follow platform naming:
+for example, `fd` installs Debian's `fdfind`, while platforms that package the
+command as `fd` keep that name.
 
 Termux installs the Android equivalents of generic profile capabilities from
 the same profile list, including when a named setup mode is selected. Its job
@@ -294,7 +297,9 @@ and does not restore that cache. With `setup: dotfiles`, the worker instead uses
 the shared bootstrap action to stage the standalone Dot revision named by the
 caller's cutover lock, transports the payload into the sandbox, and validates
 and installs it before the caller command. No Termux consumer carries a second
-Dot revision or lock parser.
+Dot revision or lock parser. The named setup composes the `cron`, `fd`,
+`ripgrep`, and `hostname` profiles on both conventional platforms and Termux,
+because the portable base-dotfiles suites exercise those system commands.
 
 When `shellcheck-inventory-path` is nonempty, the workflow installs ShellCheck
 once on Ubuntu and invokes the pinned

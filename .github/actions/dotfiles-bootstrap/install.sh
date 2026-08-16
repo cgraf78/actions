@@ -289,6 +289,15 @@ dotfiles_bootstrap_require_stage_directory() {
   esac
 }
 
+dotfiles_bootstrap_use_checkout_roots() {
+  # CI runners can inherit XDG roots that point outside the checked-out HOME.
+  # Dot must discover the client's committed config and publish all generated
+  # state below that checkout, so remove only the path-root overrides. Keep the
+  # rest of the caller environment intact for client-specific bootstrap policy.
+  unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME \
+    XDG_RUNTIME_DIR
+}
+
 bootstrap_mode=${DOTFILES_BOOTSTRAP_MODE:-full}
 stage_directory=${DOTFILES_BOOTSTRAP_STAGE_DIR:-}
 case $bootstrap_mode in
@@ -306,6 +315,7 @@ case $bootstrap_mode in
     dotfiles_bootstrap_require_cutover_revision
     dotfiles_bootstrap_staged_origin \
       "$stage_directory" "$DOTFILES_BOOTSTRAP_CUTOVER_REVISION"
+    dotfiles_bootstrap_use_checkout_roots
     dotfiles_bootstrap_install_engine_origin \
       "$DOTFILES_BOOTSTRAP_CUTOVER_REVISION" \
       "$DOTFILES_BOOTSTRAP_STAGED_ORIGIN"
@@ -318,6 +328,8 @@ case $bootstrap_mode in
     exit 2
     ;;
 esac
+
+dotfiles_bootstrap_use_checkout_roots
 
 # Retry the network-heavy bootstrap path. Once dot update installs mise,
 # explicitly verify the tools that later dotfiles checks rely on so a partial

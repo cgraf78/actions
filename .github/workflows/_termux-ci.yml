@@ -160,6 +160,12 @@ jobs:
               exit 2
               ;;
           esac
+          # Match the conventional-platform named setup by composing the same
+          # command capabilities. Keeping these as profiles preserves one
+          # package-policy vocabulary across the two workers.
+          if [[ "$setup" == dotfiles ]]; then
+            profiles=${profiles:+$profiles,}cron,fd,ripgrep,hostname
+          fi
           has_profile() {
             case ",$profiles," in
               *",$1,"*) return 0 ;;
@@ -186,6 +192,10 @@ jobs:
           has_profile openssh-netcat-lsof &&
             packages+=(openssh netcat-openbsd lsof)
           has_profile procps && packages+=(procps)
+          has_profile cron && packages+=(cronie)
+          has_profile fd && packages+=(fd)
+          has_profile ripgrep && packages+=(ripgrep)
+          has_profile hostname && packages+=(inetutils)
           has_profile shellcheck && packages+=(shellcheck)
           apt-get update
           # The pinned APK can predate the live Termux repository. Termux does
