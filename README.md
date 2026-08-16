@@ -138,6 +138,10 @@ the official Termux application sandbox on a hardware-accelerated Android x86_64
 emulator. The caller checkout is copied into `$HOME/project`, with Termux's real
 `HOME`, `PREFIX`, `TMPDIR`, and `PATH`.
 
+With `setup: dotfiles`, the worker stages the standalone Dot revision named by
+the caller's cutover lock, transports that exact payload into the sandbox, and
+installs it with Termux's trusted Bash before any caller command runs.
+
 ```yaml
 jobs:
   termux:
@@ -237,8 +241,8 @@ than one worker are split into first-party composite actions:
 - `.github/actions/shellcheck-inventory/` validates each caller's reviewed
   program/fixture inventory and runs ShellCheck without guessing which fixture
   fragments are standalone programs.
-- `.github/actions/dotfiles-bootstrap/` owns `dot update`, `mise install`, and
-  `dot doctor`.
+- `.github/actions/dotfiles-bootstrap/` owns the full `dot update`, Mise, and
+  doctor flow plus cutover-locked payload staging and sandbox installation.
 - `.github/actions/verify-release-scripts/` fails a consumer whose vendored
   release scripts no longer match `release-scripts/`.
 - `.github/actions/verify-consumer-sync/` enforces one consumer lock across all

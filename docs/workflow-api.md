@@ -290,7 +290,11 @@ executables and their shared libraries on one supported Termux package state.
 `force-dotfiles-update` maps to the dotfiles `SHDEPS_FORCE=1` API at the
 conventional-platform bootstrap boundary. It defaults off so ordinary callers
 keep the cache-first bootstrap. Termux starts from a fresh application sandbox
-and does not restore or invoke that shared bootstrap action.
+and does not restore that cache. With `setup: dotfiles`, the worker instead uses
+the shared bootstrap action to stage the standalone Dot revision named by the
+caller's cutover lock, transports the payload into the sandbox, and validates
+and installs it before the caller command. No Termux consumer carries a second
+Dot revision or lock parser.
 
 When `shellcheck-inventory-path` is nonempty, the workflow installs ShellCheck
 once on Ubuntu and invokes the pinned
@@ -473,6 +477,12 @@ installs the checksum-pinned official Termux APK, copies the caller checkout to
 `$HOME/project`, and runs the caller's command under Termux Bash with `errexit`,
 `nounset`, and `pipefail` enabled. Callers do not depend on the emulator,
 bootstrap, or sandbox-transport implementation.
+
+For `setup: dotfiles`, the worker reads the checked-out client's cutover lock on
+the Ubuntu host, stages that exact standalone Dot engine, and installs it with
+the Termux-provided Bash and Git before running caller code. The copied checkout
+is never added to the trusted bootstrap `PATH`; its tracked client adapter is
+used only after the standalone runtime has been installed and validated.
 
 | Input               | Default  | Contract                                                              |
 | ------------------- | -------- | --------------------------------------------------------------------- |
