@@ -904,6 +904,7 @@ fi
 
 bash_resolver_no_hardlink_state="$tmp/bash-resolver-no-hardlink-state"
 bash_resolver_no_hardlink_bin="$tmp/bash-resolver-no-hardlink-bin"
+bash_resolver_no_hardlink_real_mv=$(PATH="$platform_tool_path" command -v mv)
 mkdir -p "$bash_resolver_no_hardlink_bin"
 cat >"$bash_resolver_no_hardlink_bin/ln" <<'EOF'
 #!/usr/bin/env bash
@@ -913,10 +914,23 @@ if [[ ${1:-} != -s ]]; then
 fi
 exec "${CHECKOUT_TEST_REAL_LN:?}" "$@"
 EOF
-chmod 0755 "$bash_resolver_no_hardlink_bin/ln"
+cat >"$bash_resolver_no_hardlink_bin/mv" <<'EOF'
+#!/usr/bin/env bash
+
+if [[ $# -eq 4 && $1 == -nT && $2 == -- ]]; then
+  if [[ -e $4 || -L $4 ]]; then
+    exit 1
+  fi
+  exec "${CHECKOUT_TEST_REAL_MV:?}" "$3" "$4"
+fi
+exit 1
+EOF
+chmod 0755 "$bash_resolver_no_hardlink_bin/ln" \
+  "$bash_resolver_no_hardlink_bin/mv"
 # shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
 bash_resolver_no_hardlink_result=$(PATH="$bash_resolver_no_hardlink_bin:$platform_tool_path" \
   CHECKOUT_TEST_REAL_LN="$render_real_ln" \
+  CHECKOUT_TEST_REAL_MV="$bash_resolver_no_hardlink_real_mv" \
   XDG_STATE_HOME="$bash_resolver_no_hardlink_state" \
   "$active_bash" -c '
     set -euo pipefail
@@ -929,6 +943,33 @@ bash_resolver_no_hardlink_result=$(PATH="$bash_resolver_no_hardlink_bin:$platfor
 [[ -f "$bash_resolver_no_hardlink_state/nohardlink/bash-v1" &&
   ! -L "$bash_resolver_no_hardlink_state/nohardlink/bash-v1" ]] ||
   fail "Bash resolver did not persist a regular hint without hard-link support"
+
+bash_resolver_no_publisher_state="$tmp/bash-resolver-no-publisher-state"
+bash_resolver_no_publisher_bin="$tmp/bash-resolver-no-publisher-bin"
+mkdir -p "$bash_resolver_no_publisher_bin"
+for command_name in ln mv; do
+  cat >"$bash_resolver_no_publisher_bin/$command_name" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  chmod 0755 "$bash_resolver_no_publisher_bin/$command_name"
+done
+set +e
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+PATH="$bash_resolver_no_publisher_bin:$platform_tool_path" \
+  XDG_STATE_HOME="$bash_resolver_no_publisher_state" \
+  "$active_bash" -c '
+    set -euo pipefail
+    . "$1"
+    checkout_bash_v1_select nopublisher "$2"
+  ' -- "$bash_resolver_artifact" "$modern_bash" >/dev/null 2>&1
+bash_resolver_no_publisher_status=$?
+set -e
+[[ "$bash_resolver_no_publisher_status" -ne 0 ]] ||
+  fail "Bash resolver succeeded without an exact hint publisher"
+[[ ! -e "$bash_resolver_no_publisher_state/nopublisher/bash-v1" &&
+  ! -L "$bash_resolver_no_publisher_state/nopublisher/bash-v1" ]] ||
+  fail "failed Bash resolver publication left a runtime hint"
 
 bash_resolver_remote="$tmp/bash-resolver-tool.git"
 bash_resolver_managed="$tmp/bash-resolver-managed/example-tool"
