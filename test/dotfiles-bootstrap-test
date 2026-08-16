@@ -5,6 +5,7 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+action=$root/.github/actions/dotfiles-bootstrap/action.yml
 
 fail() {
   printf 'not ok - %s\n' "$*" >&2
@@ -20,6 +21,8 @@ write_tool() {
 
 run_bootstrap() {
   local home=$1 log=$2 github_env=$3 github_path=$4 repo_url=${5:-}
+  local mode=${6:-full} stage_dir=${7:-}
+  local bootstrap=${8:-$root/.github/actions/dotfiles-bootstrap/install.sh}
 
   (
     cd "$home"
@@ -29,7 +32,9 @@ run_bootstrap() {
       GITHUB_PATH="$github_path" \
       DOTFILES_BOOTSTRAP_TEST_LOG="$log" \
       DOTFILES_BOOTSTRAP_DOT_REPO_URL="$repo_url" \
-      bash "$root/.github/actions/dotfiles-bootstrap/install.sh"
+      DOTFILES_BOOTSTRAP_MODE="$mode" \
+      DOTFILES_BOOTSTRAP_STAGE_DIR="$stage_dir" \
+      bash "$bootstrap"
   )
 }
 
@@ -50,6 +55,18 @@ prepare_cutover_client() {
     git -C "$home" checkout --quiet --detach
   fi
 }
+
+yq -e '.inputs.mode.default == "full"' "$action" >/dev/null ||
+  fail 'dotfiles bootstrap mode does not default to full'
+yq -e '.inputs."stage-directory".default == ""' "$action" >/dev/null ||
+  fail 'dotfiles bootstrap stage directory does not default to empty'
+# shellcheck disable=SC2016 # Match the literal Actions expression in action.yml.
+yq -e '.runs.steps[] | select(.id == "bootstrap").env.DOTFILES_BOOTSTRAP_MODE == "${{ inputs.mode }}"' \
+  "$action" >/dev/null ||
+  fail 'dotfiles bootstrap action does not pass its mode through the environment'
+yq -e '.runs.steps[] | select(.name == "Run doctor smoke checks").if == "inputs.mode == '\''full'\''"' \
+  "$action" >/dev/null ||
+  fail 'dotfiles bootstrap action does not limit doctor to full mode'
 
 mkdir -p "$tmp/bin"
 # shellcheck disable=SC2016 # Expanded only by the generated fixture program.
@@ -73,18 +90,101 @@ cat >"$dot_repo/install.sh" <<'EOF'
 set -euo pipefail
 
 printf 'installer\n' >>"${DOTFILES_BOOTSTRAP_TEST_LOG:?}"
-mkdir -p "$HOME/.local/bin"
-cat >"$HOME/.local/bin/dot" <<'DOT'
+mkdir -p "$HOME/.local/bin" "$HOME/.local/share/cgraf78/dot/bin"
+cat >"$HOME/.local/share/cgraf78/dot/bin/dot" <<'DOT'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'dot:%s\n' "$*" >>"${DOTFILES_BOOTSTRAP_TEST_LOG:?}"
 DOT
-chmod 0755 "$HOME/.local/bin/dot"
+chmod 0755 "$HOME/.local/share/cgraf78/dot/bin/dot"
+ln -s ../share/cgraf78/dot/bin/dot "$HOME/.local/bin/dot"
 EOF
 chmod 0755 "$dot_repo/install.sh"
 git -C "$dot_repo" add install.sh
 git -C "$dot_repo" commit --quiet -m fixture
 dot_revision=$(git -C "$dot_repo" rev-parse HEAD)
+
+stage_home=$tmp/stage-home
+stage_log=$tmp/stage.log
+stage_env=$tmp/stage.env
+stage_path=$tmp/stage.path
+stage_payload=$tmp/staged-dot-bootstrap
+stage_client_origin=file://$tmp/stage-client-origin.git
+prepare_cutover_client "$stage_home" "$stage_client_origin" "$dot_revision"
+: >"$stage_log"
+: >"$stage_env"
+: >"$stage_path"
+run_bootstrap "$stage_home" "$stage_log" "$stage_env" "$stage_path" \
+  "$dot_repo" stage "$stage_payload" ||
+  fail 'locked Dot payload staging failed'
+[[ ! -s "$stage_log" && ! -s "$stage_env" && ! -s "$stage_path" ]] ||
+  fail 'payload staging performed host installation side effects'
+[[ ! -e "$stage_home/.local/bin/dot" &&
+  ! -L "$stage_home/.local/bin/dot" ]] ||
+  fail 'payload staging installed Dot into the host client'
+[[ -f "$stage_payload/payload-v1" &&
+  ! -L "$stage_payload/payload-v1" &&
+  $(<"$stage_payload/payload-v1") == 'cgraf78 dotfiles bootstrap payload v1' ]] ||
+  fail 'payload staging did not publish its exact format marker'
+[[ -f "$stage_payload/bootstrap.sh" &&
+  ! -L "$stage_payload/bootstrap.sh" &&
+  -x "$stage_payload/bootstrap.sh" ]] ||
+  fail 'payload staging did not publish a regular executable bootstrap'
+[[ -d "$stage_payload/dot-origin.git" &&
+  ! -L "$stage_payload/dot-origin.git" ]] ||
+  fail 'payload staging did not publish a regular Dot origin'
+[[ $(git --git-dir="$stage_payload/dot-origin.git" rev-parse refs/heads/main) == "$dot_revision" ]] ||
+  fail 'payload staging did not pin the cutover-locked Dot revision'
+
+foreign_payload=$tmp/foreign-payload
+mkdir "$foreign_payload"
+printf 'foreign\n' >"$foreign_payload/owned"
+if run_bootstrap "$stage_home" "$tmp/foreign-stage.log" \
+  "$tmp/foreign-stage.env" "$tmp/foreign-stage.path" "$dot_repo" \
+  stage "$foreign_payload" >/dev/null 2>&1; then
+  fail 'payload staging overwrote an existing destination'
+fi
+[[ $(<"$foreign_payload/owned") == foreign ]] ||
+  fail 'failed payload staging changed a foreign destination'
+
+staged_home=$tmp/staged-home
+staged_log=$tmp/staged.log
+staged_env=$tmp/staged.env
+staged_path=$tmp/staged.path
+staged_client_origin=file://$tmp/staged-client-origin.git
+prepare_cutover_client "$staged_home" "$staged_client_origin" \
+  "$dot_revision" detached
+: >"$staged_log"
+: >"$staged_env"
+: >"$staged_path"
+run_bootstrap "$staged_home" "$staged_log" "$staged_env" "$staged_path" \
+  "file://$tmp/unreachable-dot-origin.git" install-staged "$stage_payload" \
+  "$stage_payload/bootstrap.sh" ||
+  fail 'staged Dot payload installation failed'
+[[ $(cat "$staged_log") == $'installer\ndot:init --branch dot-ci-bootstrap '"$staged_client_origin" ]] ||
+  fail 'staged payload did not install and adopt the exact client checkout'
+[[ -x "$staged_home/.local/share/cgraf78/dot/bin/dot" ]] ||
+  fail 'staged payload did not install the standalone Dot runtime'
+[[ $(<"$staged_env") == "SHDEPS_DOT_REPO=$stage_payload/dot-origin.git" ]] ||
+  fail 'staged payload did not preserve its exact Dot origin for later commands'
+[[ ! -s "$staged_path" ]] ||
+  fail 'staged payload unexpectedly published full-host PATH state'
+
+mismatch_home=$tmp/mismatch-home
+mismatch_log=$tmp/mismatch.log
+prepare_cutover_client "$mismatch_home" "file://$tmp/mismatch-origin.git" \
+  ffffffffffffffffffffffffffffffffffffffff
+: >"$mismatch_log"
+if run_bootstrap "$mismatch_home" "$mismatch_log" "$tmp/mismatch.env" \
+  "$tmp/mismatch.path" "file://$tmp/unreachable-dot-origin.git" \
+  install-staged "$stage_payload" "$stage_payload/bootstrap.sh" \
+  >/dev/null 2>&1; then
+  fail 'staged payload accepted a client with a different cutover lock'
+fi
+[[ ! -s "$mismatch_log" &&
+  ! -e "$mismatch_home/.local/bin/dot" &&
+  ! -L "$mismatch_home/.local/bin/dot" ]] ||
+  fail 'mismatched staged payload mutated the client before rejection'
 
 cutover_home=$tmp/cutover-home
 cutover_log=$tmp/cutover.log

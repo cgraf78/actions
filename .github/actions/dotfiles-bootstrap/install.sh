@@ -47,16 +47,42 @@ dotfiles_bootstrap_read_cutover() {
   printf '%s\n' "$revision_line"
 }
 
-dotfiles_bootstrap_locked_engine() {
-  local revision=$1 repo_url staging origin installer fetched tree metadata path
-  local stage_parent=${RUNNER_TEMP:-${TMPDIR:-/tmp}}
+dotfiles_bootstrap_verify_engine_origin() {
+  local origin=$1 revision=$2 fetched head tree metadata path
 
-  repo_url=${DOTFILES_BOOTSTRAP_DOT_REPO_URL:-https://github.com/cgraf78/dot.git}
-  staging=$(mktemp -d "$stage_parent/dotfiles-bootstrap.XXXXXXXX") || return 1
-  chmod 0700 "$staging"
+  [[ -d "$origin" && ! -L "$origin" ]] || {
+    echo "dot bootstrap origin is not a regular directory: $origin" >&2
+    return 1
+  }
+  fetched=$(git --git-dir="$origin" rev-parse --verify \
+    'refs/heads/main^{commit}' 2>/dev/null) || return 1
+  [[ $fetched == "$revision" ]] || {
+    echo "dot bootstrap origin has $fetched, expected $revision" >&2
+    return 1
+  }
+  head=$(git --git-dir="$origin" symbolic-ref HEAD 2>/dev/null) || return 1
+  [[ $head == refs/heads/main ]] || {
+    echo "dot bootstrap origin has an unexpected HEAD: $head" >&2
+    return 1
+  }
+  tree=$(git --git-dir="$origin" ls-tree "$revision" -- install.sh) || return 1
+  IFS=$'\t' read -r metadata path <<<"$tree"
+  # shellcheck disable=SC2086 # The fixed three-field ls-tree header is parsed deliberately.
+  set -- $metadata
+  [[ $# -eq 3 && $1 == 100755 && $2 == blob &&
+    $3 =~ ^[0-9a-f]{40}$ && $path == install.sh ]] || {
+    echo "locked dot revision has an unsafe installer entry: $revision" >&2
+    return 1
+  }
+}
+
+dotfiles_bootstrap_prepare_engine_origin() {
+  local revision=$1 staging=$2 repo_url origin fetched
+
+  [[ -d "$staging" && ! -L "$staging" ]] || return 1
   origin=$staging/dot-origin.git
-  installer=$staging/install.sh
-
+  [[ ! -e "$origin" && ! -L "$origin" ]] || return 1
+  repo_url=${DOTFILES_BOOTSTRAP_DOT_REPO_URL:-https://github.com/cgraf78/dot.git}
   git init --quiet --bare "$origin"
   retry git --git-dir="$origin" fetch --quiet --force --no-tags --depth=1 \
     "$repo_url" "$revision"
@@ -67,16 +93,16 @@ dotfiles_bootstrap_locked_engine() {
   }
   git --git-dir="$origin" update-ref refs/heads/main "$revision"
   git --git-dir="$origin" symbolic-ref HEAD refs/heads/main
+  dotfiles_bootstrap_verify_engine_origin "$origin" "$revision"
+}
 
-  tree=$(git --git-dir="$origin" ls-tree "$revision" -- install.sh) || return 1
-  IFS=$'\t' read -r metadata path <<<"$tree"
-  # shellcheck disable=SC2086 # The fixed three-field ls-tree header is parsed deliberately.
-  set -- $metadata
-  [[ $# -eq 3 && $1 == 100755 && $2 == blob &&
-    $3 =~ ^[0-9a-f]{40}$ && $path == install.sh ]] || {
-    echo "locked dot revision has an unsafe installer entry: $revision" >&2
+dotfiles_bootstrap_install_engine_origin() {
+  local revision=$1 origin=$2 installer
+  local stage_parent=${RUNNER_TEMP:-${TMPDIR:-/tmp}}
+
+  dotfiles_bootstrap_verify_engine_origin "$origin" "$revision" || return 1
+  installer=$(mktemp "$stage_parent/dotfiles-bootstrap-installer.XXXXXXXX") ||
     return 1
-  }
   git --git-dir="$origin" show "$revision:install.sh" >"$installer"
   chmod 0600 "$installer"
 
@@ -85,8 +111,81 @@ dotfiles_bootstrap_locked_engine() {
   # The installed checkout keeps this exact origin for the rest of the job.
   # Preserve it beyond this composite-action step instead of introducing a
   # second hard-coded dot revision or racing the public branch tip.
-  printf 'SHDEPS_DOT_REPO=%s\n' "$origin" >>"$GITHUB_ENV"
+  if [[ -n ${GITHUB_ENV:-} ]]; then
+    printf 'SHDEPS_DOT_REPO=%s\n' "$origin" >>"$GITHUB_ENV"
+  fi
   bash "$installer"
+}
+
+dotfiles_bootstrap_locked_engine() {
+  local revision=$1 staging
+  local stage_parent=${RUNNER_TEMP:-${TMPDIR:-/tmp}}
+
+  staging=$(mktemp -d "$stage_parent/dotfiles-bootstrap.XXXXXXXX") || return 1
+  chmod 0700 "$staging"
+  dotfiles_bootstrap_prepare_engine_origin "$revision" "$staging" || return 1
+  dotfiles_bootstrap_install_engine_origin \
+    "$revision" "$staging/dot-origin.git"
+}
+
+dotfiles_bootstrap_stage_payload() {
+  local revision=$1 destination=$2 parent
+
+  case $destination in
+    /*) ;;
+    *)
+      echo 'dotfiles bootstrap stage directory must be absolute' >&2
+      return 1
+      ;;
+  esac
+  parent=${destination%/*}
+  [[ -n "$parent" && "$parent" != "$destination" &&
+    -d "$parent" && ! -L "$parent" ]] || {
+    echo "dotfiles bootstrap stage parent is not a regular directory: $parent" >&2
+    return 1
+  }
+  [[ ! -e "$destination" && ! -L "$destination" ]] || {
+    echo "dotfiles bootstrap stage destination already exists: $destination" >&2
+    return 1
+  }
+  [[ -f "$0" && ! -L "$0" ]] || {
+    echo "dotfiles bootstrap source is not a regular file: $0" >&2
+    return 1
+  }
+
+  mkdir "$destination" || return 1
+  chmod 0700 "$destination"
+  dotfiles_bootstrap_prepare_engine_origin "$revision" "$destination" ||
+    return 1
+  cp "$0" "$destination/bootstrap.sh" || return 1
+  chmod 0500 "$destination/bootstrap.sh"
+  printf '%s\n' 'cgraf78 dotfiles bootstrap payload v1' \
+    >"$destination/payload-v1" || return 1
+  chmod 0400 "$destination/payload-v1"
+}
+
+dotfiles_bootstrap_staged_origin() {
+  local payload=$1 revision=$2 marker extra='' script_parent payload_root origin
+
+  [[ -d "$payload" && ! -L "$payload" ]] || return 1
+  [[ -f "$payload/payload-v1" && ! -L "$payload/payload-v1" ]] || return 1
+  {
+    IFS= read -r marker || return 1
+    if IFS= read -r extra || [[ -n $extra ]]; then
+      return 1
+    fi
+  } <"$payload/payload-v1"
+  [[ $marker == 'cgraf78 dotfiles bootstrap payload v1' ]] || return 1
+  [[ ${0##*/} == bootstrap.sh && -f "$0" && ! -L "$0" ]] || return 1
+  script_parent=${0%/*}
+  [[ -n "$script_parent" && "$script_parent" != "$0" ]] || return 1
+  script_parent=$(cd -P -- "$script_parent" 2>/dev/null && pwd -P) || return 1
+  payload_root=$(cd -P -- "$payload" 2>/dev/null && pwd -P) || return 1
+  [[ $script_parent == "$payload_root" ]] || return 1
+
+  origin=$payload/dot-origin.git
+  dotfiles_bootstrap_verify_engine_origin "$origin" "$revision" || return 1
+  DOTFILES_BOOTSTRAP_STAGED_ORIGIN=$origin
 }
 
 dotfiles_bootstrap_adopt_client() {
@@ -120,6 +219,53 @@ dotfiles_bootstrap_adopt_client() {
   fi
   retry .local/bin/dot init --branch "$branch" "$origin"
 }
+
+dotfiles_bootstrap_require_cutover_revision() {
+  local lock=$HOME/.local/lib/dotfiles/dot-cutover.lock
+
+  [[ -e "$lock" || -L "$lock" ]] || {
+    echo "dotfiles bootstrap requires a cutover lock: $lock" >&2
+    return 1
+  }
+  DOTFILES_BOOTSTRAP_CUTOVER_REVISION=$(dotfiles_bootstrap_read_cutover "$lock") || {
+    echo "unsafe or malformed dot cutover lock: $lock" >&2
+    return 1
+  }
+}
+
+bootstrap_mode=${DOTFILES_BOOTSTRAP_MODE:-full}
+stage_directory=${DOTFILES_BOOTSTRAP_STAGE_DIR:-}
+case $bootstrap_mode in
+  stage)
+    [[ -n "$stage_directory" ]] || {
+      echo 'dotfiles bootstrap stage mode requires a stage directory' >&2
+      exit 2
+    }
+    dotfiles_bootstrap_require_cutover_revision
+    dotfiles_bootstrap_stage_payload \
+      "$DOTFILES_BOOTSTRAP_CUTOVER_REVISION" "$stage_directory"
+    exit 0
+    ;;
+  install-staged)
+    [[ -n "$stage_directory" ]] || {
+      echo 'dotfiles bootstrap install-staged mode requires a stage directory' >&2
+      exit 2
+    }
+    dotfiles_bootstrap_require_cutover_revision
+    dotfiles_bootstrap_staged_origin \
+      "$stage_directory" "$DOTFILES_BOOTSTRAP_CUTOVER_REVISION"
+    dotfiles_bootstrap_install_engine_origin \
+      "$DOTFILES_BOOTSTRAP_CUTOVER_REVISION" \
+      "$DOTFILES_BOOTSTRAP_STAGED_ORIGIN"
+    dotfiles_bootstrap_adopt_client
+    exit 0
+    ;;
+  full) ;;
+  *)
+    echo "unsupported dotfiles bootstrap mode: $bootstrap_mode" >&2
+    exit 2
+    ;;
+esac
 
 # Retry the network-heavy bootstrap path. Once dot update installs mise,
 # explicitly verify the tools that later dotfiles checks rely on so a partial

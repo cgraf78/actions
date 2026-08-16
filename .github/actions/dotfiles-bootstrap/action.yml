@@ -1,14 +1,28 @@
 name: Bootstrap dotfiles dependencies
 description: Run dot update, mise install, and dot doctor for dotfiles CI.
 
+inputs:
+  mode:
+    description: Full host bootstrap, staged payload creation, or staged payload installation.
+    required: false
+    default: full
+  stage-directory:
+    description: Absolute payload directory used by stage and install-staged modes.
+    required: false
+    default: ""
+
 runs:
   using: composite
   steps:
     - name: Install dependencies
+      id: bootstrap
       shell: bash
+      env:
+        DOTFILES_BOOTSTRAP_MODE: ${{ inputs.mode }}
+        DOTFILES_BOOTSTRAP_STAGE_DIR: ${{ inputs.stage-directory }}
       run: "$GITHUB_ACTION_PATH/install.sh"
 
     - name: Run doctor smoke checks
+      if: inputs.mode == 'full'
       shell: bash
       run: .local/bin/dot doctor
-
