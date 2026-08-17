@@ -53,7 +53,7 @@ jobs:
         # This neutral action is the OS-matrix source of truth. Future Rust,
         # C++, or other reusable workflows should call the same action, then
         # run language-specific setup/tests against the returned matrix.
-        uses: cgraf78/actions/.github/actions/platform-matrix@b8f922ff1f0d957fe8c8898f8b4f033884723729
+        uses: cgraf78/actions/.github/actions/platform-matrix@c4bbf57ffad030b6d031c5976a1847f73c032ff4
         with:
           matrix-set: ${{ inputs.matrix-set }}
 
@@ -70,7 +70,7 @@ jobs:
       - name: Install OS prerequisites
         # Keep first-party prerequisites pinned so an outer reusable-workflow
         # SHA controls every executable action in the call graph.
-        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@b8f922ff1f0d957fe8c8898f8b4f033884723729
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@c4bbf57ffad030b6d031c5976a1847f73c032ff4
         with:
           matrix-name: ${{ matrix.name }}
           profiles: ${{ inputs.profiles }}
@@ -199,7 +199,7 @@ jobs:
 
       - name: Bootstrap dotfiles dependencies
         if: inputs.setup == 'dotfiles'
-        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@b8f922ff1f0d957fe8c8898f8b4f033884723729
+        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@c4bbf57ffad030b6d031c5976a1847f73c032ff4
         env:
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
