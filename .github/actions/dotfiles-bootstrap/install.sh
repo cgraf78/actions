@@ -126,7 +126,7 @@ dotfiles_bootstrap_prepare_engine_origin() {
 }
 
 dotfiles_bootstrap_install_engine_origin() {
-  local revision=$1 origin=$2 installer
+  local revision=$1 origin=$2 installer origin_url
   local stage_parent=${RUNNER_TEMP:-${TMPDIR:-/tmp}}
 
   dotfiles_bootstrap_verify_engine_origin "$origin" "$revision" || return 1
@@ -136,15 +136,19 @@ dotfiles_bootstrap_install_engine_origin() {
     show "$revision:install.sh" >"$installer"
   chmod 0600 "$installer"
 
-  export CGRAF78_CHECKOUT_INSTALL_REPO_URL=$origin
-  export SHDEPS_DOT_REPO=$origin
+  # Git's local-path clone optimization hardlinks object files and ignores
+  # shallow-clone bounds. A file URL keeps the checkout self-contained while
+  # retaining this already-verified local origin as the only source of bytes.
+  origin_url=file://$origin
+  export CGRAF78_CHECKOUT_INSTALL_REPO_URL=$origin_url
+  export SHDEPS_DOT_REPO=$origin_url
   # Both exports are intentional: the checkout installer consumes the first
   # for managed checkout clone/update, while Dot/Shdeps consumes the second for
   # later provider operations. Keep both bound to this one verified origin and
   # preserve it beyond this composite-action step instead of introducing a
   # second hard-coded revision or racing the public branch tip.
   if [[ -n ${GITHUB_ENV:-} ]]; then
-    printf 'SHDEPS_DOT_REPO=%s\n' "$origin" >>"$GITHUB_ENV"
+    printf 'SHDEPS_DOT_REPO=%s\n' "$origin_url" >>"$GITHUB_ENV"
   fi
   GIT_NO_REPLACE_OBJECTS=1 bash "$installer"
 }
