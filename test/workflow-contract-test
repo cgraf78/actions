@@ -73,6 +73,7 @@ contracts() {
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env.GH_TOKEN == "${{ secrets.DEPENDENCY_GH_TOKEN }}"' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env | has("GITHUB_TOKEN") | not' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env.MISE_GITHUB_TOKEN == "${{ github.token }}"' _shell-platforms.yml
+  check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env.DOT_INIT_SKIP_PROVIDER == "1"' _shell-platforms.yml
   check '[.jobs.platform.steps[] | select((.uses // "") | contains("actions/cache@"))] | length == 2' _shell-platforms.yml
   check '[.jobs.platform.steps[] | select(.uses == "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9")] | length == 2' _shell-platforms.yml
 
@@ -107,6 +108,7 @@ contracts() {
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("termux-exec")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("LD_PRELOAD")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("DOTFILES_BOOTSTRAP_MODE=install-staged")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("DOT_INIT_SKIP_PROVIDER=1")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("\"$PREFIX/bin/bash\" \"$dotfiles_payload/bootstrap.sh\"")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("$project_root/.local/bin") | not' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("export SHDEPS_DOT_REPO=\"$dotfiles_payload/dot-origin.git\"")' _termux-ci.yml

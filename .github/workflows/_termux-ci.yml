@@ -241,6 +241,7 @@ jobs:
             (
               cd "$project_root"
               HOME="$project_root" \
+                DOT_INIT_SKIP_PROVIDER=1 \
                 DOTFILES_BOOTSTRAP_MODE=install-staged \
                 DOTFILES_BOOTSTRAP_STAGE_DIR="$dotfiles_payload" \
                 "$PREFIX/bin/bash" "$dotfiles_payload/bootstrap.sh"

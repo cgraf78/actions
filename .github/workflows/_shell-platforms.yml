@@ -207,6 +207,10 @@ jobs:
           # Mise's separate download boundary instead of exporting it here.
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
           MISE_GITHUB_TOKEN: ${{ github.token }}
+          # The matrix already installed its explicit prerequisite profiles.
+          # Adopt and converge the client without also installing its complete
+          # workstation provider policy; later ordinary Dot runs still honor it.
+          DOT_INIT_SKIP_PROVIDER: '1'
           MATRIX_NAME: ${{ matrix.name }}
           SHDEPS_FORCE: ${{ inputs.force-dotfiles-update && '1' || '0' }}
 

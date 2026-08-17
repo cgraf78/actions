@@ -140,7 +140,12 @@ emulator. The caller checkout is copied into `$HOME/project`, with Termux's real
 
 With `setup: dotfiles`, the worker stages the standalone Dot revision named by
 the caller's cutover lock, transports that exact payload into the sandbox, and
-installs it with Termux's trusted Bash before any caller command runs.
+installs it with Termux's trusted Bash before any caller command runs. The
+bootstrap still adopts the client and converges its repositories, overlays,
+and extensions, but skips the client dependency provider for that invocation
+because the workflow has already installed its explicit prerequisite profiles.
+The committed provider setting is unchanged and applies to later ordinary Dot
+runs.
 
 ```yaml
 jobs:
