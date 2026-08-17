@@ -66,7 +66,9 @@ bootstrap before dependency resolution when validating forced-update behavior.
 The default is false, so normal CI consumers retain the cache-first path.
 `dotfiles-provider: true` separately opts the owning repository into its full
 configured Dot dependency provider. The default is false so repositories that
-reuse dotfiles setup install only their declared CI profiles.
+reuse dotfiles setup install only their declared CI profiles. Full-provider
+mode uses the caller's read token for public GitHub release metadata; an
+explicit dependency token still takes precedence for private repositories.
 `shellcheck-inventory-path` adds one Ubuntu lint job to the existing required
 aggregate without repeating static lint across the runtime matrix.
 `shellcheck-exclude-codes` optionally applies a validated repository-wide

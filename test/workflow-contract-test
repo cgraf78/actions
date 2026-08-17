@@ -80,7 +80,7 @@ contracts() {
   check '.jobs.platform.steps[] | select(.name == "Configure lightweight dotfiles bootstrap").run == "echo \"DOT_INIT_SKIP_PROVIDER=1\" >> \"$GITHUB_ENV\""' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env.SHDEPS_FORCE == "${{ inputs.force-dotfiles-update && '"'"'1'"'"' || '"'"'0'"'"' }}"' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env.GH_TOKEN == "${{ secrets.DEPENDENCY_GH_TOKEN }}"' _shell-platforms.yml
-  check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env | has("GITHUB_TOKEN") | not' _shell-platforms.yml
+  check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env.GITHUB_TOKEN == "${{ inputs.dotfiles-provider && github.token || '"'"''"'"' }}"' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env.MISE_GITHUB_TOKEN == "${{ github.token }}"' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env | has("DOT_INIT_SKIP_PROVIDER") | not' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Install pinned Mise").if == "(inputs.setup == '\''checkrun'\'' || inputs.setup == '\''dotfiles'\'') && matrix.name != '\''Alpine'\''"' _shell-platforms.yml
