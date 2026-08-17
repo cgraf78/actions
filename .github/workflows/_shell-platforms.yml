@@ -16,6 +16,11 @@ on:
         required: false
         type: boolean
         default: false
+      dotfiles-provider:
+        description: Run the configured Dot dependency provider during dotfiles setup.
+        required: false
+        type: boolean
+        default: false
       matrix-set:
         description: Platform matrix to run. Supported values are core and full.
         required: true
@@ -198,6 +203,14 @@ jobs:
           restore-keys: |
             dot-deps-${{ runner.os }}-${{ matrix.name }}-
 
+      - name: Configure lightweight dotfiles bootstrap
+        if: inputs.setup == 'dotfiles' && !inputs.dotfiles-provider
+        shell: bash
+        # Shared consumers normally need only the declared CI profiles. Keep
+        # their bootstrap small, while allowing the dotfiles owner to opt into
+        # its complete provider policy for end-to-end dependency tests.
+        run: echo "DOT_INIT_SKIP_PROVIDER=1" >> "$GITHUB_ENV"
+
       - name: Bootstrap dotfiles dependencies
         if: inputs.setup == 'dotfiles'
         uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@1723f9c7a4edb4812257d6b7288bb676fb9d147e
@@ -208,10 +221,6 @@ jobs:
           # Mise's separate download boundary instead of exporting it here.
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
           MISE_GITHUB_TOKEN: ${{ github.token }}
-          # The matrix already installed its explicit prerequisite profiles.
-          # Adopt and converge the client without also installing its complete
-          # workstation provider policy; later ordinary Dot runs still honor it.
-          DOT_INIT_SKIP_PROVIDER: '1'
           MATRIX_NAME: ${{ matrix.name }}
           SHDEPS_FORCE: ${{ inputs.force-dotfiles-update && '1' || '0' }}
 

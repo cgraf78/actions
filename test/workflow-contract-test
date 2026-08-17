@@ -45,6 +45,10 @@ contracts() {
   check '.on.workflow_call.inputs.force-dotfiles-update.required == false' shell-ci.yml
   check '.on.workflow_call.inputs.force-dotfiles-update.type == "boolean"' shell-ci.yml
   check '.jobs.platforms.with.force-dotfiles-update == "${{ inputs.force-dotfiles-update }}"' shell-ci.yml
+  check '.on.workflow_call.inputs.dotfiles-provider.default == false' shell-ci.yml
+  check '.on.workflow_call.inputs.dotfiles-provider.required == false' shell-ci.yml
+  check '.on.workflow_call.inputs.dotfiles-provider.type == "boolean"' shell-ci.yml
+  check '.jobs.platforms.with.dotfiles-provider == "${{ inputs.dotfiles-provider }}"' shell-ci.yml
   check '.jobs.shellcheck.name == "ShellCheck"' shell-ci.yml
   check '.jobs.shellcheck.if == "${{ inputs.shellcheck-inventory-path != '"'"''"'"' }}"' shell-ci.yml
   check '.jobs.shellcheck.runs-on == "ubuntu-24.04"' shell-ci.yml
@@ -68,12 +72,17 @@ contracts() {
   check '.on.workflow_call.inputs.force-dotfiles-update.default == false' _shell-platforms.yml
   check '.on.workflow_call.inputs.force-dotfiles-update.required == false' _shell-platforms.yml
   check '.on.workflow_call.inputs.force-dotfiles-update.type == "boolean"' _shell-platforms.yml
+  check '.on.workflow_call.inputs.dotfiles-provider.default == false' _shell-platforms.yml
+  check '.on.workflow_call.inputs.dotfiles-provider.required == false' _shell-platforms.yml
+  check '.on.workflow_call.inputs.dotfiles-provider.type == "boolean"' _shell-platforms.yml
   check ".jobs.platform.steps[] | select(.name == \"Install OS prerequisites\").uses == \"cgraf78/actions/.github/actions/shell-ci-prereqs@$actions_lock\"" _shell-platforms.yml
+  check '.jobs.platform.steps[] | select(.name == "Configure lightweight dotfiles bootstrap").if == "inputs.setup == '\''dotfiles'\'' && !inputs.dotfiles-provider"' _shell-platforms.yml
+  check '.jobs.platform.steps[] | select(.name == "Configure lightweight dotfiles bootstrap").run == "echo \"DOT_INIT_SKIP_PROVIDER=1\" >> \"$GITHUB_ENV\""' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env.SHDEPS_FORCE == "${{ inputs.force-dotfiles-update && '"'"'1'"'"' || '"'"'0'"'"' }}"' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env.GH_TOKEN == "${{ secrets.DEPENDENCY_GH_TOKEN }}"' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env | has("GITHUB_TOKEN") | not' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env.MISE_GITHUB_TOKEN == "${{ github.token }}"' _shell-platforms.yml
-  check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env.DOT_INIT_SKIP_PROVIDER == "1"' _shell-platforms.yml
+  check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env | has("DOT_INIT_SKIP_PROVIDER") | not' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Install pinned Mise").if == "(inputs.setup == '\''checkrun'\'' || inputs.setup == '\''dotfiles'\'') && matrix.name != '\''Alpine'\''"' _shell-platforms.yml
   check '[.jobs.platform.steps[] | select((.uses // "") | contains("actions/cache@"))] | length == 2' _shell-platforms.yml
   check '[.jobs.platform.steps[] | select(.uses == "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9")] | length == 2' _shell-platforms.yml
@@ -112,7 +121,7 @@ contracts() {
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("DOT_INIT_SKIP_PROVIDER=1")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("\"$PREFIX/bin/bash\" \"$dotfiles_payload/bootstrap.sh\"")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("$project_root/.local/bin") | not' _termux-ci.yml
-  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("export SHDEPS_DOT_REPO=\"$dotfiles_payload/dot-origin.git\"")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("export SHDEPS_DOT_REPO=\"file://$dotfiles_payload/dot-origin.git\"")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("[[ -x \"$project_root/.local/share/cgraf78/dot/bin/dot\" ]]")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("Copying locked Dot bootstrap payload")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("adb shell run-as com.termux test -L \"files/usr/tmp/$payload_name\"")' _termux-ci.yml
