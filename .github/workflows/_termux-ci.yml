@@ -237,7 +237,10 @@ jobs:
               echo "locked Dot bootstrap payload is unavailable: $dotfiles_payload" >&2
               exit 1
             }
-            export SHDEPS_DOT_REPO="$dotfiles_payload/dot-origin.git"
+            # install-staged binds the managed checkout to this exact file URL.
+            # Preserve the same spelling for the caller's later provider run;
+            # Shdeps intentionally rejects equivalent-looking origin drift.
+            export SHDEPS_DOT_REPO="file://$dotfiles_payload/dot-origin.git"
             (
               cd "$project_root"
               HOME="$project_root" \

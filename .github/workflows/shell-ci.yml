@@ -13,6 +13,11 @@ on:
         required: false
         type: boolean
         default: false
+      dotfiles-provider:
+        description: Run the configured Dot dependency provider during dotfiles setup.
+        required: false
+        type: boolean
+        default: false
       profiles:
         description: Comma-separated dependency profiles for normal shell-tool repos.
         required: false
@@ -81,6 +86,7 @@ jobs:
     secrets:
       DEPENDENCY_GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
     with:
+      dotfiles-provider: ${{ inputs.dotfiles-provider }}
       force-dotfiles-update: ${{ inputs.force-dotfiles-update }}
       matrix-set: ${{ inputs.matrix-set != 'auto' && inputs.matrix-set || ((github.event_name == 'push' || github.event_name == 'pull_request') && 'core' || 'full') }}
       profiles: ${{ inputs.profiles }}
