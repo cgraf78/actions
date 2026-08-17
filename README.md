@@ -246,8 +246,9 @@ than one worker are split into first-party composite actions:
 - `.github/actions/shellcheck-inventory/` validates each caller's reviewed
   program/fixture inventory and runs ShellCheck without guessing which fixture
   fragments are standalone programs.
-- `.github/actions/dotfiles-bootstrap/` owns the full `dot update`, Mise, and
-  doctor flow plus cutover-locked payload staging and sandbox installation.
+- `.github/actions/dotfiles-bootstrap/` owns Dot bootstrap, locked Mise tools,
+  full-provider doctor checks, and cutover-locked payload staging and sandbox
+  installation.
 - `.github/actions/verify-release-scripts/` fails a consumer whose vendored
   release scripts no longer match `release-scripts/`.
 - `.github/actions/verify-consumer-sync/` enforces one consumer lock across all

@@ -309,6 +309,9 @@ provider normally. On conventional platforms other than Alpine, the workflow's
 existing pinned Mise step supplies the runtime and the bootstrap action installs
 the client's committed Mise lock; this replaces the one bootstrap prerequisite
 previously supplied indirectly by Shdeps without creating a second Mise pin.
+Because this mode intentionally omits workstation-only provider dependencies,
+the action also omits its full-provider doctor smoke step; the caller's normal
+test command remains the required verification surface.
 
 When `shellcheck-inventory-path` is nonempty, the workflow installs ShellCheck
 once on Ubuntu and invokes the pinned

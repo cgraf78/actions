@@ -15,8 +15,9 @@ this repo and by other `cgraf78` repositories.
   `dtolnay/rust-toolchain`.
 - `musl-build-prereqs` installs the musl linker toolchain, and optionally adds
   the Rust musl target, for repos whose crates link C code.
-- `dotfiles-bootstrap` runs the full dotfiles update, Mise, and doctor flow or
-  stages and installs a cutover-locked standalone Dot payload for sandbox CI.
+- `dotfiles-bootstrap` installs Dot and locked Mise tools, runs doctor when the
+  full dependency provider converges, or stages and installs a cutover-locked
+  standalone Dot payload for sandbox CI.
 - `verify-release-scripts` is the narrow byte, mode, and managed-file-set check
   for vendored release scripts.
 - `verify-consumer-sync` is the consumer-facing gate: it requires every
@@ -36,7 +37,10 @@ lock. The staged modes reuse the lock as the only Dot revision decision and do
 not run the full host Mise or doctor steps. Before `full` or `install-staged`
 invokes Dot, the action clears inherited XDG path-root overrides so the client
 checkout under `HOME` remains the authoritative configuration; other client
-environment variables are preserved.
+environment variables are preserved. When shared CI explicitly suppresses the
+client dependency provider, `full` mode also suppresses its workstation-wide
+doctor smoke check; the caller's repository tests remain the verifier for that
+deliberately smaller dependency surface.
 
 `shellcheck-inventory` expects a tracked, nonsymlink inventory whose records
 are `program<TAB>path` or `fixture<TAB>path`. It discovers shell programs from

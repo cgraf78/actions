@@ -1,5 +1,5 @@
 name: Bootstrap dotfiles dependencies
-description: Run dot update, mise install, and dot doctor for dotfiles CI.
+description: Install Dot, locked Mise tools, and full-provider doctor checks for dotfiles CI.
 
 inputs:
   mode:
@@ -23,6 +23,6 @@ runs:
       run: "$GITHUB_ACTION_PATH/install.sh"
 
     - name: Run doctor smoke checks
-      if: inputs.mode == 'full'
+      if: inputs.mode == 'full' && env.DOT_INIT_SKIP_PROVIDER != '1'
       shell: bash
       run: .local/bin/dot doctor
