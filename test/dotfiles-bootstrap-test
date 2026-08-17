@@ -116,6 +116,8 @@ set -euo pipefail
 
 printf 'installer\n' >>"${DOTFILES_BOOTSTRAP_TEST_LOG:?}"
 mkdir -p "$HOME/.local/bin" "$HOME/.local/share/cgraf78/dot/bin"
+printf '%s\n' "${CGRAF78_CHECKOUT_INSTALL_REPO_URL:?}" > \
+  "$HOME/.local/share/cgraf78/dot/bootstrap-origin"
 cat >"$HOME/.local/share/cgraf78/dot/bin/dot" <<'DOT'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -326,8 +328,11 @@ run_bootstrap_with_hostile_xdg "$staged_xdg_env" \
   fail 'staged payload did not install and adopt the exact client checkout'
 [[ -x "$staged_home/.local/share/cgraf78/dot/bin/dot" ]] ||
   fail 'staged payload did not install the standalone Dot runtime'
-[[ $(<"$staged_env") == "SHDEPS_DOT_REPO=$stage_payload/dot-origin.git" ]] ||
+staged_dot_origin="file://$stage_payload/dot-origin.git"
+[[ $(<"$staged_env") == "SHDEPS_DOT_REPO=$staged_dot_origin" ]] ||
   fail 'staged payload did not preserve its exact Dot origin for later commands'
+[[ $(<"$staged_home/.local/share/cgraf78/dot/bootstrap-origin") == "$staged_dot_origin" ]] ||
+  fail 'staged payload did not give the installer its exact file origin'
 [[ ! -s "$staged_path" ]] ||
   fail 'staged payload unexpectedly published full-host PATH state'
 assert_checkout_xdg_environment "$staged_xdg_env" 'staged payload installation'
@@ -372,10 +377,12 @@ if git -C "$cutover_home" rev-parse --verify '@{u}' >/dev/null 2>&1; then
   fail 'cutover bootstrap attached an upstream to the detached client'
 fi
 cutover_origin=$(sed -n 's/^SHDEPS_DOT_REPO=//p' "$cutover_env")
-[[ -n "$cutover_origin" && -d "$cutover_origin" ]] ||
+[[ "$cutover_origin" == file://* && -d "${cutover_origin#file://}" ]] ||
   fail 'cutover bootstrap did not preserve its exact job-scoped dot origin'
-[[ $(git --git-dir="$cutover_origin" rev-parse refs/heads/main) == "$dot_revision" ]] ||
+[[ $(git --git-dir="${cutover_origin#file://}" rev-parse refs/heads/main) == "$dot_revision" ]] ||
   fail 'cutover bootstrap origin did not pin the reviewed dot revision'
+[[ $(<"$cutover_home/.local/share/cgraf78/dot/bootstrap-origin") == "$cutover_origin" ]] ||
+  fail 'cutover bootstrap did not give the installer its exact file origin'
 assert_checkout_xdg_environment "$cutover_xdg_env" 'full cutover bootstrap'
 
 attached_home=$tmp/attached-home
