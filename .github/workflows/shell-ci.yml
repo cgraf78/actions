@@ -93,7 +93,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Install ShellCheck prerequisites
-        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@ffc4c2c599813c18d9240875dff1049297acf1bb
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@1723f9c7a4edb4812257d6b7288bb676fb9d147e
         with:
           matrix-name: Ubuntu
           profiles: base,shellcheck
@@ -105,7 +105,7 @@ jobs:
           persist-credentials: false
 
       - name: Validate and lint shell inventory
-        uses: cgraf78/actions/.github/actions/shellcheck-inventory@ffc4c2c599813c18d9240875dff1049297acf1bb
+        uses: cgraf78/actions/.github/actions/shellcheck-inventory@1723f9c7a4edb4812257d6b7288bb676fb9d147e
         with:
           inventory-path: ${{ inputs.shellcheck-inventory-path }}
           exclude-codes: ${{ inputs.shellcheck-exclude-codes }}

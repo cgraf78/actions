@@ -53,7 +53,7 @@ jobs:
         # This neutral action is the OS-matrix source of truth. Future Rust,
         # C++, or other reusable workflows should call the same action, then
         # run language-specific setup/tests against the returned matrix.
-        uses: cgraf78/actions/.github/actions/platform-matrix@ffc4c2c599813c18d9240875dff1049297acf1bb
+        uses: cgraf78/actions/.github/actions/platform-matrix@1723f9c7a4edb4812257d6b7288bb676fb9d147e
         with:
           matrix-set: ${{ inputs.matrix-set }}
 
@@ -70,7 +70,7 @@ jobs:
       - name: Install OS prerequisites
         # Keep first-party prerequisites pinned so an outer reusable-workflow
         # SHA controls every executable action in the call graph.
-        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@ffc4c2c599813c18d9240875dff1049297acf1bb
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@1723f9c7a4edb4812257d6b7288bb676fb9d147e
         with:
           matrix-name: ${{ matrix.name }}
           profiles: ${{ inputs.profiles }}
@@ -200,7 +200,7 @@ jobs:
 
       - name: Bootstrap dotfiles dependencies
         if: inputs.setup == 'dotfiles'
-        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@ffc4c2c599813c18d9240875dff1049297acf1bb
+        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@1723f9c7a4edb4812257d6b7288bb676fb9d147e
         env:
           # GH_TOKEN is the explicit cross-repository dependency credential.
           # The automatic GITHUB_TOKEN is scoped to the caller repository and
