@@ -222,6 +222,13 @@ Use this for private dependency downloads or GitHub API rate-limit avoidance.
 Do not use it for release upload permissions; `rust-release.yml` uses
 `github.token` only at its write boundaries.
 
+With `setup: dotfiles` and `dotfiles-provider: true`, the dependency bootstrap
+also exposes the caller's read-only workflow token as Shdeps' `GITHUB_TOKEN`
+fallback. This keeps parallel public-repository installs out of GitHub's shared
+anonymous quota. A supplied `DEPENDENCY_GH_TOKEN` remains `GH_TOKEN` and wins
+under Shdeps' documented credential precedence, so private dependencies still
+require an explicit cross-repository credential.
+
 ### Concurrency Scope
 
 The public shell and Rust workflows cancel an older run only when its

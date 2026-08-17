@@ -215,11 +215,13 @@ jobs:
         if: inputs.setup == 'dotfiles'
         uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@1723f9c7a4edb4812257d6b7288bb676fb9d147e
         env:
-          # GH_TOKEN is the explicit cross-repository dependency credential.
-          # The automatic GITHUB_TOKEN is scoped to the caller repository and
-          # can hide public release metadata from Shdeps, so reserve it for
-          # Mise's separate download boundary instead of exporting it here.
+          # The explicit cross-repository token wins for private dependencies.
+          # Full-provider public CI still needs authenticated release metadata:
+          # parallel clean platforms otherwise share GitHub's 60/hour anonymous
+          # quota. Shdeps already defines GH_TOKEN before GITHUB_TOKEN, so this
+          # fallback changes nothing when the caller supplies a stronger token.
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ inputs.dotfiles-provider && github.token || '' }}
           MISE_GITHUB_TOKEN: ${{ github.token }}
           MATRIX_NAME: ${{ matrix.name }}
           SHDEPS_FORCE: ${{ inputs.force-dotfiles-update && '1' || '0' }}
