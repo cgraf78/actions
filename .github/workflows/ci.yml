@@ -175,7 +175,7 @@ jobs:
           persist-credentials: false
 
       - name: Verify internal Actions sync
-        uses: cgraf78/actions/.github/actions/verify-consumer-sync@c4bbf57ffad030b6d031c5976a1847f73c032ff4
+        uses: cgraf78/actions/.github/actions/verify-consumer-sync@190f1a08019d412264c8909471495f5be846752b
 
       - name: Install actionlint
         shell: bash
