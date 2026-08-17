@@ -74,6 +74,7 @@ contracts() {
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env | has("GITHUB_TOKEN") | not' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env.MISE_GITHUB_TOKEN == "${{ github.token }}"' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env.DOT_INIT_SKIP_PROVIDER == "1"' _shell-platforms.yml
+  check '.jobs.platform.steps[] | select(.name == "Install pinned Mise").if == "(inputs.setup == '\''checkrun'\'' || inputs.setup == '\''dotfiles'\'') && matrix.name != '\''Alpine'\''"' _shell-platforms.yml
   check '[.jobs.platform.steps[] | select((.uses // "") | contains("actions/cache@"))] | length == 2' _shell-platforms.yml
   check '[.jobs.platform.steps[] | select(.uses == "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9")] | length == 2' _shell-platforms.yml
 

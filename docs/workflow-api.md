@@ -305,7 +305,10 @@ profiles are installed. Dot still validates the committed config and converges
 repositories, overlays, and extensions, but it does not install the client's
 complete workstation dependency policy in shared CI. The override is not
 persisted, so a later ordinary `dot init` or `dot update` honors the configured
-provider normally.
+provider normally. On conventional platforms other than Alpine, the workflow's
+existing pinned Mise step supplies the runtime and the bootstrap action installs
+the client's committed Mise lock; this replaces the one bootstrap prerequisite
+previously supplied indirectly by Shdeps without creating a second Mise pin.
 
 When `shellcheck-inventory-path` is nonempty, the workflow installs ShellCheck
 once on Ubuntu and invokes the pinned
