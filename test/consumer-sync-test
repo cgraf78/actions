@@ -291,6 +291,7 @@ cat >"$checkout_consumer/scripts/checkout-installer.conf" <<'EOF'
 # shellcheck disable=SC2034
 CHECKOUT_INSTALLER_ENABLED=true
 CHECKOUT_INSTALLER_REPO=example/source-tool
+CHECKOUT_INSTALLER_BASH_RESOLVER=v1
 EOF
 cat >"$checkout_consumer/support/install-checkout.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -303,6 +304,9 @@ git -C "$checkout_consumer" add .
 [[ -f "$checkout_consumer/install.sh" &&
   -x "$checkout_consumer/install.sh" ]] ||
   fail "sync did not generate the checkout bootstrap"
+[[ -f "$checkout_consumer/support/checkout-bash-v1.sh" &&
+  ! -L "$checkout_consumer/support/checkout-bash-v1.sh" ]] ||
+  fail "sync did not generate the checkout Bash resolver"
 grep -Fq "checkout_repo='example/source-tool'" \
   "$checkout_consumer/install.sh" ||
   fail "checkout bootstrap did not use consumer policy"
@@ -325,6 +329,19 @@ fi
   fail "sync did not restore a drifted checkout bootstrap"
 git -C "$checkout_consumer" add .
 
+printf '\n# checkout Bash resolver drift\n' \
+  >>"$checkout_consumer/support/checkout-bash-v1.sh"
+out=$(GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
+  GITHUB_WORKSPACE="$checkout_consumer" ACTION_REF="$want" \
+  "$verify" 2>&1) &&
+  fail "drifted checkout Bash resolver unexpectedly verified"
+if [[ "$out" != *"generated Bash resolver differs"* ]]; then
+  fail "checkout Bash resolver drift did not explain the failed verification"
+fi
+"$sync" "$checkout_consumer" >/dev/null ||
+  fail "sync did not restore a drifted checkout Bash resolver"
+git -C "$checkout_consumer" add .
+
 sed 's/CHECKOUT_INSTALLER_ENABLED=true/CHECKOUT_INSTALLER_ENABLED=false/' \
   "$checkout_consumer/scripts/checkout-installer.conf" \
   >"$checkout_consumer/scripts/checkout-installer.conf.tmp"
@@ -340,6 +357,8 @@ fi
   fail "sync could not retire a disabled checkout bootstrap"
 [[ ! -e "$checkout_consumer/install.sh" ]] ||
   fail "sync did not retire the disabled checkout bootstrap"
+[[ ! -e "$checkout_consumer/support/checkout-bash-v1.sh" ]] ||
+  fail "sync did not retire the disabled checkout Bash resolver"
 
 sed '/uses:/s/$/,evil/' "$plain_consumer/.github/workflows/ci.yml" \
   >"$plain_consumer/.github/workflows/ci.yml.tmp"

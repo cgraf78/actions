@@ -2,8 +2,13 @@
 
 set -euo pipefail
 
+cmp() {
+  fail 'checkout installer tests must not require cmp'
+}
+
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d)
+tmp=$(cd -P -- "$tmp" && pwd -P)
 blocking_pid=
 blocking_release=
 signal_pid=
@@ -12,6 +17,7 @@ signal_delegate_child_file=
 network_signal_pid=
 network_signal_release=
 interrupt_killer_pid=
+lock_wait_pid=
 
 cleanup() {
   if [[ -n "$blocking_release" ]]; then
@@ -41,6 +47,10 @@ cleanup() {
     kill -TERM "$interrupt_killer_pid" 2>/dev/null || true
     wait "$interrupt_killer_pid" 2>/dev/null || true
   fi
+  if [[ -n "$lock_wait_pid" ]]; then
+    kill -TERM "$lock_wait_pid" 2>/dev/null || true
+    wait "$lock_wait_pid" 2>/dev/null || true
+  fi
   rm -rf "$tmp"
 }
 
@@ -49,6 +59,15 @@ trap cleanup EXIT
 fail() {
   printf 'checkout-installer-test: %s\n' "$1" >&2
   exit 1
+}
+
+files_identical() {
+  local left=$1 right=$2 left_hash right_hash
+
+  [[ -f "$left" && -f "$right" ]] || return 1
+  left_hash=$(git hash-object -- "$left") || return 1
+  right_hash=$(git hash-object -- "$right") || return 1
+  [[ "$left_hash" == "$right_hash" ]]
 }
 
 assert_process_gone() {
@@ -71,6 +90,63 @@ case ${PREFIX:-} in
 esac
 [[ -x "$active_bash" ]] ||
   fail "active Bash is not executable: $active_bash"
+
+modern_bash_candidate() {
+  local candidate=$1 major
+
+  [[ "$candidate" == /* && -f "$candidate" && -x "$candidate" ]] || return 1
+  # shellcheck disable=SC2016 # Expanded only by the candidate interpreter.
+  major=$(BASH_ENV='' ENV='' "$candidate" --noprofile --norc -c \
+    'printf "%s\n" "${BASH_VERSINFO[0]-}"' 2>/dev/null) || return 1
+  [[ "$major" =~ ^[0-9]+$ && "$major" -ge 4 ]]
+}
+
+find_modern_bash() {
+  local candidate remaining entry more
+
+  for candidate in "${CHECKOUT_INSTALLER_TEST_MODERN_BASH:-}" "$active_bash" \
+    /opt/homebrew/bin/bash /usr/local/bin/bash /opt/local/bin/bash; do
+    [[ -n "$candidate" ]] || continue
+    if modern_bash_candidate "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  # Parse PATH literally so the test helper does not reproduce the globbing bug
+  # it is meant to catch in the provider fragment.
+  remaining=${PATH-}
+  while :; do
+    case $remaining in
+      *:*)
+        entry=${remaining%%:*}
+        remaining=${remaining#*:}
+        more=true
+        ;;
+      *)
+        entry=$remaining
+        more=false
+        ;;
+    esac
+    if [[ "$entry" == /* ]] && modern_bash_candidate "$entry/bash"; then
+      printf '%s\n' "$entry/bash"
+      return 0
+    fi
+    [[ "$more" == true ]] || break
+  done
+  return 1
+}
+
+modern_bash=$(find_modern_bash) ||
+  fail 'checkout resolver tests require an absolute Bash 4 or newer candidate'
+
+file_inode() {
+  if stat -c '%i' "$1" >/dev/null 2>&1; then
+    stat -c '%i' "$1"
+  else
+    stat -f '%i' "$1"
+  fi
+}
 
 interrupt_parent_of_ready_child() {
   local ready=$1 timeout_marker=$2 child parent
@@ -110,6 +186,8 @@ write_delegate() {
 set -euo pipefail
 
 checkout_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+checkout_parent=${checkout_root%/*}
+checkout_name=${checkout_root##*/}
 {
   printf 'root=%s\n' "$checkout_root"
   printf 'prefix=%s\n' "${PREFIX:-}"
@@ -121,6 +199,33 @@ checkout_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
   printf 'git_work_tree=%s\n' "${GIT_WORK_TREE-unset}"
   printf 'git_index_file=%s\n' "${GIT_INDEX_FILE-unset}"
   printf 'bash=%s\n' "$BASH"
+  checkout_lock_path="$checkout_parent/.${checkout_name}.install.lock"
+  if [[ -L "$checkout_lock_path" ]]; then
+    printf 'checkout_lock=held\n'
+    printf 'checkout_lock_kind=v1\n'
+    checkout_lock_target=$(readlink "$checkout_lock_path")
+    printf 'checkout_lock_target=%s\n' "$checkout_lock_target"
+    checkout_lock_owner="$checkout_parent/$checkout_lock_target"
+    if stat -c '%a' "$checkout_lock_owner" >/dev/null 2>&1; then
+      printf 'checkout_lock_owner_mode=%s\n' \
+        "$(stat -c '%a' "$checkout_lock_owner")"
+      printf 'checkout_lock_record_mode=%s\n' \
+        "$(stat -c '%a' "$checkout_lock_owner/owner-v1")"
+    else
+      printf 'checkout_lock_owner_mode=%s\n' \
+        "$(stat -f '%Lp' "$checkout_lock_owner")"
+      printf 'checkout_lock_record_mode=%s\n' \
+        "$(stat -f '%Lp' "$checkout_lock_owner/owner-v1")"
+    fi
+    printf 'checkout_lock_record_header=%s\n' \
+      "$(sed -n '1p' "$checkout_lock_owner/owner-v1")"
+  elif [[ -d "$checkout_lock_path" ]]; then
+    printf 'checkout_lock=held\n'
+    printf 'checkout_lock_kind=legacy\n'
+  else
+    printf 'checkout_lock=absent\n'
+    printf 'checkout_lock_kind=absent\n'
+  fi
   printf 'argc=%s\n' "$#"
   argument_index=0
   for argument in "$@"; do
@@ -131,6 +236,10 @@ checkout_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
     printf 'version=%s\n' "$(sed -n '1p' "$checkout_root/version.txt")"
   fi
 } >"${CHECKOUT_TEST_LOG:?}"
+
+if [[ ${CHECKOUT_TEST_LOCK_POISON:-0} == 1 ]]; then
+  : >"$checkout_parent/.${checkout_name}.install.lock/post-boundary-sentinel"
+fi
 
 if [[ -n ${CHECKOUT_TEST_BLOCK_READY:-} ]]; then
   printf '%s\n' "$$" >"$CHECKOUT_TEST_BLOCK_READY"
@@ -168,6 +277,62 @@ EOF
   chmod 0755 "$consumer/support/install-checkout.sh"
 }
 
+write_post_install() {
+  local consumer=$1
+
+  mkdir -p "$consumer/support"
+  cat >"$consumer/support/post-install.sh" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+checkout_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+checkout_parent=${checkout_root%/*}
+checkout_name=${checkout_root##*/}
+{
+  printf 'root=%s\n' "$checkout_root"
+  printf 'umask=%s\n' "$(umask)"
+  printf 'prefix=%s\n' "${PREFIX:-}"
+  printf 'lc_all=%s\n' "${LC_ALL-unset}"
+  printf 'bash=%s\n' "$BASH"
+  printf 'primary_log_present=%s\n' "$([[ -f ${CHECKOUT_TEST_LOG:?} ]] && printf yes || printf no)"
+  if [[ -e "$checkout_parent/.${checkout_name}.install.lock" ||
+    -L "$checkout_parent/.${checkout_name}.install.lock" ]]; then
+    printf 'checkout_lock=held\n'
+  else
+    printf 'checkout_lock=absent\n'
+  fi
+  if [[ -e "$checkout_parent/.${checkout_name}.install.transaction" ||
+    -L "$checkout_parent/.${checkout_name}.install.transaction" ]]; then
+    printf 'checkout_transaction=present\n'
+  else
+    printf 'checkout_transaction=absent\n'
+  fi
+  if [[ ${CHECKOUT_TEST_POST_REACQUIRE:-0} == 1 ]]; then
+    mkdir "$checkout_parent/.${checkout_name}.install.lock"
+    rmdir "$checkout_parent/.${checkout_name}.install.lock"
+    printf 'lock_reacquire=ok\n'
+  fi
+  printf 'argc=%s\n' "$#"
+  argument_index=0
+  for argument in "$@"; do
+    argument_index=$((argument_index + 1))
+    printf 'arg%s=%s\n' "$argument_index" "$argument"
+  done
+} >"${CHECKOUT_TEST_POST_LOG:?}"
+
+if [[ -n ${CHECKOUT_TEST_POST_BLOCK_READY:-} ]]; then
+  printf '%s\n' "$$" >"$CHECKOUT_TEST_POST_BLOCK_READY"
+  while [[ ! -e ${CHECKOUT_TEST_POST_BLOCK_RELEASE:?} ]]; do
+    sleep 0.05
+  done
+fi
+
+exit "${CHECKOUT_TEST_POST_EXIT:-0}"
+EOF
+  chmod 0755 "$consumer/support/post-install.sh"
+}
+
 write_config() {
   local consumer=$1
 
@@ -201,6 +366,8 @@ printf 'direct\n' >"$consumer/version.txt"
 if grep -Eq '@[A-Z][A-Z0-9_]*@' "$consumer/install.sh"; then
   fail "generated installer retained a template token"
 fi
+[[ $(git hash-object "$consumer/install.sh") == b8e6f9ce5b9a6f352c976b4eee22dbf2feb79222 ]] ||
+  fail "disabled post-install support changed legacy generated installer bytes"
 grep -Fq '# Generated by cgraf78/actions checkout-installer. Do not edit.' \
   "$consumer/install.sh" ||
   fail "generated installer does not identify its provider"
@@ -221,6 +388,31 @@ git -C "$consumer" config user.name 'Checkout Installer Test'
 git -C "$consumer" config user.email checkout-installer@example.invalid
 git -C "$consumer" add .
 git -C "$consumer" commit --quiet -m 'direct fixture'
+
+render_no_hardlink_consumer="$tmp/render-no-hardlink-consumer"
+render_no_hardlink_bin="$tmp/render-no-hardlink-bin"
+render_real_ln=$(PATH="$platform_tool_path" command -v ln)
+write_config "$render_no_hardlink_consumer"
+write_delegate "$render_no_hardlink_consumer"
+mkdir -p "$render_no_hardlink_bin"
+cat >"$render_no_hardlink_bin/ln" <<'EOF'
+#!/usr/bin/env bash
+
+if [[ ${1:-} != -s ]]; then
+  printf 'ln: hard links are unavailable in this fixture\n' >&2
+  exit 1
+fi
+exec "${CHECKOUT_TEST_REAL_LN:?}" "$@"
+EOF
+chmod 0755 "$render_no_hardlink_bin/ln"
+PATH="$render_no_hardlink_bin:$platform_tool_path" \
+  CHECKOUT_TEST_REAL_LN="$render_real_ln" \
+  "$root/checkout-installer/render.sh" "$render_no_hardlink_consumer" \
+  >/dev/null ||
+  fail "renderer did not fall back when hard links were unavailable"
+[[ -f "$render_no_hardlink_consumer/install.sh" &&
+  ! -L "$render_no_hardlink_consumer/install.sh" ]] ||
+  fail "renderer hard-link fallback did not publish a regular installer"
 
 safe_git_bin="$tmp/safe-git-bin"
 safe_git_log="$tmp/safe-git.log"
@@ -275,6 +467,18 @@ grep -Fqx 'argc=2' "$direct_log" ||
   fail "direct checkout install did not preserve the argument count"
 grep -Fqx 'arg2=two words' "$direct_log" ||
   fail "direct checkout install did not preserve argument boundaries"
+grep -Fqx 'checkout_lock=absent' "$direct_log" ||
+  fail "direct checkout install unexpectedly acquired the managed-checkout lock"
+
+cdpath_log="$tmp/cdpath-direct.log"
+(
+  cd "$tmp"
+  CDPATH=.:/tmp CHECKOUT_TEST_LOG="$cdpath_log" \
+    PATH="$platform_tool_path" "$active_bash" \
+    "${consumer##*/}/install.sh" >/dev/null
+) || fail "direct checkout install inherited a corrupting CDPATH"
+grep -Fqx "root=$(cd "$consumer" && pwd -P)" "$cdpath_log" ||
+  fail "CDPATH changed the resolved direct checkout root"
 
 alternate_bash="$tmp/alternate-bash"
 ln -s "$BASH" "$alternate_bash"
@@ -373,6 +577,43 @@ fi
 [[ ! -e "$invalid_repo_consumer/install.sh" ]] ||
   fail "invalid repository owner left a generated installer"
 
+invalid_destination_consumer="$tmp/invalid-destination-consumer"
+write_config "$invalid_destination_consumer"
+write_delegate "$invalid_destination_consumer"
+printf 'CHECKOUT_INSTALLER_DEFAULT_DESTINATION=unknown\n' \
+  >>"$invalid_destination_consumer/scripts/checkout-installer.conf"
+if "$root/checkout-installer/render.sh" "$invalid_destination_consumer" \
+  >/dev/null 2>&1; then
+  fail "renderer accepted an unknown default-destination policy"
+fi
+[[ ! -e "$invalid_destination_consumer/install.sh" ]] ||
+  fail "invalid default-destination policy left a generated installer"
+
+invalid_lock_consumer="$tmp/invalid-lock-consumer"
+write_config "$invalid_lock_consumer"
+write_delegate "$invalid_lock_consumer"
+printf 'CHECKOUT_INSTALLER_LOCK_PROTOCOL=unknown\n' \
+  >>"$invalid_lock_consumer/scripts/checkout-installer.conf"
+if "$root/checkout-installer/render.sh" "$invalid_lock_consumer" \
+  >/dev/null 2>&1; then
+  fail "renderer accepted an unknown checkout lock protocol"
+fi
+[[ ! -e "$invalid_lock_consumer/install.sh" ]] ||
+  fail "invalid checkout lock protocol left a generated installer"
+
+invalid_bash_resolver_consumer="$tmp/invalid-bash-resolver-consumer"
+write_config "$invalid_bash_resolver_consumer"
+write_delegate "$invalid_bash_resolver_consumer"
+printf 'CHECKOUT_INSTALLER_BASH_RESOLVER=unknown\n' \
+  >>"$invalid_bash_resolver_consumer/scripts/checkout-installer.conf"
+if "$root/checkout-installer/render.sh" "$invalid_bash_resolver_consumer" \
+  >/dev/null 2>&1; then
+  fail "renderer accepted an unknown Bash resolver version"
+fi
+[[ ! -e "$invalid_bash_resolver_consumer/install.sh" &&
+  ! -e "$invalid_bash_resolver_consumer/support/checkout-bash-v1.sh" ]] ||
+  fail "invalid Bash resolver policy left generated artifacts"
+
 option_delegate_consumer="$tmp/option-delegate-consumer"
 write_config "$option_delegate_consumer"
 printf 'CHECKOUT_INSTALLER_DELEGATE=--stage\n' \
@@ -385,6 +626,837 @@ if "$root/checkout-installer/render.sh" "$option_delegate_consumer" \
 fi
 [[ ! -e "$option_delegate_consumer/install.sh" ]] ||
   fail "option-like delegate left a generated installer"
+
+invalid_post_consumer="$tmp/invalid-post-consumer"
+write_config "$invalid_post_consumer"
+write_delegate "$invalid_post_consumer"
+printf 'CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE=../outside.sh\n' \
+  >>"$invalid_post_consumer/scripts/checkout-installer.conf"
+if "$root/checkout-installer/render.sh" "$invalid_post_consumer" \
+  >/dev/null 2>&1; then
+  fail "renderer accepted a post-install command outside the checkout"
+fi
+[[ ! -e "$invalid_post_consumer/install.sh" ]] ||
+  fail "invalid post-install command left a generated installer"
+
+post_path_case=0
+for invalid_post_path in \
+  /tmp/post-install.sh \
+  --post-install \
+  . \
+  install.sh \
+  support/install-checkout.sh; do
+  post_path_case=$((post_path_case + 1))
+  invalid_post_path_consumer="$tmp/invalid-post-path-$post_path_case"
+  write_config "$invalid_post_path_consumer"
+  write_delegate "$invalid_post_path_consumer"
+  printf 'CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE=%s\n' \
+    "$invalid_post_path" \
+    >>"$invalid_post_path_consumer/scripts/checkout-installer.conf"
+  if "$root/checkout-installer/render.sh" "$invalid_post_path_consumer" \
+    >/dev/null 2>&1; then
+    fail "renderer accepted invalid post-install path: $invalid_post_path"
+  fi
+done
+
+missing_post_consumer="$tmp/missing-post-consumer"
+write_config "$missing_post_consumer"
+write_delegate "$missing_post_consumer"
+printf 'CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE=support/missing.sh\n' \
+  >>"$missing_post_consumer/scripts/checkout-installer.conf"
+if "$root/checkout-installer/render.sh" "$missing_post_consumer" \
+  >/dev/null 2>&1; then
+  fail "renderer accepted a missing post-install delegate"
+fi
+
+symlink_post_consumer="$tmp/symlink-post-consumer"
+write_config "$symlink_post_consumer"
+write_delegate "$symlink_post_consumer"
+printf '#!/usr/bin/env bash\nexit 0\n' \
+  >"$symlink_post_consumer/support/post-target.sh"
+ln -s post-target.sh "$symlink_post_consumer/support/post-install.sh"
+printf 'CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE=support/post-install.sh\n' \
+  >>"$symlink_post_consumer/scripts/checkout-installer.conf"
+if "$root/checkout-installer/render.sh" "$symlink_post_consumer" \
+  >/dev/null 2>&1; then
+  fail "renderer accepted a symlinked post-install delegate"
+fi
+
+untracked_post_consumer="$tmp/untracked-post-consumer"
+write_config "$untracked_post_consumer"
+write_delegate "$untracked_post_consumer"
+write_post_install "$untracked_post_consumer"
+printf 'CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE=support/post-install.sh\n' \
+  >>"$untracked_post_consumer/scripts/checkout-installer.conf"
+"$root/checkout-installer/render.sh" "$untracked_post_consumer" >/dev/null
+git -C "$untracked_post_consumer" init --quiet --initial-branch=main --template=''
+git -C "$untracked_post_consumer" add \
+  install.sh \
+  scripts/checkout-installer.conf \
+  support/install-checkout.sh
+if "$root/checkout-installer/render.sh" --check "$untracked_post_consumer" \
+  >/dev/null 2>&1; then
+  fail "renderer check accepted an untracked post-install delegate"
+fi
+
+ambient_post_consumer="$tmp/ambient-post-consumer"
+write_config "$ambient_post_consumer"
+write_delegate "$ambient_post_consumer"
+CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE=support/post-install.sh \
+  "$root/checkout-installer/render.sh" "$ambient_post_consumer" >/dev/null ||
+  fail "ambient post-install policy contaminated renderer inputs"
+[[ $(git hash-object "$ambient_post_consumer/install.sh") == b8e6f9ce5b9a6f352c976b4eee22dbf2feb79222 ]] ||
+  fail "ambient post-install policy changed generated installer bytes"
+
+# The Bash resolver is opt-in so every existing consumer keeps exact generated
+# bytes. An opted-in consumer receives the same reviewed function fragment in
+# both the self-contained installer and one tracked sourceable artifact for its
+# checkout-owned trampoline.
+resolver_preflight_consumer="$tmp/resolver-preflight-consumer"
+write_config "$resolver_preflight_consumer"
+printf '%s\n' \
+  'CHECKOUT_INSTALLER_DELEGATE=install-checkout.sh' \
+  'CHECKOUT_INSTALLER_BASH_RESOLVER=v1' \
+  >>"$resolver_preflight_consumer/scripts/checkout-installer.conf"
+printf '#!/usr/bin/env bash\nexit 0\n' \
+  >"$resolver_preflight_consumer/install-checkout.sh"
+chmod 0755 "$resolver_preflight_consumer/install-checkout.sh"
+printf 'consumer-owned installer\n' >"$resolver_preflight_consumer/install.sh"
+if "$root/checkout-installer/render.sh" "$resolver_preflight_consumer" \
+  >/dev/null 2>&1; then
+  fail "renderer overwrote a consumer-owned installer before resolver setup"
+fi
+grep -Fqx 'consumer-owned installer' \
+  "$resolver_preflight_consumer/install.sh" ||
+  fail "renderer changed a consumer-owned installer during preflight"
+[[ ! -e "$resolver_preflight_consumer/support" &&
+  ! -L "$resolver_preflight_consumer/support" ]] ||
+  fail "renderer created resolver state before no-clobber preflight completed"
+
+bash_resolver_consumer="$tmp/bash-resolver-consumer"
+bash_resolver_artifact="$bash_resolver_consumer/support/checkout-bash-v1.sh"
+bash_resolver_state="$tmp/bash-resolver-state"
+bash_resolver_direct_log="$tmp/bash-resolver-direct.log"
+bash_resolver_direct_post_log="$tmp/bash-resolver-direct-post.log"
+bash_resolver_pipe_log="$tmp/bash-resolver-pipe.log"
+bash_resolver_pipe_post_log="$tmp/bash-resolver-pipe-post.log"
+write_config "$bash_resolver_consumer"
+write_delegate "$bash_resolver_consumer"
+write_post_install "$bash_resolver_consumer"
+printf '%s\n' \
+  'CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE=support/post-install.sh' \
+  'CHECKOUT_INSTALLER_LOCK_PROTOCOL=v1' \
+  'CHECKOUT_INSTALLER_BASH_RESOLVER=v1' \
+  >>"$bash_resolver_consumer/scripts/checkout-installer.conf"
+"$root/checkout-installer/render.sh" "$bash_resolver_consumer" >/dev/null
+[[ -f "$bash_resolver_artifact" && ! -L "$bash_resolver_artifact" &&
+  ! -x "$bash_resolver_artifact" ]] ||
+  fail "renderer did not create a sourceable non-executable Bash resolver"
+grep -Fqx '# Generated by cgraf78/actions checkout Bash resolver. Do not edit.' \
+  "$bash_resolver_artifact" ||
+  fail "generated Bash resolver does not identify its provider"
+[[ $(tail -n +3 "$bash_resolver_artifact" | git hash-object --stdin) == $(git hash-object "$root/checkout-installer/bash-resolver-v1.sh.in") ]] ||
+  fail "generated Bash resolver does not contain the provider fragment exactly"
+
+git -C "$bash_resolver_consumer" init --quiet --initial-branch=main --template=''
+git -C "$bash_resolver_consumer" config core.hooksPath /dev/null
+git -C "$bash_resolver_consumer" config commit.gpgsign false
+git -C "$bash_resolver_consumer" config user.name 'Checkout Installer Test'
+git -C "$bash_resolver_consumer" config user.email checkout-installer@example.invalid
+git -C "$bash_resolver_consumer" add \
+  install.sh scripts/checkout-installer.conf \
+  support/install-checkout.sh support/post-install.sh
+set +e
+bash_resolver_untracked_output=$(
+  "$root/checkout-installer/render.sh" --check "$bash_resolver_consumer" 2>&1
+)
+bash_resolver_untracked_status=$?
+set -e
+[[ "$bash_resolver_untracked_status" -ne 0 &&
+  "$bash_resolver_untracked_output" == *'generated Bash resolver is not tracked'* ]] ||
+  fail "renderer check accepted an untracked Bash resolver"
+git -C "$bash_resolver_consumer" add support/checkout-bash-v1.sh
+git -C "$bash_resolver_consumer" commit --quiet -m 'Bash resolver fixture'
+# shellcheck disable=SC2012 # Controlled fixture names; -A includes leaked temps.
+LC_ALL=C ls -A1 "$bash_resolver_consumer/support" | LC_ALL=C sort \
+  >"$tmp/bash-resolver-support.before"
+for _ in 1 2 3; do
+  "$root/checkout-installer/render.sh" --check "$bash_resolver_consumer" \
+    >/dev/null ||
+    fail "freshly generated Bash resolver did not pass the render check"
+done
+# shellcheck disable=SC2012 # Controlled fixture names; -A includes leaked temps.
+LC_ALL=C ls -A1 "$bash_resolver_consumer/support" | LC_ALL=C sort \
+  >"$tmp/bash-resolver-support.after"
+files_identical "$tmp/bash-resolver-support.before" \
+  "$tmp/bash-resolver-support.after" ||
+  fail "successful resolver checks leaked temporary artifacts"
+printf '\n# resolver drift\n' >>"$bash_resolver_artifact"
+if "$root/checkout-installer/render.sh" --check "$bash_resolver_consumer" \
+  >/dev/null 2>&1; then
+  fail "drifted generated Bash resolver unexpectedly passed the render check"
+fi
+"$root/checkout-installer/render.sh" "$bash_resolver_consumer" >/dev/null ||
+  fail "renderer did not restore a drifted Bash resolver"
+
+# The library must become live before the installer that references it. If the
+# second publication fails, the old installer remains runnable and a normal
+# rerender converges the harmless newer-library/older-installer state.
+printf '\n# installer publication drift\n' \
+  >>"$bash_resolver_consumer/install.sh"
+printf '\n# resolver publication drift\n' >>"$bash_resolver_artifact"
+bash_resolver_mv_wrapper="$tmp/bash-resolver-mv-wrapper"
+mkdir -p "$bash_resolver_mv_wrapper"
+real_mv=$(type -P mv)
+cat >"$bash_resolver_mv_wrapper/mv" <<EOF
+#!$active_bash
+case \${2:-} in
+  */install.sh) exit 73 ;;
+esac
+exec "$real_mv" "\$@"
+EOF
+chmod 0755 "$bash_resolver_mv_wrapper/mv"
+if PATH="$bash_resolver_mv_wrapper:$PATH" \
+  "$root/checkout-installer/render.sh" "$bash_resolver_consumer" \
+  >/dev/null 2>&1; then
+  fail "renderer ignored a failed installer publication"
+fi
+[[ $(tail -n +3 "$bash_resolver_artifact" | git hash-object --stdin) == $(git hash-object "$root/checkout-installer/bash-resolver-v1.sh.in") ]] ||
+  fail "renderer did not publish the resolver before the dependent installer"
+grep -Fqx '# installer publication drift' \
+  "$bash_resolver_consumer/install.sh" ||
+  fail "failed pair publication unexpectedly replaced the old installer"
+"$root/checkout-installer/render.sh" "$bash_resolver_consumer" >/dev/null ||
+  fail "renderer did not recover an interrupted generated pair publication"
+
+bash_resolver_installer_before=$(git hash-object \
+  "$bash_resolver_consumer/install.sh")
+bash_resolver_directory_mv_wrapper="$tmp/bash-resolver-directory-mv-wrapper"
+mkdir -p "$bash_resolver_directory_mv_wrapper"
+real_rm=$(type -P rm)
+real_mkdir=$(type -P mkdir)
+cat >"$bash_resolver_directory_mv_wrapper/mv" <<EOF
+#!$active_bash
+case \${2:-} in
+  */support/checkout-bash-v1.sh)
+    "$real_rm" -f "\$2"
+    "$real_mkdir" "\$2"
+    printf 'late renderer directory\n' >"\$2/foreign"
+    ;;
+esac
+exec "$real_mv" "\$@"
+EOF
+chmod 0755 "$bash_resolver_directory_mv_wrapper/mv"
+if PATH="$bash_resolver_directory_mv_wrapper:$PATH" \
+  "$root/checkout-installer/render.sh" "$bash_resolver_consumer" \
+  >/dev/null 2>&1; then
+  fail "renderer accepted a late directory at the resolver destination"
+fi
+[[ "$(git hash-object "$bash_resolver_consumer/install.sh")" == "$bash_resolver_installer_before" ]] ||
+  fail "failed resolver publication replaced the dependent installer"
+printf 'foreign\n' >"$tmp/bash-resolver-render-directory.expected"
+# shellcheck disable=SC2012 # Controlled fixture names; -A detects temp debris.
+LC_ALL=C ls -A1 "$bash_resolver_artifact" \
+  >"$tmp/bash-resolver-render-directory.actual"
+files_identical "$tmp/bash-resolver-render-directory.expected" \
+  "$tmp/bash-resolver-render-directory.actual" ||
+  fail "failed resolver publication left generated directory debris"
+rm "$bash_resolver_artifact/foreign"
+rmdir "$bash_resolver_artifact"
+"$root/checkout-installer/render.sh" "$bash_resolver_consumer" >/dev/null ||
+  fail "renderer did not recover after a late resolver directory collision"
+
+bash_resolver_selected_dir="$tmp/bash resolver selected/bin"
+mkdir -p "$bash_resolver_selected_dir"
+ln -s "$modern_bash" "$bash_resolver_selected_dir/bash"
+bash_resolver_selected="$bash_resolver_selected_dir/bash"
+CHECKOUT_TEST_LOG="$bash_resolver_direct_log" \
+  CHECKOUT_TEST_POST_LOG="$bash_resolver_direct_post_log" \
+  XDG_STATE_HOME="$bash_resolver_state" \
+  CGRAF78_CHECKOUT_INSTALL_BASH="$bash_resolver_selected" \
+  "$active_bash" "$bash_resolver_consumer/install.sh" first 'two words' \
+  >/dev/null ||
+  fail "direct install did not use the shared Bash resolver"
+grep -Fqx "bash=$bash_resolver_selected" "$bash_resolver_direct_log" ||
+  fail "direct primary delegate did not use the selected Bash"
+grep -Fqx "bash=$bash_resolver_selected" "$bash_resolver_direct_post_log" ||
+  fail "direct post-install delegate did not use the selected Bash"
+bash_resolver_hint="$bash_resolver_state/example-tool/bash-v1"
+[[ -f "$bash_resolver_hint" && ! -L "$bash_resolver_hint" ]] ||
+  fail "Bash resolver did not persist a private regular hint"
+[[ $(sed -n '1p' "$bash_resolver_hint") == 'cgraf78 checkout Bash runtime v1' &&
+$(sed -n '2p' "$bash_resolver_hint") == "$bash_resolver_selected" &&
+-z $(sed -n '3p' "$bash_resolver_hint") ]] ||
+  fail "Bash resolver persisted malformed hint bytes"
+if stat -c '%a' "$bash_resolver_hint" >/dev/null 2>&1; then
+  bash_resolver_hint_mode=$(stat -c '%a' "$bash_resolver_hint")
+else
+  bash_resolver_hint_mode=$(stat -f '%Lp' "$bash_resolver_hint")
+fi
+[[ "$bash_resolver_hint_mode" == 600 ]] ||
+  fail "Bash resolver hint is not private: $bash_resolver_hint_mode"
+if stat -c '%a' "${bash_resolver_hint%/*}" >/dev/null 2>&1; then
+  bash_resolver_hint_parent_mode=$(stat -c '%a' "${bash_resolver_hint%/*}")
+else
+  bash_resolver_hint_parent_mode=$(stat -f '%Lp' "${bash_resolver_hint%/*}")
+fi
+[[ "$bash_resolver_hint_parent_mode" == 700 ]] ||
+  fail "Bash resolver state directory is not private: $bash_resolver_hint_parent_mode"
+
+bash_resolver_no_hardlink_state="$tmp/bash-resolver-no-hardlink-state"
+bash_resolver_no_hardlink_bin="$tmp/bash-resolver-no-hardlink-bin"
+bash_resolver_no_hardlink_real_mv=$(PATH="$platform_tool_path" command -v mv)
+mkdir -p "$bash_resolver_no_hardlink_bin"
+cat >"$bash_resolver_no_hardlink_bin/ln" <<'EOF'
+#!/usr/bin/env bash
+
+if [[ ${1:-} != -s ]]; then
+  exit 1
+fi
+exec "${CHECKOUT_TEST_REAL_LN:?}" "$@"
+EOF
+cat >"$bash_resolver_no_hardlink_bin/mv" <<'EOF'
+#!/usr/bin/env bash
+
+if [[ $# -eq 4 && $1 == -nT && $2 == -- ]]; then
+  if [[ -e $4 || -L $4 ]]; then
+    exit 1
+  fi
+  exec "${CHECKOUT_TEST_REAL_MV:?}" "$3" "$4"
+fi
+exit 1
+EOF
+chmod 0755 "$bash_resolver_no_hardlink_bin/ln" \
+  "$bash_resolver_no_hardlink_bin/mv"
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+bash_resolver_no_hardlink_result=$(PATH="$bash_resolver_no_hardlink_bin:$platform_tool_path" \
+  CHECKOUT_TEST_REAL_LN="$render_real_ln" \
+  CHECKOUT_TEST_REAL_MV="$bash_resolver_no_hardlink_real_mv" \
+  XDG_STATE_HOME="$bash_resolver_no_hardlink_state" \
+  "$active_bash" -c '
+    set -euo pipefail
+    . "$1"
+    checkout_bash_v1_select nohardlink "$2"
+    printf "%s\n" "$CHECKOUT_BASH_V1_INTERPRETER"
+  ' -- "$bash_resolver_artifact" "$modern_bash")
+[[ "$bash_resolver_no_hardlink_result" == "$modern_bash" ]] ||
+  fail "Bash resolver did not select a runtime without hard-link support"
+[[ -f "$bash_resolver_no_hardlink_state/nohardlink/bash-v1" &&
+  ! -L "$bash_resolver_no_hardlink_state/nohardlink/bash-v1" ]] ||
+  fail "Bash resolver did not persist a regular hint without hard-link support"
+
+bash_resolver_no_publisher_state="$tmp/bash-resolver-no-publisher-state"
+bash_resolver_no_publisher_bin="$tmp/bash-resolver-no-publisher-bin"
+mkdir -p "$bash_resolver_no_publisher_bin"
+for command_name in ln mv; do
+  cat >"$bash_resolver_no_publisher_bin/$command_name" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  chmod 0755 "$bash_resolver_no_publisher_bin/$command_name"
+done
+set +e
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+PATH="$bash_resolver_no_publisher_bin:$platform_tool_path" \
+  XDG_STATE_HOME="$bash_resolver_no_publisher_state" \
+  "$active_bash" -c '
+    set -euo pipefail
+    . "$1"
+    checkout_bash_v1_select nopublisher "$2"
+  ' -- "$bash_resolver_artifact" "$modern_bash" >/dev/null 2>&1
+bash_resolver_no_publisher_status=$?
+set -e
+[[ "$bash_resolver_no_publisher_status" -ne 0 ]] ||
+  fail "Bash resolver succeeded without an exact hint publisher"
+[[ ! -e "$bash_resolver_no_publisher_state/nopublisher/bash-v1" &&
+  ! -L "$bash_resolver_no_publisher_state/nopublisher/bash-v1" ]] ||
+  fail "failed Bash resolver publication left a runtime hint"
+
+bash_resolver_remote="$tmp/bash-resolver-tool.git"
+bash_resolver_managed="$tmp/bash-resolver-managed/example-tool"
+git init --quiet --bare --initial-branch=main "$bash_resolver_remote"
+git -C "$bash_resolver_consumer" remote add origin "$bash_resolver_remote"
+git -C "$bash_resolver_consumer" push --quiet --set-upstream origin main
+CHECKOUT_TEST_LOG="$bash_resolver_pipe_log" \
+  CHECKOUT_TEST_POST_LOG="$bash_resolver_pipe_post_log" \
+  XDG_STATE_HOME="$bash_resolver_state" \
+  CGRAF78_CHECKOUT_INSTALL_BASH="$bash_resolver_selected" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$bash_resolver_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$bash_resolver_remote" \
+  "$active_bash" -s -- first 'two words' \
+  <"$bash_resolver_consumer/install.sh" >/dev/null ||
+  fail "piped install did not use the shared Bash resolver"
+grep -Fqx "bash=$bash_resolver_selected" "$bash_resolver_pipe_log" ||
+  fail "piped primary delegate did not use the selected Bash"
+grep -Fqx "bash=$bash_resolver_selected" "$bash_resolver_pipe_post_log" ||
+  fail "piped post-install delegate did not use the selected Bash"
+grep -Fqx 'checkout_lock_kind=v1' "$bash_resolver_pipe_log" ||
+  fail "Bash resolver fixture did not retain the shared checkout lock"
+
+bash_resolver_invalid_managed="$tmp/bash-resolver-invalid-managed/example-tool"
+bash_resolver_invalid_state="$tmp/bash-resolver-invalid-state"
+bash_resolver_invalid_bin="$tmp/bash-resolver-invalid-bin"
+mkdir -p "$bash_resolver_invalid_bin"
+cat >"$bash_resolver_invalid_bin/bash" <<EOF
+#!$active_bash
+printf 'cgraf78-checkout-bash-v1:3\n'
+EOF
+chmod 0755 "$bash_resolver_invalid_bin/bash"
+set +e
+bash_resolver_invalid_output=$(CHECKOUT_TEST_LOG="$tmp/bash-resolver-invalid.log" \
+  CHECKOUT_TEST_POST_LOG="$tmp/bash-resolver-invalid-post.log" \
+  XDG_STATE_HOME="$bash_resolver_invalid_state" \
+  CGRAF78_CHECKOUT_INSTALL_BASH="$bash_resolver_invalid_bin/bash" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$bash_resolver_invalid_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$bash_resolver_remote" \
+  "$active_bash" -s <"$bash_resolver_consumer/install.sh" 2>&1)
+bash_resolver_invalid_status=$?
+set -e
+[[ "$bash_resolver_invalid_status" -ne 0 &&
+  "$bash_resolver_invalid_output" == *'explicit interpreter is not Bash 4 or newer'* ]] ||
+  fail "invalid explicit Bash did not fail without fallback"
+[[ ! -e "$bash_resolver_invalid_managed" &&
+  ! -e "$bash_resolver_invalid_state" ]] ||
+  fail "invalid explicit Bash mutated checkout or state"
+
+bash_resolver_old_dir="$tmp/bash-resolver-old/bin"
+bash_resolver_later_dir="$tmp/bash resolver later/bin"
+bash_resolver_path_state="$tmp/bash-resolver-path-state"
+mkdir -p "$bash_resolver_old_dir" "$bash_resolver_later_dir"
+cat >"$bash_resolver_old_dir/bash" <<EOF
+#!$active_bash
+printf 'cgraf78-checkout-bash-v1:3\n'
+EOF
+chmod 0755 "$bash_resolver_old_dir/bash"
+ln -s "$modern_bash" "$bash_resolver_later_dir/bash"
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+bash_resolver_path_result=$(XDG_STATE_HOME="$bash_resolver_path_state" \
+  "$active_bash" -c '
+    set -euo pipefail
+    . "$1"
+    BASH=$2
+    PATH=$3:$4:$5
+    checkout_bash_v1_select pathcase ""
+    printf "%s\n" "$CHECKOUT_BASH_V1_INTERPRETER"
+  ' -- "$bash_resolver_artifact" "$bash_resolver_old_dir/bash" \
+  "$bash_resolver_old_dir" "$bash_resolver_later_dir" "$platform_tool_path")
+[[ "$bash_resolver_path_result" == "$bash_resolver_later_dir/bash" ]] ||
+  fail "Bash resolver did not continue past an old first PATH entry"
+bash_resolver_hint_inode_before=$(file_inode \
+  "$bash_resolver_path_state/pathcase/bash-v1")
+
+# The second selection has no valid Bash on PATH. It must reuse the persisted
+# hint rather than accidentally depending on the caller's current interpreter.
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+bash_resolver_hint_result=$(TMPDIR="$tmp/missing-resolver-tmp" \
+  XDG_STATE_HOME="$bash_resolver_path_state" \
+  "$active_bash" -c '
+    set -euo pipefail
+    . "$1"
+    BASH=$2
+    PATH=$3:$4
+    checkout_bash_v1_select pathcase ""
+    printf "%s\n" "$CHECKOUT_BASH_V1_INTERPRETER"
+  ' -- "$bash_resolver_artifact" "$bash_resolver_old_dir/bash" \
+  "$bash_resolver_old_dir" "$platform_tool_path")
+[[ "$bash_resolver_hint_result" == "$bash_resolver_later_dir/bash" ]] ||
+  fail "Bash resolver did not reuse its valid persisted hint"
+[[ "$(file_inode "$bash_resolver_path_state/pathcase/bash-v1")" == "$bash_resolver_hint_inode_before" ]] ||
+  fail "Bash resolver rewrote an unchanged valid hint"
+
+bash_resolver_glob_parent="$tmp/bash-resolver-glob-path"
+bash_resolver_glob_literal="$bash_resolver_glob_parent/[ab]"
+bash_resolver_glob_match="$bash_resolver_glob_parent/a"
+mkdir -p "$bash_resolver_glob_literal" "$bash_resolver_glob_match"
+ln -s "$modern_bash" "$bash_resolver_glob_literal/bash"
+ln -s "$modern_bash" "$bash_resolver_glob_match/bash"
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+bash_resolver_glob_result=$(XDG_STATE_HOME="$tmp/bash-resolver-glob-state" \
+  "$active_bash" -c '
+    set -euo pipefail
+    . "$1"
+    BASH=$2
+    PATH=$3:$4
+    checkout_bash_v1_select globcase ""
+    printf "%s\n" "$CHECKOUT_BASH_V1_INTERPRETER"
+  ' -- "$bash_resolver_artifact" "$bash_resolver_old_dir/bash" \
+  "$bash_resolver_glob_literal" "$platform_tool_path")
+[[ "$bash_resolver_glob_result" == "$bash_resolver_glob_literal/bash" ]] ||
+  fail "Bash resolver expanded glob characters in a literal PATH component"
+
+rm -f "$bash_resolver_later_dir/bash"
+bash_resolver_replacement_dir="$tmp/bash-resolver-replacement/bin"
+mkdir -p "$bash_resolver_replacement_dir"
+ln -s "$modern_bash" "$bash_resolver_replacement_dir/bash"
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+bash_resolver_refresh_result=$(XDG_STATE_HOME="$bash_resolver_path_state" \
+  "$active_bash" -c '
+    set -euo pipefail
+    . "$1"
+    BASH=$2
+    PATH=$3:$4:$5
+    checkout_bash_v1_select pathcase ""
+    printf "%s\n" "$CHECKOUT_BASH_V1_INTERPRETER"
+  ' -- "$bash_resolver_artifact" "$bash_resolver_old_dir/bash" \
+  "$bash_resolver_old_dir" "$bash_resolver_replacement_dir" \
+  "$platform_tool_path")
+[[ "$bash_resolver_refresh_result" == "$bash_resolver_replacement_dir/bash" &&
+  $(sed -n '2p' "$bash_resolver_path_state/pathcase/bash-v1") == "$bash_resolver_later_dir/bash" ]] ||
+  fail "Bash resolver did not preserve and bypass a stale persisted hint"
+
+bash_resolver_malformed_state="$tmp/bash-resolver-malformed-state"
+mkdir -p "$bash_resolver_malformed_state/pathcase"
+printf 'foreign hint bytes\n' \
+  >"$bash_resolver_malformed_state/pathcase/bash-v1"
+cp "$bash_resolver_malformed_state/pathcase/bash-v1" \
+  "$tmp/bash-resolver-malformed.expected"
+set +e
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+XDG_STATE_HOME="$bash_resolver_malformed_state" \
+  "$active_bash" -c '
+    . "$1"
+    BASH=$2
+    PATH=$3:$4:$5
+    checkout_bash_v1_select pathcase ""
+  ' -- "$bash_resolver_artifact" "$bash_resolver_old_dir/bash" \
+  "$bash_resolver_old_dir" "$bash_resolver_replacement_dir" \
+  "$platform_tool_path" >/dev/null 2>&1
+bash_resolver_malformed_status=$?
+set -e
+[[ "$bash_resolver_malformed_status" -ne 0 ]] ||
+  fail "Bash resolver accepted a malformed persisted hint"
+files_identical "$tmp/bash-resolver-malformed.expected" \
+  "$bash_resolver_malformed_state/pathcase/bash-v1" ||
+  fail "Bash resolver overwrote a foreign malformed hint"
+
+# Explicit policy is strict about the interpreter, but it does not confer
+# ownership of an existing hint. Foreign regular files, symlinks, and
+# directories must all be preserved before the explicit candidate is used.
+set +e
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+XDG_STATE_HOME="$bash_resolver_malformed_state" \
+  "$active_bash" -c '
+    . "$1"
+    checkout_bash_v1_select pathcase "$2"
+  ' -- "$bash_resolver_artifact" "$modern_bash" >/dev/null 2>&1
+bash_resolver_explicit_malformed_status=$?
+set -e
+[[ "$bash_resolver_explicit_malformed_status" -ne 0 ]] ||
+  fail "explicit Bash overwrote a malformed runtime hint"
+files_identical "$tmp/bash-resolver-malformed.expected" \
+  "$bash_resolver_malformed_state/pathcase/bash-v1" ||
+  fail "explicit Bash changed a malformed runtime hint"
+
+bash_resolver_oversized_state="$tmp/bash-resolver-oversized-state"
+mkdir -p "$bash_resolver_oversized_state/pathcase"
+printf '%05000d' 0 >"$bash_resolver_oversized_state/pathcase/bash-v1"
+cp "$bash_resolver_oversized_state/pathcase/bash-v1" \
+  "$tmp/bash-resolver-oversized.expected"
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+if XDG_STATE_HOME="$bash_resolver_oversized_state" \
+  "$active_bash" -c '
+    . "$1"
+    checkout_bash_v1_select pathcase "$2"
+  ' -- "$bash_resolver_artifact" "$modern_bash" >/dev/null 2>&1; then
+  fail "Bash resolver accepted an oversized runtime hint"
+fi
+files_identical "$tmp/bash-resolver-oversized.expected" \
+  "$bash_resolver_oversized_state/pathcase/bash-v1" ||
+  fail "Bash resolver changed an oversized runtime hint"
+
+bash_resolver_symlink_state="$tmp/bash-resolver-symlink-state"
+mkdir -p "$bash_resolver_symlink_state/pathcase"
+printf 'foreign symlink target\n' >"$bash_resolver_symlink_state/foreign"
+ln -s ../foreign "$bash_resolver_symlink_state/pathcase/bash-v1"
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+if XDG_STATE_HOME="$bash_resolver_symlink_state" \
+  "$active_bash" -c '
+    . "$1"
+    checkout_bash_v1_select pathcase "$2"
+  ' -- "$bash_resolver_artifact" "$modern_bash" >/dev/null 2>&1; then
+  fail "explicit Bash accepted a symlinked runtime hint"
+fi
+[[ -L "$bash_resolver_symlink_state/pathcase/bash-v1" ]] ||
+  fail "explicit Bash replaced a symlinked runtime hint"
+grep -Fqx 'foreign symlink target' "$bash_resolver_symlink_state/foreign" ||
+  fail "explicit Bash changed a symlinked hint target"
+
+bash_resolver_directory_state="$tmp/bash-resolver-directory-state"
+mkdir -p "$bash_resolver_directory_state/pathcase/bash-v1"
+printf 'foreign directory entry\n' \
+  >"$bash_resolver_directory_state/pathcase/bash-v1/foreign"
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+if XDG_STATE_HOME="$bash_resolver_directory_state" \
+  "$active_bash" -c '
+    . "$1"
+    checkout_bash_v1_select pathcase "$2"
+  ' -- "$bash_resolver_artifact" "$modern_bash" >/dev/null 2>&1; then
+  fail "explicit Bash accepted a directory at the runtime hint"
+fi
+grep -Fqx 'foreign directory entry' \
+  "$bash_resolver_directory_state/pathcase/bash-v1/foreign" ||
+  fail "explicit Bash changed a foreign runtime hint directory"
+
+# Force a directory to appear after the initial missing-hint classification.
+# Portable ln may place its source inside that directory, so the resolver must
+# reject the canonical object and retire only its uniquely named child.
+bash_resolver_collision_state="$tmp/bash-resolver-collision-state"
+bash_resolver_ln_wrapper="$tmp/bash-resolver-ln-wrapper"
+mkdir -p "$bash_resolver_ln_wrapper"
+real_ln=$(type -P ln)
+real_mv=$(type -P mv)
+real_mkdir=$(type -P mkdir)
+cat >"$bash_resolver_ln_wrapper/ln" <<EOF
+#!$active_bash
+target=
+for argument in "\$@"; do
+  target=\$argument
+done
+case \$target in
+  */bash-v1)
+    "$real_mkdir" "\$target"
+    printf 'late foreign entry\n' >"\$target/foreign"
+    ;;
+esac
+exec "$real_ln" "\$@"
+EOF
+cat >"$bash_resolver_ln_wrapper/mv" <<EOF
+#!$active_bash
+target=
+for argument in "\$@"; do
+  target=\$argument
+done
+case \$target in
+  */bash-v1)
+    "$real_mkdir" "\$target"
+    printf 'late foreign entry\n' >"\$target/foreign"
+    ;;
+esac
+exec "$real_mv" "\$@"
+EOF
+chmod 0755 "$bash_resolver_ln_wrapper/ln" "$bash_resolver_ln_wrapper/mv"
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+if PATH="$bash_resolver_ln_wrapper:$PATH" \
+  XDG_STATE_HOME="$bash_resolver_collision_state" \
+  "$active_bash" -c '
+    . "$1"
+    checkout_bash_v1_select pathcase "$2"
+  ' -- "$bash_resolver_artifact" "$modern_bash" >/dev/null 2>&1; then
+  fail "Bash resolver accepted a late directory collision"
+fi
+printf 'foreign\n' >"$tmp/bash-resolver-collision.expected"
+# shellcheck disable=SC2012 # Controlled fixture names; -A detects temp debris.
+LC_ALL=C ls -A1 "$bash_resolver_collision_state/pathcase/bash-v1" \
+  >"$tmp/bash-resolver-collision.actual"
+files_identical "$tmp/bash-resolver-collision.expected" \
+  "$tmp/bash-resolver-collision.actual" ||
+  fail "Bash resolver left generated debris in a late foreign directory"
+
+# A late symlink-to-directory must never redirect the unique hard link into an
+# external tree. Exact-destination flags are selected from the actual ln
+# implementation, so this also covers GNU coreutils on a Darwin host.
+bash_resolver_symlink_collision_state="$tmp/bash-resolver-symlink-collision-state"
+bash_resolver_symlink_collision_external="$tmp/bash-resolver-symlink-collision-external"
+bash_resolver_symlink_ln_wrapper="$tmp/bash-resolver-symlink-ln-wrapper"
+mkdir -p "$bash_resolver_symlink_ln_wrapper" \
+  "$bash_resolver_symlink_collision_external"
+printf 'external foreign entry\n' \
+  >"$bash_resolver_symlink_collision_external/foreign"
+cat >"$bash_resolver_symlink_ln_wrapper/ln" <<EOF
+#!$active_bash
+target=
+for argument in "\$@"; do
+  target=\$argument
+done
+case \$target in
+  */bash-v1)
+    "$real_ln" -s "$bash_resolver_symlink_collision_external" "\$target"
+    ;;
+esac
+exec "$real_ln" "\$@"
+EOF
+cat >"$bash_resolver_symlink_ln_wrapper/mv" <<EOF
+#!$active_bash
+target=
+for argument in "\$@"; do
+  target=\$argument
+done
+case \$target in
+  */bash-v1)
+    "$real_ln" -s "$bash_resolver_symlink_collision_external" "\$target"
+    ;;
+esac
+exec "$real_mv" "\$@"
+EOF
+chmod 0755 "$bash_resolver_symlink_ln_wrapper/ln" \
+  "$bash_resolver_symlink_ln_wrapper/mv"
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+if PATH="$bash_resolver_symlink_ln_wrapper:$PATH" \
+  XDG_STATE_HOME="$bash_resolver_symlink_collision_state" \
+  "$active_bash" -c '
+    . "$1"
+    checkout_bash_v1_select pathcase "$2"
+  ' -- "$bash_resolver_artifact" "$modern_bash" >/dev/null 2>&1; then
+  fail "Bash resolver accepted a late symlink-to-directory collision"
+fi
+[[ -L "$bash_resolver_symlink_collision_state/pathcase/bash-v1" ]] ||
+  fail "Bash resolver replaced a late symlink-to-directory"
+grep -Fqx 'external foreign entry' \
+  "$bash_resolver_symlink_collision_external/foreign" ||
+  fail "Bash resolver changed an external collision directory"
+[[ $(find "$bash_resolver_symlink_collision_external" \
+  ! -path "$bash_resolver_symlink_collision_external" -prune -print | wc -l) -eq 1 ]] ||
+  fail "Bash resolver leaked a hard link through a directory symlink"
+
+# A concurrent first writer may win with another valid interpreter. The loser
+# uses its already-validated candidate for this invocation and accepts the
+# probeable private hint instead of rewriting or rejecting the winner.
+bash_resolver_winner_state="$tmp/bash-resolver-winner-state"
+bash_resolver_winner_dir="$tmp/bash-resolver-winner/bin"
+bash_resolver_winner_wrapper="$tmp/bash-resolver-winner-wrapper"
+mkdir -p "$bash_resolver_winner_dir" "$bash_resolver_winner_wrapper"
+ln -s "$modern_bash" "$bash_resolver_winner_dir/bash"
+cat >"$bash_resolver_winner_wrapper/ln" <<EOF
+#!$active_bash
+target=
+for argument in "\$@"; do
+  target=\$argument
+done
+case \$target in
+  */bash-v1)
+    printf 'cgraf78 checkout Bash runtime v1\n%s\n' \
+      '$bash_resolver_winner_dir/bash' >"\$target"
+    chmod 0600 "\$target"
+    ;;
+esac
+exec "$real_ln" "\$@"
+EOF
+cat >"$bash_resolver_winner_wrapper/mv" <<EOF
+#!$active_bash
+target=
+for argument in "\$@"; do
+  target=\$argument
+done
+case \$target in
+  */bash-v1)
+    printf 'cgraf78 checkout Bash runtime v1\n%s\n' \
+      '$bash_resolver_winner_dir/bash' >"\$target"
+    chmod 0600 "\$target"
+    ;;
+esac
+exec "$real_mv" "\$@"
+EOF
+chmod 0755 "$bash_resolver_winner_wrapper/ln" \
+  "$bash_resolver_winner_wrapper/mv"
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+PATH="$bash_resolver_winner_wrapper:$PATH" \
+  XDG_STATE_HOME="$bash_resolver_winner_state" \
+  "$active_bash" -c '
+    . "$1"
+    checkout_bash_v1_select pathcase "$2"
+  ' -- "$bash_resolver_artifact" "$modern_bash" ||
+  fail "Bash resolver rejected a valid concurrent hint winner"
+[[ $(sed -n '2p' "$bash_resolver_winner_state/pathcase/bash-v1") == "$bash_resolver_winner_dir/bash" ]] ||
+  fail "Bash resolver changed a valid concurrent hint winner"
+
+bash_resolver_runtime_dir="$tmp/bash resolver runtime"
+mkdir -p "$bash_resolver_runtime_dir"
+cp "$bash_resolver_consumer/support/install-checkout.sh" \
+  "$bash_resolver_runtime_dir/runtime.sh"
+ln -s "$bash_resolver_runtime_dir/runtime.sh" \
+  "$bash_resolver_runtime_dir/runtime-link.sh"
+# shellcheck disable=SC2016 # Expanded only by the child Bash fixture.
+XDG_STATE_HOME="$tmp/bash-resolver-bind-state" \
+  "$active_bash" -c '
+    set -euo pipefail
+    . "$1"
+    checkout_bash_v1_select bindcase "$2"
+    checkout_bash_v1_bind "$3"
+    [[ "$CHECKOUT_BASH_V1_RUNTIME" == "$3" ]]
+    checkout_bash_v1_select bindcase "$2"
+    if checkout_bash_v1_bind "$4"; then
+      exit 90
+    fi
+    [[ -z "$CHECKOUT_BASH_V1_INTERPRETER" &&
+      -z "$CHECKOUT_BASH_V1_RUNTIME" ]]
+  ' -- "$bash_resolver_artifact" "$modern_bash" \
+  "$bash_resolver_runtime_dir/runtime.sh" \
+  "$bash_resolver_runtime_dir/runtime-link.sh" 2>/dev/null ||
+  fail "Bash resolver did not bind an exact regular runtime fail closed"
+
+foreign_bash_resolver_consumer="$tmp/foreign-bash-resolver-consumer"
+write_config "$foreign_bash_resolver_consumer"
+write_delegate "$foreign_bash_resolver_consumer"
+printf 'CHECKOUT_INSTALLER_BASH_RESOLVER=v1\n' \
+  >>"$foreign_bash_resolver_consumer/scripts/checkout-installer.conf"
+printf 'consumer owned\n' \
+  >"$foreign_bash_resolver_consumer/support/checkout-bash-v1.sh"
+if "$root/checkout-installer/render.sh" "$foreign_bash_resolver_consumer" \
+  >/dev/null 2>&1; then
+  fail "renderer overwrote a consumer-owned Bash resolver"
+fi
+grep -Fqx 'consumer owned' \
+  "$foreign_bash_resolver_consumer/support/checkout-bash-v1.sh" ||
+  fail "renderer changed a consumer-owned Bash resolver"
+
+late_resolver_consumer="$tmp/late-resolver-consumer"
+late_resolver_wrapper="$tmp/late-resolver-wrapper"
+write_config "$late_resolver_consumer"
+write_delegate "$late_resolver_consumer"
+printf 'CHECKOUT_INSTALLER_BASH_RESOLVER=v1\n' \
+  >>"$late_resolver_consumer/scripts/checkout-installer.conf"
+mkdir -p "$late_resolver_wrapper"
+real_ln=$(type -P ln)
+cat >"$late_resolver_wrapper/ln" <<EOF
+#!$active_bash
+case \${2:-} in
+  */support/checkout-bash-v1.sh)
+    printf 'late consumer-owned resolver\n' >"\$2"
+    ;;
+esac
+exec "$real_ln" "\$@"
+EOF
+chmod 0755 "$late_resolver_wrapper/ln"
+if PATH="$late_resolver_wrapper:$PATH" \
+  "$root/checkout-installer/render.sh" "$late_resolver_consumer" \
+  >/dev/null 2>&1; then
+  fail "renderer overwrote a resolver that appeared during publication"
+fi
+grep -Fqx 'late consumer-owned resolver' \
+  "$late_resolver_consumer/support/checkout-bash-v1.sh" ||
+  fail "renderer changed a late consumer-owned resolver"
+[[ ! -e "$late_resolver_consumer/install.sh" ]] ||
+  fail "failed resolver publication exposed a dependent installer"
+
+symlink_support_consumer="$tmp/symlink-support-consumer"
+symlink_support_target="$tmp/symlink-support-target"
+write_config "$symlink_support_consumer"
+write_delegate "$symlink_support_consumer"
+mv "$symlink_support_consumer/support" "$symlink_support_target"
+ln -s "$symlink_support_target" "$symlink_support_consumer/support"
+printf '#!/usr/bin/env bash\n%s\nforeign generated-looking bytes\n' \
+  '# Generated by cgraf78/actions checkout Bash resolver. Do not edit.' \
+  >"$symlink_support_target/checkout-bash-v1.sh"
+cp "$symlink_support_target/checkout-bash-v1.sh" \
+  "$tmp/symlink-support-resolver.expected"
+"$root/checkout-installer/render.sh" "$symlink_support_consumer" >/dev/null ||
+  fail "resolver-disabled consumer with symlinked support did not render"
+files_identical "$tmp/symlink-support-resolver.expected" \
+  "$symlink_support_target/checkout-bash-v1.sh" ||
+  fail "renderer retired a resolver through a symlinked support parent"
+
+# Disabling the opt-in retires only the generated resolver and restores the
+# exact pre-feature installer bytes for the same post-install/v1 configuration.
+sed '/^CHECKOUT_INSTALLER_BASH_RESOLVER=/d' \
+  "$bash_resolver_consumer/scripts/checkout-installer.conf" \
+  >"$bash_resolver_consumer/scripts/checkout-installer.conf.tmp"
+mv "$bash_resolver_consumer/scripts/checkout-installer.conf.tmp" \
+  "$bash_resolver_consumer/scripts/checkout-installer.conf"
+"$root/checkout-installer/render.sh" "$bash_resolver_consumer" >/dev/null
+[[ ! -e "$bash_resolver_artifact" && ! -L "$bash_resolver_artifact" ]] ||
+  fail "disabled Bash resolver left its generated artifact"
+[[ $(git hash-object "$bash_resolver_consumer/install.sh") == 43dfa845df94d4c70d0c5882f4fb2799b32cb88b ]] ||
+  fail "disabled Bash resolver did not restore prior generated bytes"
 
 source_work="$tmp/source-work"
 remote="$tmp/example-tool.git"
@@ -402,6 +1474,1785 @@ git -C "$source_work" commit --quiet -m 'initial fixture'
 git init --quiet --bare --initial-branch=main "$remote"
 git -C "$source_work" remote add origin "$remote"
 git -C "$source_work" push --quiet --set-upstream origin main
+
+# A post-install command is an explicit second phase. It is useful for tools
+# such as dot whose initialization may invoke the checkout manager again: the
+# primary delegate still publishes under the mutation lock, but the optional
+# phase must start only after that lock is gone.
+post_source="$tmp/post-source"
+post_remote="$tmp/post-tool.git"
+post_managed="$tmp/post-managed/example-tool"
+post_direct_log="$tmp/post-direct-primary.log"
+post_direct_phase_log="$tmp/post-direct-phase.log"
+post_pipe_log="$tmp/post-pipe-primary.log"
+post_pipe_phase_log="$tmp/post-pipe-phase.log"
+write_config "$post_source"
+write_delegate "$post_source"
+write_post_install "$post_source"
+printf 'CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE=support/post-install.sh\n' \
+  >>"$post_source/scripts/checkout-installer.conf"
+printf 'post\n' >"$post_source/version.txt"
+"$root/checkout-installer/render.sh" "$post_source" >/dev/null
+[[ $(git hash-object "$post_source/install.sh") == 7c2ff2ec721690ed327006e88cead0d57d2266a2 ]] ||
+  fail "disabled Bash resolver changed post-install generated bytes"
+git -C "$post_source" init --quiet --initial-branch=main --template=''
+git -C "$post_source" config core.hooksPath /dev/null
+git -C "$post_source" config commit.gpgsign false
+git -C "$post_source" config user.name 'Checkout Installer Test'
+git -C "$post_source" config user.email checkout-installer@example.invalid
+git -C "$post_source" add .
+git -C "$post_source" commit --quiet -m 'post-install fixture'
+git init --quiet --bare --initial-branch=main "$post_remote"
+git -C "$post_source" remote add origin "$post_remote"
+git -C "$post_source" push --quiet --set-upstream origin main
+
+CHECKOUT_TEST_LOG="$post_direct_log" \
+  CHECKOUT_TEST_POST_LOG="$post_direct_phase_log" \
+  PREFIX="$tmp/post-direct-prefix" LC_ALL=POSIX \
+  "$active_bash" "$post_source/install.sh" first 'two words' >/dev/null ||
+  fail "direct checkout install did not run its post-install phase"
+grep -Fqx 'checkout_lock=absent' "$post_direct_log" ||
+  fail "direct primary delegate unexpectedly ran under a mutation lock"
+grep -Fqx 'primary_log_present=yes' "$post_direct_phase_log" ||
+  fail "direct post-install phase ran before the primary delegate completed"
+grep -Fqx 'checkout_lock=absent' "$post_direct_phase_log" ||
+  fail "direct post-install phase observed a mutation lock"
+grep -Fqx 'checkout_transaction=absent' "$post_direct_phase_log" ||
+  fail "direct post-install phase observed checkout transaction state"
+grep -Fqx "prefix=$tmp/post-direct-prefix" "$post_direct_phase_log" ||
+  fail "direct post-install phase did not preserve PREFIX"
+grep -Fqx 'lc_all=POSIX' "$post_direct_phase_log" ||
+  fail "direct post-install phase did not preserve LC_ALL"
+grep -Fqx "bash=$active_bash" "$post_direct_phase_log" ||
+  fail "direct post-install phase did not preserve the selected Bash interpreter"
+grep -Fqx 'arg2=two words' "$post_direct_phase_log" ||
+  fail "direct post-install phase did not preserve argument boundaries"
+
+rm -f "$post_direct_phase_log"
+set +e
+CHECKOUT_TEST_LOG="$post_direct_log" \
+  CHECKOUT_TEST_POST_LOG="$post_direct_phase_log" \
+  CHECKOUT_TEST_EXIT=32 \
+  "$active_bash" "$post_source/install.sh" >/dev/null 2>&1
+post_direct_primary_status=$?
+set -e
+[[ "$post_direct_primary_status" -eq 32 ]] ||
+  fail "direct post-install consumer did not preserve primary failure status"
+[[ ! -e "$post_direct_phase_log" ]] ||
+  fail "direct post-install phase ran after a failed primary delegate"
+
+set +e
+CHECKOUT_TEST_LOG="$post_direct_log" \
+  CHECKOUT_TEST_POST_LOG="$post_direct_phase_log" \
+  CHECKOUT_TEST_POST_EXIT=38 \
+  "$active_bash" "$post_source/install.sh" >/dev/null 2>&1
+post_direct_phase_status=$?
+set -e
+[[ "$post_direct_phase_status" -eq 38 ]] ||
+  fail "direct install did not preserve post-install phase status"
+
+post_direct_signal_ready="$tmp/post-direct-signal.ready"
+signal_release="$tmp/post-direct-signal.release"
+rm -f "$post_direct_phase_log"
+CHECKOUT_TEST_LOG="$post_direct_log" \
+  CHECKOUT_TEST_POST_LOG="$post_direct_phase_log" \
+  CHECKOUT_TEST_BLOCK_READY="$post_direct_signal_ready" \
+  CHECKOUT_TEST_BLOCK_RELEASE="$signal_release" \
+  "$active_bash" "$post_source/install.sh" >/dev/null 2>&1 &
+signal_pid=$!
+for _ in {1..100}; do
+  [[ -e "$post_direct_signal_ready" ]] && break
+  kill -0 "$signal_pid" 2>/dev/null || break
+  sleep 0.05
+done
+[[ -e "$post_direct_signal_ready" ]] ||
+  fail "direct post-install primary delegate did not start for TERM coverage"
+post_direct_delegate_pid=$(sed -n '1p' "$post_direct_signal_ready")
+kill -TERM "$signal_pid"
+set +e
+wait "$signal_pid"
+post_direct_signal_status=$?
+set -e
+signal_pid=
+[[ "$post_direct_signal_status" -eq 143 ]] ||
+  fail "direct post-install primary did not preserve TERM status"
+assert_process_gone "$post_direct_delegate_pid" \
+  "direct post-install installer left its primary delegate after TERM"
+[[ ! -e "$post_direct_phase_log" ]] ||
+  fail "direct post-install phase ran after TERM during the primary delegate"
+signal_release=
+
+post_direct_int_ready="$tmp/post-direct-int.ready"
+signal_release="$tmp/post-direct-int.release"
+signal_delegate_child_file="$tmp/post-direct-int.delegate-child"
+post_direct_int_timeout="$tmp/post-direct-int.timeout"
+rm -f "$post_direct_phase_log"
+interrupt_parent_of_ready_child \
+  "$post_direct_int_ready" "$post_direct_int_timeout" &
+interrupt_killer_pid=$!
+set +e
+CHECKOUT_TEST_LOG="$post_direct_log" \
+  CHECKOUT_TEST_POST_LOG="$post_direct_phase_log" \
+  CHECKOUT_TEST_BLOCK_READY="$post_direct_int_ready" \
+  CHECKOUT_TEST_BLOCK_RELEASE="$signal_release" \
+  CHECKOUT_TEST_BLOCK_CHILD_FILE="$signal_delegate_child_file" \
+  CHECKOUT_TEST_BLOCK_DELAYED_TERM=1 \
+  "$active_bash" "$post_source/install.sh" >/dev/null 2>&1
+post_direct_int_status=$?
+wait "$interrupt_killer_pid"
+post_direct_int_killer_status=$?
+set -e
+interrupt_killer_pid=
+[[ "$post_direct_int_killer_status" -eq 0 &&
+  ! -e "$post_direct_int_timeout" ]] ||
+  fail "direct post-install primary did not cancel after INT"
+[[ -e "$post_direct_int_ready" && -e "$signal_delegate_child_file" ]] ||
+  fail "direct post-install INT fixture did not start the delegate tree"
+post_direct_int_delegate_pid=$(sed -n '1p' "$post_direct_int_ready")
+post_direct_int_child_pid=$(sed -n '1p' "$signal_delegate_child_file")
+[[ "$post_direct_int_status" -eq 130 ]] ||
+  fail "direct post-install primary did not preserve INT status"
+signal_release=
+assert_process_gone "$post_direct_int_delegate_pid" \
+  "direct post-install installer left its primary delegate after INT"
+assert_process_gone "$post_direct_int_child_pid" \
+  "direct post-install installer left a delegate child after INT"
+signal_delegate_child_file=
+[[ ! -e "$post_direct_phase_log" ]] ||
+  fail "direct post-install phase ran after INT during the primary delegate"
+
+(
+  umask 0035
+  CHECKOUT_TEST_LOG="$post_pipe_log" \
+    CHECKOUT_TEST_POST_LOG="$post_pipe_phase_log" \
+    CHECKOUT_TEST_POST_REACQUIRE=1 \
+    PREFIX="$tmp/post-pipe-prefix" LC_ALL=POSIX \
+    CGRAF78_CHECKOUT_INSTALL_DIR="$post_managed" \
+    CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$post_remote" \
+    "$active_bash" -s -- first 'two words' <"$post_source/install.sh" >/dev/null
+) || fail "piped checkout install did not run its post-install phase"
+grep -Fqx 'checkout_lock=held' "$post_pipe_log" ||
+  fail "piped primary delegate did not retain the mutation lock"
+grep -Fqx 'primary_log_present=yes' "$post_pipe_phase_log" ||
+  fail "piped post-install phase ran before the primary delegate completed"
+grep -Fqx 'checkout_lock=absent' "$post_pipe_phase_log" ||
+  fail "piped post-install phase started before releasing the mutation lock"
+grep -Fqx 'checkout_transaction=absent' "$post_pipe_phase_log" ||
+  fail "piped post-install phase observed checkout transaction state"
+grep -Fqx 'lock_reacquire=ok' "$post_pipe_phase_log" ||
+  fail "piped post-install phase could not reacquire the checkout lock"
+grep -Fqx 'umask=0035' "$post_pipe_phase_log" ||
+  fail "piped post-install phase did not restore the caller umask"
+grep -Fqx "prefix=$tmp/post-pipe-prefix" "$post_pipe_phase_log" ||
+  fail "piped post-install phase did not preserve PREFIX"
+grep -Fqx 'lc_all=POSIX' "$post_pipe_phase_log" ||
+  fail "piped post-install phase did not preserve LC_ALL"
+grep -Fqx "bash=$active_bash" "$post_pipe_phase_log" ||
+  fail "piped post-install phase did not preserve the selected Bash interpreter"
+grep -Fqx 'arg2=two words' "$post_pipe_phase_log" ||
+  fail "piped post-install phase did not preserve argument boundaries"
+[[ ! -e "$tmp/post-managed/.example-tool.install.lock" &&
+  ! -L "$tmp/post-managed/.example-tool.install.lock" ]] ||
+  fail "piped post-install phase left its mutation lock"
+
+rm -f "$post_pipe_phase_log"
+set +e
+post_lock_release_output=$(CHECKOUT_TEST_LOG="$post_pipe_log" \
+  CHECKOUT_TEST_POST_LOG="$post_pipe_phase_log" \
+  CHECKOUT_TEST_LOCK_POISON=1 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$post_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$post_remote" \
+  "$active_bash" -s <"$post_source/install.sh" 2>&1)
+post_lock_release_status=$?
+set -e
+[[ "$post_lock_release_status" -eq 1 &&
+  "$post_lock_release_output" == *'cannot release managed checkout lock before post-install'* ]] ||
+  fail "post-install ran without proving checkout lock release"
+[[ ! -e "$post_pipe_phase_log" ]] ||
+  fail "post-install phase ran after strict lock release failed"
+[[ -f "$tmp/post-managed/.example-tool.install.lock/post-boundary-sentinel" ]] ||
+  fail "strict lock release failure did not preserve diagnostic state"
+rm -f "$tmp/post-managed/.example-tool.install.lock/post-boundary-sentinel"
+rmdir "$tmp/post-managed/.example-tool.install.lock"
+
+rm -f "$post_pipe_phase_log"
+set +e
+CHECKOUT_TEST_LOG="$post_pipe_log" \
+  CHECKOUT_TEST_POST_LOG="$post_pipe_phase_log" \
+  CHECKOUT_TEST_EXIT=31 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$post_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$post_remote" \
+  "$active_bash" -s <"$post_source/install.sh" >/dev/null 2>&1
+post_primary_status=$?
+set -e
+[[ "$post_primary_status" -eq 31 ]] ||
+  fail "piped post-install consumer did not preserve primary failure status"
+[[ ! -e "$post_pipe_phase_log" ]] ||
+  fail "post-install phase ran after a failed primary delegate"
+
+set +e
+CHECKOUT_TEST_LOG="$post_pipe_log" \
+  CHECKOUT_TEST_POST_LOG="$post_pipe_phase_log" \
+  CHECKOUT_TEST_POST_EXIT=37 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$post_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$post_remote" \
+  "$active_bash" -s <"$post_source/install.sh" >/dev/null 2>&1
+post_phase_status=$?
+set -e
+[[ "$post_phase_status" -eq 37 ]] ||
+  fail "piped install did not preserve post-install phase status"
+
+post_phase_signal_ready="$tmp/post-phase-signal.ready"
+signal_release="$tmp/post-phase-signal.release"
+CHECKOUT_TEST_LOG="$post_pipe_log" \
+  CHECKOUT_TEST_POST_LOG="$post_pipe_phase_log" \
+  CHECKOUT_TEST_POST_BLOCK_READY="$post_phase_signal_ready" \
+  CHECKOUT_TEST_POST_BLOCK_RELEASE="$signal_release" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$post_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$post_remote" \
+  "$active_bash" -s <"$post_source/install.sh" >/dev/null 2>&1 &
+signal_pid=$!
+for _ in {1..100}; do
+  [[ -e "$post_phase_signal_ready" ]] && break
+  kill -0 "$signal_pid" 2>/dev/null || break
+  sleep 0.05
+done
+[[ -e "$post_phase_signal_ready" ]] ||
+  fail "piped post-install phase did not start for TERM coverage"
+[[ $(sed -n '1p' "$post_phase_signal_ready") == "$signal_pid" ]] ||
+  fail "piped installer did not exec the post-install phase in place"
+kill -TERM "$signal_pid"
+set +e
+wait "$signal_pid"
+post_phase_signal_status=$?
+set -e
+signal_pid=
+[[ "$post_phase_signal_status" -eq 143 ]] ||
+  fail "piped post-install phase did not preserve TERM status"
+[[ ! -e "$tmp/post-managed/.example-tool.install.lock" &&
+  ! -L "$tmp/post-managed/.example-tool.install.lock" ]] ||
+  fail "TERM during post-install left the checkout lock held"
+signal_release=
+
+post_managed_head=$(git -C "$post_managed" rev-parse HEAD)
+git -C "$post_source" rm --quiet support/post-install.sh
+git -C "$post_source" commit --quiet -m 'remove post-install fixture'
+git -C "$post_source" push --quiet
+set +e
+post_missing_update_output=$(CHECKOUT_TEST_LOG="$post_pipe_log" \
+  CHECKOUT_TEST_POST_LOG="$post_pipe_phase_log" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$post_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$post_remote" \
+  "$active_bash" -s <"$post_source/install.sh" 2>&1)
+post_missing_update_status=$?
+set -e
+[[ "$post_missing_update_status" -ne 0 &&
+  "$post_missing_update_output" == *'post-install command is missing'* ]] ||
+  fail "update accepted a fetched revision without its post-install delegate"
+[[ $(git -C "$post_managed" rev-parse HEAD) == "$post_managed_head" ]] ||
+  fail "missing post-install delegate changed the installed checkout revision"
+
+post_missing_fresh="$tmp/post-missing-fresh/example-tool"
+set +e
+post_missing_fresh_output=$(CHECKOUT_TEST_LOG="$post_pipe_log" \
+  CHECKOUT_TEST_POST_LOG="$post_pipe_phase_log" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$post_missing_fresh" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$post_remote" \
+  "$active_bash" -s <"$post_source/install.sh" 2>&1)
+post_missing_fresh_status=$?
+set -e
+[[ "$post_missing_fresh_status" -ne 0 &&
+  "$post_missing_fresh_output" == *'post-install command is missing'* ]] ||
+  fail "fresh clone accepted a revision without its post-install delegate"
+[[ ! -e "$post_missing_fresh" && ! -L "$post_missing_fresh" ]] ||
+  fail "fresh clone published a checkout without its post-install delegate"
+
+# Exercise the composition that motivated both opt-ins: the primary phase uses
+# the shared v1 lock, then the unlocked post-install phase can immediately
+# reacquire the canonical path through another manager.
+post_v1_source="$tmp/post-v1-source"
+post_v1_remote="$tmp/post-v1-tool.git"
+post_v1_managed="$tmp/post-v1-managed/example-tool"
+post_v1_primary_log="$tmp/post-v1-primary.log"
+post_v1_phase_log="$tmp/post-v1-phase.log"
+write_config "$post_v1_source"
+write_delegate "$post_v1_source"
+write_post_install "$post_v1_source"
+printf '%s\n' \
+  'CHECKOUT_INSTALLER_POST_INSTALL_DELEGATE=support/post-install.sh' \
+  'CHECKOUT_INSTALLER_LOCK_PROTOCOL=v1' \
+  >>"$post_v1_source/scripts/checkout-installer.conf"
+"$root/checkout-installer/render.sh" "$post_v1_source" >/dev/null
+[[ $(git hash-object "$post_v1_source/install.sh") == 43dfa845df94d4c70d0c5882f4fb2799b32cb88b ]] ||
+  fail "disabled Bash resolver changed post-install v1 generated bytes"
+git -C "$post_v1_source" init --quiet --initial-branch=main --template=''
+git -C "$post_v1_source" config core.hooksPath /dev/null
+git -C "$post_v1_source" config commit.gpgsign false
+git -C "$post_v1_source" config user.name 'Checkout Installer Test'
+git -C "$post_v1_source" config user.email checkout-installer@example.invalid
+git -C "$post_v1_source" add .
+git -C "$post_v1_source" commit --quiet -m 'v1 post-install fixture'
+git init --quiet --bare --initial-branch=main "$post_v1_remote"
+git -C "$post_v1_source" remote add origin "$post_v1_remote"
+git -C "$post_v1_source" push --quiet --set-upstream origin main
+CHECKOUT_TEST_LOG="$post_v1_primary_log" \
+  CHECKOUT_TEST_POST_LOG="$post_v1_phase_log" \
+  CHECKOUT_TEST_POST_REACQUIRE=1 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$post_v1_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$post_v1_remote" \
+  "$active_bash" -s <"$post_v1_source/install.sh" >/dev/null ||
+  fail "v1 checkout lock did not compose with unlocked post-install"
+grep -Fqx 'checkout_lock_kind=v1' "$post_v1_primary_log" ||
+  fail "v1 post-install primary phase did not hold the shared lock"
+grep -Fqx 'checkout_lock=absent' "$post_v1_phase_log" ||
+  fail "v1 post-install phase started before strict lock release"
+grep -Fqx 'lock_reacquire=ok' "$post_v1_phase_log" ||
+  fail "v1 post-install phase could not reacquire the canonical lock path"
+[[ ! -e "$tmp/post-v1-managed/.example-tool.install.lock" &&
+  ! -L "$tmp/post-v1-managed/.example-tool.install.lock" ]] ||
+  fail "v1 post-install composition left the canonical lock"
+
+# The v1 lock is opt-in so existing generated installers retain their exact
+# bytes. Its first contract is structural: the canonical path is an atomically
+# published relative symlink to one private owner directory, and normal release
+# removes only that generation's known paths.
+lock_source="$tmp/lock-source"
+lock_remote="$tmp/lock-tool.git"
+lock_managed="$tmp/lock-managed/example-tool"
+lock_log="$tmp/lock.log"
+write_config "$lock_source"
+write_delegate "$lock_source"
+printf 'CHECKOUT_INSTALLER_LOCK_PROTOCOL=v1\n' \
+  >>"$lock_source/scripts/checkout-installer.conf"
+printf 'lock-v1\n' >"$lock_source/version.txt"
+"$root/checkout-installer/render.sh" "$lock_source" >/dev/null
+[[ $(git hash-object "$lock_source/install.sh") == 9de72e9905092226f25724267194037a05d932c2 ]] ||
+  fail "disabled Bash resolver changed v1 generated bytes"
+git -C "$lock_source" init --quiet --initial-branch=main --template=''
+git -C "$lock_source" config core.hooksPath /dev/null
+git -C "$lock_source" config commit.gpgsign false
+git -C "$lock_source" config user.name 'Checkout Installer Test'
+git -C "$lock_source" config user.email checkout-installer@example.invalid
+git -C "$lock_source" add .
+git -C "$lock_source" commit --quiet -m 'checkout lock v1 fixture'
+git init --quiet --bare --initial-branch=main "$lock_remote"
+git -C "$lock_source" remote add origin "$lock_remote"
+git -C "$lock_source" push --quiet --set-upstream origin main
+
+CHECKOUT_TEST_LOG="$lock_log" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null ||
+  fail "v1 checkout lock install failed"
+grep -Fqx 'checkout_lock=held' "$lock_log" ||
+  fail "v1 checkout lock was not held during primary delegation"
+grep -Fqx 'checkout_lock_kind=v1' "$lock_log" ||
+  fail "v1 checkout lock did not use the canonical symlink representation"
+lock_target=$(sed -n 's/^checkout_lock_target=//p' "$lock_log")
+[[ "$lock_target" =~ ^\.example-tool\.install\.lock\.owner\.[0-9a-f]{32}/\.$ ]] ||
+  fail "v1 checkout lock used an unsafe owner target: $lock_target"
+grep -Fqx 'checkout_lock_owner_mode=700' "$lock_log" ||
+  fail "v1 checkout lock owner directory was not private"
+grep -Fqx 'checkout_lock_record_mode=600' "$lock_log" ||
+  fail "v1 checkout lock owner record was not private"
+grep -Fqx \
+  'checkout_lock_record_header=cgraf78 checkout mutation lock v1' \
+  "$lock_log" ||
+  fail "v1 checkout lock owner record used the wrong version"
+lock_parent=$(cd -P -- "${lock_managed%/*}" && pwd -P)
+lock_path="$lock_parent/.example-tool.install.lock"
+[[ ! -e "$lock_path" && ! -L "$lock_path" ]] ||
+  fail "v1 checkout lock remained after successful delegation"
+[[ ! -e "$lock_parent/$lock_target" && ! -L "$lock_parent/$lock_target" ]] ||
+  fail "v1 checkout lock left its owner directory after release"
+
+lock_fresh_managed="$tmp/lock-fresh/example-tool"
+CHECKOUT_TEST_LOG="$tmp/lock-fresh-one.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=5 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_fresh_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" \
+  >"$tmp/lock-fresh-one.out" 2>&1 &
+lock_fresh_one_pid=$!
+CHECKOUT_TEST_LOG="$tmp/lock-fresh-two.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=5 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_fresh_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" \
+  >"$tmp/lock-fresh-two.out" 2>&1 &
+lock_fresh_two_pid=$!
+set +e
+wait "$lock_fresh_one_pid"
+lock_fresh_one_status=$?
+wait "$lock_fresh_two_pid"
+lock_fresh_two_status=$?
+set -e
+if [[ "$lock_fresh_one_status" -ne 0 || "$lock_fresh_two_status" -ne 0 ]]; then
+  sed -n '1,120p' "$tmp/lock-fresh-one.out" >&2
+  sed -n '1,120p' "$tmp/lock-fresh-two.out" >&2
+  fail "two fresh v1 writers did not serialize to success"
+fi
+grep -Fqx 'checkout_lock_kind=v1' "$tmp/lock-fresh-one.log" ||
+  fail "first fresh writer did not acquire v1"
+grep -Fqx 'checkout_lock_kind=v1' "$tmp/lock-fresh-two.log" ||
+  fail "second fresh writer did not acquire v1"
+[[ ! -e "$tmp/lock-fresh/.example-tool.install.lock" &&
+  ! -L "$tmp/lock-fresh/.example-tool.install.lock" ]] ||
+  fail "two fresh v1 writers left the canonical lock"
+
+lock_block_ready="$tmp/lock-block.ready"
+blocking_release="$tmp/lock-block.release"
+CHECKOUT_TEST_LOG="$tmp/lock-block.log" \
+  CHECKOUT_TEST_BLOCK_READY="$lock_block_ready" \
+  CHECKOUT_TEST_BLOCK_RELEASE="$blocking_release" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null 2>&1 &
+blocking_pid=$!
+for _ in {1..100}; do
+  [[ -e "$lock_block_ready" ]] && break
+  kill -0 "$blocking_pid" 2>/dev/null || break
+  sleep 0.05
+done
+[[ -e "$lock_block_ready" ]] ||
+  fail "v1 checkout lock holder did not reach its primary delegate"
+
+# Recovery is a checkout mutation too. A process that has not acquired the
+# canonical generation must not inspect or alter even obviously invalid
+# transaction state left beside that checkout.
+lock_blocked_transaction="$lock_parent/.example-tool.install.transaction"
+mkdir "$lock_blocked_transaction"
+printf 'must remain untouched\n' >"$lock_blocked_transaction/sentinel"
+
+set +e
+lock_timeout_output=$(CHECKOUT_TEST_LOG="$tmp/lock-timeout.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=0 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" 2>&1)
+lock_timeout_status=$?
+set -e
+[[ "$lock_timeout_status" -ne 0 &&
+  "$lock_timeout_output" == *'timed out after 0s waiting for managed checkout lock'* ]] ||
+  fail "v1 checkout lock timeout zero did not classify the live owner"
+[[ -L "$lock_path" ]] ||
+  fail "v1 checkout lock timeout changed the live owner"
+grep -Fqx 'must remain untouched' "$lock_blocked_transaction/sentinel" ||
+  fail "v1 checkout lock timeout changed transaction state before acquisition"
+rm -f "$lock_blocked_transaction/sentinel"
+rmdir "$lock_blocked_transaction"
+
+lock_wait_output="$tmp/lock-wait.out"
+CHECKOUT_TEST_LOG="$tmp/lock-wait.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=5 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" \
+  >"$lock_wait_output" 2>&1 &
+lock_wait_pid=$!
+for _ in {1..100}; do
+  grep -Fq 'waiting for managed checkout lock' "$lock_wait_output" 2>/dev/null &&
+    break
+  kill -0 "$lock_wait_pid" 2>/dev/null || break
+  sleep 0.05
+done
+grep -Fq 'waiting for managed checkout lock' "$lock_wait_output" ||
+  fail "v1 checkout lock waiter did not report its bounded wait"
+kill -0 "$lock_wait_pid" 2>/dev/null ||
+  fail "v1 checkout lock waiter exited before the owner released"
+: >"$blocking_release"
+wait "$blocking_pid" ||
+  fail "v1 checkout lock holder did not finish successfully"
+blocking_pid=
+blocking_release=
+if ! wait "$lock_wait_pid"; then
+  sed -n '1,120p' "$lock_wait_output" >&2
+  fail "v1 checkout lock waiter did not acquire after release"
+fi
+lock_wait_pid=
+grep -Fqx 'checkout_lock_kind=v1' "$tmp/lock-wait.log" ||
+  fail "v1 checkout lock waiter did not acquire a fresh lock generation"
+
+# A completed detachment must stop participating in lock arbitration before
+# leaf-by-leaf cleanup begins. Pause a releaser after it removes the retired
+# owner record and prove that a new writer can acquire without mistaking that
+# ordinary cleanup window for malformed active state.
+lock_cleanup_bin="$tmp/lock-cleanup-bin"
+lock_cleanup_ready="$tmp/lock-cleanup.ready"
+lock_cleanup_release="$tmp/lock-cleanup.release"
+lock_cleanup_waiter_ready="$tmp/lock-cleanup-waiter.ready"
+lock_cleanup_waiter_release="$tmp/lock-cleanup-waiter.release"
+lock_real_rm=$(PATH="$platform_tool_path" command -v rm)
+mkdir -p "$lock_cleanup_bin"
+cat >"$lock_cleanup_bin/rm" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+"${CHECKOUT_TEST_REAL_RM:?}" "$@"
+for path in "$@"; do
+  case "$path" in
+    */.example-tool.install.lock.claim.*.*/owner/owner-v1 | \
+      */.example-tool.install.lock.claim.*.*/retired/owner-v1)
+      printf '%s\n' "$$" >"${CHECKOUT_TEST_CLEANUP_READY:?}"
+      while [[ ! -e ${CHECKOUT_TEST_CLEANUP_RELEASE:?} ]]; do
+        sleep 0.01
+      done
+      ;;
+  esac
+done
+EOF
+chmod 0755 "$lock_cleanup_bin/rm"
+CHECKOUT_TEST_LOG="$tmp/lock-cleanup-owner.log" \
+  PATH="$lock_cleanup_bin:$platform_tool_path" \
+  CHECKOUT_TEST_REAL_RM="$lock_real_rm" \
+  CHECKOUT_TEST_CLEANUP_READY="$lock_cleanup_ready" \
+  CHECKOUT_TEST_CLEANUP_RELEASE="$lock_cleanup_release" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null 2>&1 &
+blocking_pid=$!
+blocking_release=$lock_cleanup_release
+for _ in {1..100}; do
+  [[ -e "$lock_cleanup_ready" ]] && break
+  kill -0 "$blocking_pid" 2>/dev/null || break
+  sleep 0.05
+done
+[[ -e "$lock_cleanup_ready" ]] ||
+  fail "v1 checkout lock cleanup did not reach its interruptible leaf phase"
+
+CHECKOUT_TEST_LOG="$tmp/lock-cleanup-waiter.log" \
+  CHECKOUT_TEST_BLOCK_READY="$lock_cleanup_waiter_ready" \
+  CHECKOUT_TEST_BLOCK_RELEASE="$lock_cleanup_waiter_release" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=2 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" \
+  >"$tmp/lock-cleanup-waiter.out" 2>&1 &
+lock_wait_pid=$!
+for _ in {1..100}; do
+  [[ -e "$lock_cleanup_waiter_ready" ]] && break
+  kill -0 "$lock_wait_pid" 2>/dev/null || break
+  sleep 0.05
+done
+if [[ ! -e "$lock_cleanup_waiter_ready" ]]; then
+  sed -n '1,120p' "$tmp/lock-cleanup-waiter.out" >&2
+  fail "v1 checkout lock cleanup blocked a fresh owner generation"
+fi
+
+: >"$lock_cleanup_release"
+wait "$blocking_pid" ||
+  fail "v1 checkout lock releaser failed after cleanup resumed"
+blocking_pid=
+blocking_release=
+: >"$lock_cleanup_waiter_release"
+wait "$lock_wait_pid" ||
+  fail "v1 checkout lock waiter failed after concurrent retired cleanup"
+lock_wait_pid=
+[[ ! -e "$lock_path" && ! -L "$lock_path" ]] ||
+  fail "concurrent retired cleanup left the canonical lock"
+
+set +e
+lock_bad_timeout_output=$(CHECKOUT_TEST_LOG="$tmp/lock-bad-timeout.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=invalid \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$tmp/lock-bad-timeout/example-tool" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" 2>&1)
+lock_bad_timeout_status=$?
+set -e
+[[ "$lock_bad_timeout_status" -ne 0 &&
+  "$lock_bad_timeout_output" == *'checkout lock timeout must be a nonnegative integer'* ]] ||
+  fail "v1 checkout lock accepted an invalid timeout"
+[[ ! -e "$tmp/lock-bad-timeout/example-tool" ]] ||
+  fail "invalid v1 checkout lock timeout mutated the checkout"
+
+lock_legacy_managed="$tmp/lock-legacy/example-tool"
+lock_legacy_path="$tmp/lock-legacy/.example-tool.install.lock"
+mkdir -p "$lock_legacy_path"
+set +e
+lock_legacy_output=$(CHECKOUT_TEST_LOG="$tmp/lock-legacy.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=0 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_legacy_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" 2>&1)
+lock_legacy_status=$?
+set -e
+[[ "$lock_legacy_status" -ne 0 &&
+  "$lock_legacy_output" == *'remove that exact empty directory with rmdir and retry'* ]] ||
+  fail "v1 checkout lock did not preserve legacy lock recovery guidance"
+[[ -d "$lock_legacy_path" && ! -L "$lock_legacy_path" ]] ||
+  fail "v1 checkout lock removed a legacy directory lock"
+rmdir "$lock_legacy_path"
+
+lock_kill_managed="$tmp/lock-kill/example-tool"
+lock_kill_parent="$tmp/lock-kill"
+lock_kill_path="$lock_kill_parent/.example-tool.install.lock"
+lock_kill_bin="$tmp/lock-kill-bin"
+lock_real_ln=$(PATH="$platform_tool_path" command -v ln)
+mkdir -p "$lock_kill_bin"
+cat >"$lock_kill_bin/ln" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+target=${!#}
+if [[ "$target" == "${CHECKOUT_TEST_KILL_LOCK:?}" &&
+  ${CHECKOUT_TEST_KILL_LOCK_MODE:-after} == before ]]; then
+  kill -KILL "$PPID"
+  exit 137
+fi
+"${CHECKOUT_TEST_REAL_LN:?}" "$@"
+if [[ "$target" == "$CHECKOUT_TEST_KILL_LOCK" ]]; then
+  kill -KILL "$PPID"
+fi
+EOF
+chmod 0755 "$lock_kill_bin/ln"
+
+lock_publish_race_managed="$tmp/lock-publish-race/example-tool"
+lock_publish_race_parent="$tmp/lock-publish-race"
+lock_publish_race_path="$lock_publish_race_parent/.example-tool.install.lock"
+lock_publish_race_bin="$tmp/lock-publish-race-bin"
+mkdir -p "$lock_publish_race_bin"
+cat >"$lock_publish_race_bin/ln" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+source=
+destination=
+for argument in "$@"; do
+  source=$destination
+  destination=$argument
+done
+if [[ "$destination" == "${CHECKOUT_TEST_PUBLISH_RACE_LOCK:?}" ]]; then
+  mkdir "$destination"
+  nested_name=${source%/.}
+  nested_name=${nested_name##*/}
+  "${CHECKOUT_TEST_REAL_LN:?}" -s "$source" "$destination/$nested_name"
+  exit 0
+fi
+exec "${CHECKOUT_TEST_REAL_LN:?}" "$@"
+EOF
+chmod 0755 "$lock_publish_race_bin/ln"
+set +e
+lock_publish_race_output=$(CHECKOUT_TEST_LOG="$tmp/lock-publish-race.log" \
+  PATH="$lock_publish_race_bin:$platform_tool_path" \
+  CHECKOUT_TEST_REAL_LN="$lock_real_ln" \
+  CHECKOUT_TEST_PUBLISH_RACE_LOCK="$lock_publish_race_path" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=0 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_publish_race_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" 2>&1)
+lock_publish_race_status=$?
+set -e
+if [[ "$lock_publish_race_status" -eq 0 ||
+  "$lock_publish_race_output" != *'remove that exact empty directory with rmdir and retry'* ]]; then
+  printf 'lock publication diagnostic: status=%s output=%q\n' \
+    "$lock_publish_race_status" "$lock_publish_race_output" >&2
+  for candidate in \
+    "$lock_publish_race_path"/* \
+    "$lock_publish_race_path"/.[!.]* \
+    "$lock_publish_race_path"/..?*; do
+    [[ -e "$candidate" || -L "$candidate" ]] || continue
+    printf 'lock publication candidate: path=%q symlink=%s target=%q\n' \
+      "$candidate" "$([[ -L "$candidate" ]] && printf true || printf false)" \
+      "$(readlink "$candidate" 2>/dev/null || true)" >&2
+  done
+  fail "v1 publication did not classify a legacy mkdir winner"
+fi
+if ! rmdir "$lock_publish_race_path"; then
+  fail "v1 publication polluted a legacy directory that won the race"
+fi
+if compgen -G \
+  "$lock_publish_race_parent/.example-tool.install.lock.owner.*" \
+  >/dev/null; then
+  fail "v1 publication race left its unpublished owner generation"
+fi
+
+lock_prepub_managed="$tmp/lock-prepub/example-tool"
+lock_prepub_parent="$tmp/lock-prepub"
+lock_prepub_path="$lock_prepub_parent/.example-tool.install.lock"
+set +e
+CHECKOUT_TEST_LOG="$tmp/lock-prepub.log" \
+  PATH="$lock_kill_bin:$platform_tool_path" \
+  CHECKOUT_TEST_REAL_LN="$lock_real_ln" \
+  CHECKOUT_TEST_KILL_LOCK="$lock_prepub_path" \
+  CHECKOUT_TEST_KILL_LOCK_MODE=before \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_prepub_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null 2>&1
+lock_prepub_status=$?
+set -e
+[[ "$lock_prepub_status" -eq 137 ]] ||
+  fail "v1 checkout lock prepublication fixture did not SIGKILL its owner"
+[[ ! -e "$lock_prepub_path" && ! -L "$lock_prepub_path" ]] ||
+  fail "SIGKILL before v1 publication changed the canonical lock"
+lock_prepub_owner=$(compgen -G \
+  "$lock_prepub_parent/.example-tool.install.lock.owner.*/owner-v1" || true)
+lock_prepub_owner=${lock_prepub_owner%%$'\n'*}
+[[ -f "$lock_prepub_owner" && ! -L "$lock_prepub_owner" ]] ||
+  fail "SIGKILL before v1 publication did not leave an inert complete owner"
+CHECKOUT_TEST_LOG="$tmp/lock-prepub-retry.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=0 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_prepub_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null ||
+  fail "an unpublished v1 owner blocked a fresh lock generation"
+[[ ! -e "$lock_prepub_path" && ! -L "$lock_prepub_path" ]] ||
+  fail "fresh acquisition after a prepublication death left the canonical lock"
+[[ -f "$lock_prepub_owner" ]] ||
+  fail "fresh acquisition removed an unrelated unpublished owner generation"
+rm -f "$lock_prepub_owner"
+rmdir "${lock_prepub_owner%/*}"
+
+set +e
+CHECKOUT_TEST_LOG="$tmp/lock-kill.log" \
+  PATH="$lock_kill_bin:$platform_tool_path" \
+  CHECKOUT_TEST_REAL_LN="$lock_real_ln" \
+  CHECKOUT_TEST_KILL_LOCK="$lock_kill_path" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_kill_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null 2>&1
+lock_kill_status=$?
+set -e
+[[ "$lock_kill_status" -eq 137 ]] ||
+  fail "v1 checkout lock publication fixture did not SIGKILL its owner"
+[[ -L "$lock_kill_path" ]] ||
+  fail "SIGKILL after v1 lock publication did not preserve the canonical lock"
+lock_kill_target=$(readlink "$lock_kill_path")
+[[ -f "$lock_kill_parent/$lock_kill_target/owner-v1" ]] ||
+  fail "SIGKILL after v1 lock publication lost the owner record"
+
+CHECKOUT_TEST_LOG="$tmp/lock-kill-recover.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=2 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_kill_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null ||
+  fail "v1 checkout lock did not recover a killed owner"
+grep -Fqx 'checkout_lock_kind=v1' "$tmp/lock-kill-recover.log" ||
+  fail "killed-owner recovery did not acquire a fresh v1 generation"
+[[ ! -e "$lock_kill_path" && ! -L "$lock_kill_path" ]] ||
+  fail "killed-owner recovery left the canonical lock"
+[[ ! -e "$lock_kill_parent/$lock_kill_target" ]] ||
+  fail "killed-owner recovery left the stale owner directory"
+
+create_killed_v1_lock() {
+  local managed=$1 log=$2 parent=${1%/*} path status
+  path="$parent/.${managed##*/}.install.lock"
+  set +e
+  CHECKOUT_TEST_LOG="$log" \
+    PATH="$lock_kill_bin:$platform_tool_path" \
+    CHECKOUT_TEST_REAL_LN="$lock_real_ln" \
+    CHECKOUT_TEST_KILL_LOCK="$path" \
+    CGRAF78_CHECKOUT_INSTALL_DIR="$managed" \
+    CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+    "$active_bash" -s <"$lock_source/install.sh" >/dev/null 2>&1
+  status=$?
+  set -e
+  [[ "$status" -eq 137 ]] ||
+    fail "v1 checkout lock fixture did not SIGKILL its owner: $managed"
+  [[ -L "$path" ]] ||
+    fail "v1 checkout lock fixture did not publish its canonical lock: $managed"
+}
+
+lock_reuse_managed="$tmp/lock-reuse/example-tool"
+lock_reuse_parent="$tmp/lock-reuse"
+lock_reuse_path="$lock_reuse_parent/.example-tool.install.lock"
+create_killed_v1_lock "$lock_reuse_managed" "$tmp/lock-reuse.log"
+lock_reuse_target=$(readlink "$lock_reuse_path")
+lock_reuse_record="$lock_reuse_parent/$lock_reuse_target/owner-v1"
+sed \
+  -e "s/^pid=.*/pid=$$/" \
+  -e 's/^start_token_hex=.*/start_token_hex=00/' \
+  "$lock_reuse_record" >"$lock_reuse_record.next"
+mv "$lock_reuse_record.next" "$lock_reuse_record"
+chmod 0600 "$lock_reuse_record"
+CHECKOUT_TEST_LOG="$tmp/lock-reuse-recover.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=0 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_reuse_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null ||
+  fail "v1 checkout lock did not recover a reused PID generation"
+[[ ! -e "$lock_reuse_path" && ! -L "$lock_reuse_path" ]] ||
+  fail "PID-reuse recovery left the canonical lock"
+
+lock_remote_host_managed="$tmp/lock-remote-host/example-tool"
+lock_remote_host_parent="$tmp/lock-remote-host"
+lock_remote_host_path="$lock_remote_host_parent/.example-tool.install.lock"
+create_killed_v1_lock \
+  "$lock_remote_host_managed" "$tmp/lock-remote-host.log"
+lock_remote_host_target=$(readlink "$lock_remote_host_path")
+lock_remote_host_record="$lock_remote_host_parent/$lock_remote_host_target/owner-v1"
+sed 's/^host_hex=.*/host_hex=00/' \
+  "$lock_remote_host_record" >"$lock_remote_host_record.next"
+mv "$lock_remote_host_record.next" "$lock_remote_host_record"
+chmod 0600 "$lock_remote_host_record"
+set +e
+lock_remote_host_output=$(CHECKOUT_TEST_LOG="$tmp/lock-remote-host-retry.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=0 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_remote_host_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" 2>&1)
+lock_remote_host_status=$?
+set -e
+[[ "$lock_remote_host_status" -ne 0 &&
+  "$lock_remote_host_output" == *'timed out after 0s'* ]] ||
+  fail "v1 checkout lock did not fail closed for a different owner host"
+[[ -L "$lock_remote_host_path" ]] ||
+  fail "remote-host lock classification changed the canonical lock"
+
+lock_malformed_managed="$tmp/lock-malformed/example-tool"
+lock_malformed_parent="$tmp/lock-malformed"
+lock_malformed_path="$lock_malformed_parent/.example-tool.install.lock"
+create_killed_v1_lock \
+  "$lock_malformed_managed" "$tmp/lock-malformed.log"
+lock_malformed_target=$(readlink "$lock_malformed_path")
+lock_malformed_record="$lock_malformed_parent/$lock_malformed_target/owner-v1"
+printf 'unexpected=field\n' >>"$lock_malformed_record"
+set +e
+lock_malformed_output=$(CHECKOUT_TEST_LOG="$tmp/lock-malformed-retry.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=0 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_malformed_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" 2>&1)
+lock_malformed_status=$?
+set -e
+[[ "$lock_malformed_status" -ne 0 &&
+  "$lock_malformed_output" == *'managed checkout lock is malformed'* ]] ||
+  fail "v1 checkout lock accepted an owner record with an extra field"
+[[ -L "$lock_malformed_path" &&
+  $(tail -n 1 "$lock_malformed_record") == 'unexpected=field' ]] ||
+  fail "malformed v1 owner rejection changed the diagnostic state"
+
+lock_extra_managed="$tmp/lock-extra/example-tool"
+lock_extra_parent="$tmp/lock-extra"
+lock_extra_path="$lock_extra_parent/.example-tool.install.lock"
+create_killed_v1_lock "$lock_extra_managed" "$tmp/lock-extra.log"
+lock_extra_target=$(readlink "$lock_extra_path")
+lock_extra_owner="$lock_extra_parent/${lock_extra_target%/.}"
+: >"$lock_extra_owner/unexpected-child"
+set +e
+lock_extra_output=$(CHECKOUT_TEST_LOG="$tmp/lock-extra-retry.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=0 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_extra_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" 2>&1)
+lock_extra_status=$?
+set -e
+[[ "$lock_extra_status" -ne 0 &&
+  "$lock_extra_output" == *'managed checkout lock is malformed'* ]] ||
+  fail "v1 checkout lock accepted an unexpected active-owner child"
+[[ -L "$lock_extra_path" && -f "$lock_extra_owner/unexpected-child" ]] ||
+  fail "unexpected active-owner rejection changed the diagnostic state"
+
+lock_hostile_managed="$tmp/lock-hostile/example-tool"
+lock_hostile_path="$tmp/lock-hostile/.example-tool.install.lock"
+mkdir -p "$tmp/lock-hostile"
+ln -s ../../escape "$lock_hostile_path"
+set +e
+lock_hostile_output=$(CHECKOUT_TEST_LOG="$tmp/lock-hostile.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=0 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_hostile_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" 2>&1)
+lock_hostile_status=$?
+set -e
+[[ "$lock_hostile_status" -ne 0 &&
+  "$lock_hostile_output" == *'managed checkout lock is malformed'* ]] ||
+  fail "v1 checkout lock accepted a hostile symlink target"
+[[ -L "$lock_hostile_path" && $(readlink "$lock_hostile_path") == ../../escape ]] ||
+  fail "v1 checkout lock changed a hostile symlink target"
+
+lock_race_managed="$tmp/lock-race/example-tool"
+lock_race_parent="$tmp/lock-race"
+lock_race_path="$lock_race_parent/.example-tool.install.lock"
+create_killed_v1_lock "$lock_race_managed" "$tmp/lock-race-stale.log"
+lock_race_ready="$tmp/lock-race.ready"
+blocking_release="$tmp/lock-race.release"
+CHECKOUT_TEST_LOG="$tmp/lock-race-one.log" \
+  CHECKOUT_TEST_BLOCK_READY="$lock_race_ready" \
+  CHECKOUT_TEST_BLOCK_RELEASE="$blocking_release" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=5 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_race_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" \
+  >"$tmp/lock-race-one.out" 2>&1 &
+blocking_pid=$!
+CHECKOUT_TEST_LOG="$tmp/lock-race-two.log" \
+  CHECKOUT_TEST_BLOCK_READY="$lock_race_ready" \
+  CHECKOUT_TEST_BLOCK_RELEASE="$blocking_release" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=5 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_race_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" \
+  >"$tmp/lock-race-two.out" 2>&1 &
+lock_wait_pid=$!
+for _ in {1..100}; do
+  [[ -e "$lock_race_ready" ]] &&
+    { grep -Fq 'waiting for managed checkout lock' "$tmp/lock-race-one.out" 2>/dev/null ||
+      grep -Fq 'waiting for managed checkout lock' "$tmp/lock-race-two.out" 2>/dev/null; } &&
+    break
+  kill -0 "$blocking_pid" 2>/dev/null || break
+  kill -0 "$lock_wait_pid" 2>/dev/null || break
+  sleep 0.05
+done
+[[ -e "$lock_race_ready" ]] ||
+  fail "competing stale-lock reclaimers did not elect a checkout owner"
+if ! grep -Fq 'waiting for managed checkout lock' "$tmp/lock-race-one.out" &&
+  ! grep -Fq 'waiting for managed checkout lock' "$tmp/lock-race-two.out"; then
+  fail "competing stale-lock reclaimers did not serialize the second writer"
+fi
+if mkdir "$lock_race_path" 2>/dev/null; then
+  rmdir "$lock_race_path"
+  fail "legacy mkdir acquired while a v1 checkout lock was held"
+fi
+: >"$blocking_release"
+wait "$blocking_pid" || {
+  sed -n '1,120p' "$tmp/lock-race-one.out" >&2
+  fail "first competing stale-lock reclaimer failed"
+}
+blocking_pid=
+wait "$lock_wait_pid" || {
+  sed -n '1,120p' "$tmp/lock-race-two.out" >&2
+  fail "second competing stale-lock reclaimer failed"
+}
+lock_wait_pid=
+blocking_release=
+grep -Fqx 'checkout_lock_kind=v1' "$tmp/lock-race-one.log" ||
+  fail "first competing writer did not acquire v1"
+grep -Fqx 'checkout_lock_kind=v1' "$tmp/lock-race-two.log" ||
+  fail "second competing writer did not acquire v1"
+[[ ! -e "$lock_race_path" && ! -L "$lock_race_path" ]] ||
+  fail "competing stale-lock reclaimers left the canonical lock"
+if compgen -G "$lock_race_parent/.example-tool.install.lock.claim.*" \
+  >/dev/null; then
+  fail "competing stale-lock reclaimers left a claim directory"
+fi
+
+lock_claim_kill_bin="$tmp/lock-claim-kill-bin"
+lock_real_mv=$(PATH="$platform_tool_path" command -v mv)
+mkdir -p "$lock_claim_kill_bin"
+cat >"$lock_claim_kill_bin/mv" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+"${CHECKOUT_TEST_REAL_MV:?}" "$@"
+if [[ $# -eq 2 ]]; then
+  source_path=$1
+  destination_path=$2
+  case "${CHECKOUT_TEST_LOCK_MV_KILL_MODE:-}:$source_path:$destination_path" in
+    prepare:*.install.lock.claim.prepare.*:*/.example-tool.install.lock.claim.*.*)
+      kill -KILL "$PPID"
+      ;;
+    claim:*.install.lock.owner.*:*/.example-tool.install.lock.claim.*.*/owner)
+      kill -KILL "$PPID"
+      ;;
+    detach:"${CHECKOUT_TEST_LOCK_MV_CANONICAL:?}":*/owner/canonical)
+      kill -KILL "$PPID"
+      ;;
+  esac
+fi
+EOF
+chmod 0755 "$lock_claim_kill_bin/mv"
+
+lock_claim_prepare_managed="$tmp/lock-claim-prepare/example-tool"
+lock_claim_prepare_parent="$tmp/lock-claim-prepare"
+lock_claim_prepare_path="$lock_claim_prepare_parent/.example-tool.install.lock"
+set +e
+CHECKOUT_TEST_LOG="$tmp/lock-claim-prepare.log" \
+  PATH="$lock_claim_kill_bin:$platform_tool_path" \
+  CHECKOUT_TEST_REAL_MV="$lock_real_mv" \
+  CHECKOUT_TEST_LOCK_MV_KILL_MODE=prepare \
+  CHECKOUT_TEST_LOCK_MV_CANONICAL="$lock_claim_prepare_path" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_claim_prepare_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null 2>&1
+lock_claim_prepare_status=$?
+set -e
+[[ "$lock_claim_prepare_status" -eq 137 ]] ||
+  fail "v1 checkout lock claim-preparation fixture did not SIGKILL its claimant"
+[[ -L "$lock_claim_prepare_path" && -d "$lock_claim_prepare_path" ]] ||
+  fail "killed claim preparer changed the live canonical owner"
+lock_claim_prepare_orphan=$(compgen -G \
+  "$lock_claim_prepare_parent/.example-tool.install.lock.claim.*.*/claim-v1" || true)
+lock_claim_prepare_orphan=${lock_claim_prepare_orphan%%$'\n'*}
+[[ -f "$lock_claim_prepare_orphan" &&
+  ! -e "${lock_claim_prepare_orphan%/claim-v1}/owner" ]] ||
+  fail "killed claim preparer did not leave one inert empty claim"
+CHECKOUT_TEST_LOG="$tmp/lock-claim-prepare-recover.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=2 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_claim_prepare_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null ||
+  fail "an interrupted empty claim blocked stale-owner recovery"
+[[ ! -e "$lock_claim_prepare_path" && ! -L "$lock_claim_prepare_path" ]] ||
+  fail "claim-preparation recovery left the canonical lock"
+[[ -f "$lock_claim_prepare_orphan" ]] ||
+  fail "claim-preparation recovery removed an unrelated empty claim"
+rm -f "$lock_claim_prepare_orphan"
+rmdir "${lock_claim_prepare_orphan%/claim-v1}"
+
+lock_claim_managed="$tmp/lock-claim/example-tool"
+lock_claim_parent="$tmp/lock-claim"
+lock_claim_path="$lock_claim_parent/.example-tool.install.lock"
+set +e
+CHECKOUT_TEST_LOG="$tmp/lock-claim.log" \
+  PATH="$lock_claim_kill_bin:$platform_tool_path" \
+  CHECKOUT_TEST_REAL_MV="$lock_real_mv" \
+  CHECKOUT_TEST_LOCK_MV_KILL_MODE=claim \
+  CHECKOUT_TEST_LOCK_MV_CANONICAL="$lock_claim_path" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_claim_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null 2>&1
+lock_claim_kill_status=$?
+set -e
+[[ "$lock_claim_kill_status" -eq 137 ]] ||
+  fail "v1 checkout lock claim fixture did not SIGKILL its claimant"
+[[ -L "$lock_claim_path" && ! -e "$lock_claim_path" ]] ||
+  fail "killed claimant did not leave the canonical lock safely dangling"
+lock_claim_target=$(readlink "$lock_claim_path")
+[[ ! -e "$lock_claim_parent/$lock_claim_target" ]] ||
+  fail "killed claimant left the owner at its pre-claim path"
+compgen -G "$lock_claim_parent/.example-tool.install.lock.claim.*.*/owner/owner-v1" \
+  >/dev/null ||
+  fail "killed claimant did not preserve the nested owner record"
+
+lock_claim_original=$(compgen -G \
+  "$lock_claim_parent/.example-tool.install.lock.claim.*.*" || true)
+lock_claim_original=${lock_claim_original%%$'\n'*}
+: >"$lock_claim_original/unexpected-child"
+set +e
+lock_claim_extra_output=$(CHECKOUT_TEST_LOG="$tmp/lock-claim-extra.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=0 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_claim_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" 2>&1)
+lock_claim_extra_status=$?
+set -e
+[[ "$lock_claim_extra_status" -ne 0 &&
+  "$lock_claim_extra_output" == *'managed checkout lock is malformed'* ]] ||
+  fail "v1 checkout lock accepted an unexpected active-claim child"
+[[ -L "$lock_claim_path" && -f "$lock_claim_original/unexpected-child" ]] ||
+  fail "unexpected active-claim rejection changed the diagnostic state"
+rm -f "$lock_claim_original/unexpected-child"
+
+lock_claim_base=${lock_claim_original##*/}
+lock_claim_rest=${lock_claim_base#*.example-tool.install.lock.claim.}
+lock_claim_owner_nonce=${lock_claim_rest%%.*}
+lock_claim_second_nonce=11111111111111111111111111111111
+lock_claim_second="$lock_claim_parent/.example-tool.install.lock.claim.${lock_claim_owner_nonce}.${lock_claim_second_nonce}"
+cp -R "$lock_claim_original" "$lock_claim_second"
+sed "s/^nonce=.*/nonce=$lock_claim_second_nonce/" \
+  "$lock_claim_second/claim-v1" >"$lock_claim_second/claim-v1.next"
+mv "$lock_claim_second/claim-v1.next" "$lock_claim_second/claim-v1"
+chmod 0600 "$lock_claim_second/claim-v1"
+set +e
+lock_multiple_claims_output=$(CHECKOUT_TEST_LOG="$tmp/lock-multiple-claims.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=0 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_claim_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" 2>&1)
+lock_multiple_claims_status=$?
+set -e
+[[ "$lock_multiple_claims_status" -ne 0 &&
+  "$lock_multiple_claims_output" == *'managed checkout lock is malformed'* ]] ||
+  fail "v1 checkout lock did not fail closed for multiple owner-bearing claims"
+[[ -L "$lock_claim_path" && ! -e "$lock_claim_path" ]] ||
+  fail "multiple-claim rejection changed the dangling canonical lock"
+rm -f "$lock_claim_second/owner/owner-v1"
+rmdir "$lock_claim_second/owner"
+rm -f "$lock_claim_second/claim-v1"
+rmdir "$lock_claim_second"
+
+lock_claim_cleanup_bin="$tmp/lock-claim-cleanup-bin"
+mkdir -p "$lock_claim_cleanup_bin"
+cat >"$lock_claim_cleanup_bin/rmdir" <<'EOF'
+#!/bin/sh
+if [ "${1:-}" = "${CHECKOUT_TEST_FAIL_RMDIR:-}" ]; then
+  exit 1
+fi
+exec "$CHECKOUT_TEST_REAL_RMDIR" "$@"
+EOF
+chmod 0755 "$lock_claim_cleanup_bin/rmdir"
+CHECKOUT_TEST_LOG="$tmp/lock-claim-recover.log" \
+  CHECKOUT_TEST_FAIL_RMDIR="$lock_claim_original" \
+  CHECKOUT_TEST_REAL_RMDIR="$(command -v rmdir)" \
+  PATH="$lock_claim_cleanup_bin:$platform_tool_path" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=2 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_claim_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null ||
+  fail "v1 checkout lock did not recover a killed pre-detachment claimant"
+[[ ! -e "$lock_claim_path" && ! -L "$lock_claim_path" ]] ||
+  fail "claimant recovery left the canonical lock"
+[[ -d "$lock_claim_original" &&
+  -z $(ls -A "$lock_claim_original" 2>/dev/null) ]] ||
+  fail "claimant recovery did not leave only the inert failed-cleanup claim"
+lock_claim_remaining=$(compgen -G \
+  "$lock_claim_parent/.example-tool.install.lock.claim.*" || true)
+[[ "$lock_claim_remaining" == "$lock_claim_original" ]] ||
+  fail "claimant recovery left an active or unrelated claim directory"
+rmdir "$lock_claim_original"
+
+# Both canonical reads follow a successful `-L` probe. Detachment between that
+# probe and read 1 invalidates the outer classification snapshot; detachment at
+# read 2 invalidates the claimant-count snapshot. A failed read while the path
+# still appears to be a symlink is equally ambiguous because a new generation
+# may already have replaced the detached one. Exercise all three boundaries
+# with the same condition-based gate.
+for lock_recheck_case in detach-1 detach-2 fail-1; do
+  lock_recheck_mode=${lock_recheck_case%-*}
+  lock_recheck_call=${lock_recheck_case#*-}
+  lock_recheck_parent="$tmp/lock-recheck-$lock_recheck_case"
+  lock_recheck_managed="$lock_recheck_parent/example-tool"
+  lock_recheck_path="$lock_recheck_parent/.example-tool.install.lock"
+  set +e
+  CHECKOUT_TEST_LOG="$tmp/lock-recheck-kill.log" \
+    PATH="$lock_claim_kill_bin:$platform_tool_path" \
+    CHECKOUT_TEST_REAL_MV="$lock_real_mv" \
+    CHECKOUT_TEST_LOCK_MV_KILL_MODE=claim \
+    CHECKOUT_TEST_LOCK_MV_CANONICAL="$lock_recheck_path" \
+    CGRAF78_CHECKOUT_INSTALL_DIR="$lock_recheck_managed" \
+    CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+    "$active_bash" -s <"$lock_source/install.sh" >/dev/null 2>&1
+  lock_recheck_kill_status=$?
+  set -e
+  [[ "$lock_recheck_kill_status" -eq 137 ]] ||
+    fail "canonical recheck fixture did not SIGKILL its claimant"
+  lock_recheck_owner_record=$(compgen -G \
+    "$lock_recheck_parent/.example-tool.install.lock.claim.*.*/owner/owner-v1" || true)
+  lock_recheck_owner_record=${lock_recheck_owner_record%%$'\n'*}
+  [[ -f "$lock_recheck_owner_record" && -L "$lock_recheck_path" ]] ||
+    fail "canonical recheck fixture did not leave one attached dead claim"
+  lock_recheck_claim=${lock_recheck_owner_record%/owner/owner-v1}
+  lock_recheck_tombstone="$lock_recheck_claim/owner/canonical"
+
+  lock_recheck_bin="$tmp/lock-recheck-bin"
+  lock_recheck_count="$tmp/lock-recheck-$lock_recheck_case.count"
+  lock_recheck_ready="$tmp/lock-recheck-$lock_recheck_case.ready"
+  lock_recheck_release="$tmp/lock-recheck-$lock_recheck_case.release"
+  lock_real_readlink=$(PATH="$platform_tool_path" command -v readlink)
+  mkdir -p "$lock_recheck_bin"
+  cat >"$lock_recheck_bin/readlink" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+target=${!#}
+if [[ "$target" == "${CHECKOUT_TEST_RECHECK_CANONICAL:?}" ]]; then
+  count=0
+  if [[ -f "${CHECKOUT_TEST_RECHECK_COUNT:?}" ]]; then
+    IFS= read -r count <"$CHECKOUT_TEST_RECHECK_COUNT"
+  fi
+  count=$((count + 1))
+  printf '%s\n' "$count" >"$CHECKOUT_TEST_RECHECK_COUNT"
+  if [[ "$count" -eq "${CHECKOUT_TEST_RECHECK_BLOCK_CALL:?}" ]]; then
+    : >"${CHECKOUT_TEST_RECHECK_READY:?}"
+    for _ in {1..500}; do
+      [[ -e "${CHECKOUT_TEST_RECHECK_RELEASE:?}" ]] && break
+      sleep 0.01
+    done
+    [[ -e "$CHECKOUT_TEST_RECHECK_RELEASE" ]] || exit 75
+    if [[ "${CHECKOUT_TEST_RECHECK_MODE:?}" == fail ]]; then
+      exit 1
+    fi
+  fi
+fi
+exec "${CHECKOUT_TEST_REAL_READLINK:?}" "$@"
+EOF
+  chmod 0755 "$lock_recheck_bin/readlink"
+
+  CHECKOUT_TEST_LOG="$tmp/lock-recheck-recover.log" \
+    PATH="$lock_recheck_bin:$platform_tool_path" \
+    CHECKOUT_TEST_REAL_READLINK="$lock_real_readlink" \
+    CHECKOUT_TEST_RECHECK_BLOCK_CALL="$lock_recheck_call" \
+    CHECKOUT_TEST_RECHECK_MODE="$lock_recheck_mode" \
+    CHECKOUT_TEST_RECHECK_CANONICAL="$lock_recheck_path" \
+    CHECKOUT_TEST_RECHECK_COUNT="$lock_recheck_count" \
+    CHECKOUT_TEST_RECHECK_READY="$lock_recheck_ready" \
+    CHECKOUT_TEST_RECHECK_RELEASE="$lock_recheck_release" \
+    CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=5 \
+    CGRAF78_CHECKOUT_INSTALL_DIR="$lock_recheck_managed" \
+    CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+    "$active_bash" -s <"$lock_source/install.sh" \
+    >"$tmp/lock-recheck-recover.out" 2>&1 &
+  lock_wait_pid=$!
+  for _ in {1..500}; do
+    [[ -e "$lock_recheck_ready" ]] && break
+    sleep 0.01
+  done
+  if [[ ! -e "$lock_recheck_ready" ]]; then
+    : >"$lock_recheck_release"
+    wait "$lock_wait_pid" 2>/dev/null || true
+    lock_wait_pid=
+    fail "canonical recheck fixture did not reach $lock_recheck_case"
+  fi
+  if [[ "$lock_recheck_mode" == detach ]]; then
+    "$lock_real_mv" "$lock_recheck_path" "$lock_recheck_tombstone" ||
+      fail "canonical recheck fixture could not commit detachment"
+  fi
+  : >"$lock_recheck_release"
+  set +e
+  wait "$lock_wait_pid"
+  lock_recheck_status=$?
+  set -e
+  lock_wait_pid=
+  if [[ "$lock_recheck_status" -ne 0 ]]; then
+    sed -n '1,120p' "$tmp/lock-recheck-recover.out" >&2
+    fail "canonical ambiguity at $lock_recheck_case was treated as malformed"
+  fi
+  if grep -Fq 'managed checkout lock is malformed' \
+    "$tmp/lock-recheck-recover.out"; then
+    fail "canonical recheck emitted a malformed-lock diagnostic"
+  fi
+  grep -Fqx 'checkout_lock_kind=v1' "$tmp/lock-recheck-recover.log" ||
+    fail "canonical recheck recovery did not acquire checkout lock v1"
+  [[ ! -e "$lock_recheck_path" && ! -L "$lock_recheck_path" ]] ||
+    fail "canonical recheck recovery left the canonical lock"
+  if compgen -G "$lock_recheck_parent/.example-tool.install.lock.claim.*" \
+    >/dev/null; then
+    fail "canonical recheck recovery left a claim directory"
+  fi
+done
+
+lock_detach_managed="$tmp/lock-detach/example-tool"
+lock_detach_parent="$tmp/lock-detach"
+lock_detach_path="$lock_detach_parent/.example-tool.install.lock"
+set +e
+CHECKOUT_TEST_LOG="$tmp/lock-detach.log" \
+  PATH="$lock_claim_kill_bin:$platform_tool_path" \
+  CHECKOUT_TEST_REAL_MV="$lock_real_mv" \
+  CHECKOUT_TEST_LOCK_MV_KILL_MODE=detach \
+  CHECKOUT_TEST_LOCK_MV_CANONICAL="$lock_detach_path" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_detach_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null 2>&1
+lock_detach_kill_status=$?
+set -e
+[[ "$lock_detach_kill_status" -eq 137 ]] ||
+  fail "v1 checkout lock detach fixture did not SIGKILL its claimant"
+[[ ! -e "$lock_detach_path" && ! -L "$lock_detach_path" ]] ||
+  fail "killed post-detachment claimant republished the canonical lock"
+compgen -G "$lock_detach_parent/.example-tool.install.lock.claim.*.*/owner/canonical" \
+  >/dev/null ||
+  fail "killed post-detachment claimant did not preserve its tombstone"
+
+CHECKOUT_TEST_LOG="$tmp/lock-detach-recover-one.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=5 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_detach_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" \
+  >"$tmp/lock-detach-recover-one.out" 2>&1 &
+lock_detach_one_pid=$!
+CHECKOUT_TEST_LOG="$tmp/lock-detach-recover-two.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=5 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_detach_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" \
+  >"$tmp/lock-detach-recover-two.out" 2>&1 &
+lock_detach_two_pid=$!
+set +e
+wait "$lock_detach_one_pid"
+lock_detach_one_status=$?
+wait "$lock_detach_two_pid"
+lock_detach_two_status=$?
+set -e
+if [[ "$lock_detach_one_status" -ne 0 ||
+  "$lock_detach_two_status" -ne 0 ]]; then
+  sed -n '1,120p' "$tmp/lock-detach-recover-one.out" >&2
+  sed -n '1,120p' "$tmp/lock-detach-recover-two.out" >&2
+  fail "two v1 cleaners did not serialize a committed detached claim"
+fi
+[[ ! -e "$lock_detach_path" && ! -L "$lock_detach_path" ]] ||
+  fail "post-detachment cleanup changed the next lock generation"
+if compgen -G "$lock_detach_parent/.example-tool.install.lock.claim.*" \
+  >/dev/null; then
+  fail "post-detachment cleanup left a claim directory"
+fi
+
+# Recover a real interrupted publication only after the dead v1 owner has been
+# reclaimed and a fresh canonical generation is held. This couples the lock
+# boundary to the existing transaction protocol instead of testing each in
+# isolation.
+lock_transaction_managed="$tmp/lock-transaction/example-tool"
+lock_transaction_parent="$tmp/lock-transaction"
+lock_transaction_path="$lock_transaction_parent/.example-tool.install.transaction"
+lock_transaction_lock="$lock_transaction_parent/.example-tool.install.lock"
+CHECKOUT_TEST_LOG="$tmp/lock-transaction-initial.log" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_transaction_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null ||
+  fail "v1 transaction fixture could not install its initial checkout"
+printf 'lock-transaction-v2\n' >"$lock_source/version.txt"
+git -C "$lock_source" add version.txt
+git -C "$lock_source" commit --quiet -m 'v1 interrupted transaction fixture'
+git -C "$lock_source" push --quiet
+lock_transaction_bin="$tmp/lock-transaction-bin"
+mkdir -p "$lock_transaction_bin"
+cat >"$lock_transaction_bin/mv" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+destination=${!#}
+"${CHECKOUT_TEST_REAL_MV:?}" "$@"
+status=$?
+if [[ "$status" -eq 0 &&
+  "$destination" == "${CHECKOUT_TEST_TRANSACTION_DESTINATION:?}" ]]; then
+  kill -KILL "$PPID"
+fi
+exit "$status"
+EOF
+chmod 0755 "$lock_transaction_bin/mv"
+set +e
+CHECKOUT_TEST_LOG="$tmp/lock-transaction-crash.log" \
+  PATH="$lock_transaction_bin:$platform_tool_path" \
+  CHECKOUT_TEST_REAL_MV="$lock_real_mv" \
+  CHECKOUT_TEST_TRANSACTION_DESTINATION="$lock_transaction_managed" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_transaction_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null 2>&1
+lock_transaction_crash_status=$?
+set -e
+[[ "$lock_transaction_crash_status" -eq 137 ]] ||
+  fail "v1 transaction fixture did not SIGKILL after publication"
+[[ -L "$lock_transaction_lock" &&
+  -d "$lock_transaction_path/previous/.git" &&
+  -d "$lock_transaction_managed/.git" ]] ||
+  fail "v1 transaction crash did not preserve its lock and both revisions"
+CHECKOUT_TEST_LOG="$tmp/lock-transaction-recover.log" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=2 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$lock_transaction_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
+  "$active_bash" -s <"$lock_source/install.sh" >/dev/null ||
+  fail "v1 stale-lock recovery did not finish the interrupted transaction"
+[[ ! -e "$lock_transaction_lock" && ! -L "$lock_transaction_lock" &&
+  ! -e "$lock_transaction_path" && ! -L "$lock_transaction_path" ]] ||
+  fail "v1 transaction recovery left lock or transaction state"
+grep -Fqx 'version=lock-transaction-v2' \
+  "$tmp/lock-transaction-recover.log" ||
+  fail "v1 transaction recovery did not delegate from the committed revision"
+
+# Execute the shared vectors against the same fragment rendered into consumer
+# installers. Shdeps vendors these exact TSV bytes, so this is the provider-side
+# guard against either implementation quietly assigning them different meaning.
+# shellcheck source=checkout-installer/lock-v1.sh.in
+. "$root/checkout-installer/lock-v1.sh.in"
+
+# Classification must snapshot a canonical symlink before probing the object
+# forms that can replace it. This DEBUG trap is deliberately structural: the
+# old missing -> directory -> symlink order reaches the directory probe, where
+# the trap commits detachment and exposes the false `malformed` result. With
+# symlink-first classification the directory probe is never reached for this
+# generation; the readlink boundary is covered by the gated integration cases
+# above.
+lock_preread_parent="$tmp/lock-preread"
+checkout_dir="$lock_preread_parent/example-tool"
+checkout_parent=$lock_preread_parent
+checkout_name=example-tool
+lock_dir="$checkout_parent/.example-tool.install.lock"
+mkdir -p "$checkout_parent"
+# These globals are the sourced lock helper's state interface. ShellCheck sees
+# only the fixture's direct references, not the helper's indirect reads/writes.
+# shellcheck disable=SC2034
+lock_held=0
+# shellcheck disable=SC2034
+lock_owner_nonce=
+lock_owner_target=
+# shellcheck disable=SC2034
+lock_owner_dir=
+# shellcheck disable=SC2034
+lock_claim_dir=
+checkout_lock_prepare_owner ||
+  fail "pre-read classification fixture could not prepare an owner"
+ln -s "$lock_owner_target" "$lock_dir" ||
+  fail "pre-read classification fixture could not publish its owner"
+# shellcheck disable=SC2034 # Consumed by release_checkout_lock_v1_strict.
+lock_held=1
+lock_preread_armed=1
+lock_preread_detached="$lock_preread_parent/detached-canonical"
+lock_preread_debug() {
+  # shellcheck disable=SC2016 # Match the literal command text seen by DEBUG.
+  if [[ "$lock_preread_armed" -eq 1 &&
+    "$BASH_COMMAND" == '[[ -d "$lock_dir" && ! -L "$lock_dir" ]]' ]]; then
+    lock_preread_armed=0
+    mv "$lock_dir" "$lock_preread_detached"
+  fi
+}
+set -T
+trap lock_preread_debug DEBUG
+checkout_lock_classify
+trap - DEBUG
+set +T
+[[ "$lock_preread_armed" -eq 1 &&
+  "$CHECKOUT_LOCK_STATE" == owner-live ]] ||
+  fail "checkout lock inspected non-symlink forms before its symlink snapshot"
+release_checkout_lock_v1_strict ||
+  fail "pre-read classification fixture could not release its owner"
+
+checkout_lock_parse_timeout 08 ||
+  fail "checkout lock rejected a valid leading-zero decimal timeout"
+[[ "$CHECKOUT_LOCK_TIMEOUT" -eq 8 ]] ||
+  fail "checkout lock did not normalize a leading-zero decimal timeout"
+if checkout_lock_parse_timeout 9999999999; then
+  fail "checkout lock accepted a timeout outside its arithmetic bound"
+fi
+
+# shellcheck disable=SC2034,SC2329 # Overrides are called by the sourced fragment.
+if ! (
+  checkout_lock_process_identity() {
+    # shellcheck disable=SC2030 # This probe is intentionally subshell-local.
+    CHECKOUT_LOCK_START_KIND_HEX=70732d6c7374617274
+    # shellcheck disable=SC2030 # This probe is intentionally subshell-local.
+    CHECKOUT_LOCK_START_TOKEN_HEX=313233
+    CHECKOUT_LOCK_PROCESS_STATE=S
+  }
+  CHECKOUT_LOCK_RECORD_HOST_HEX=$(checkout_lock_hex \
+    "$(LC_ALL=C command uname -n)")
+  # shellcheck disable=SC2030 # This probe is intentionally subshell-local.
+  CHECKOUT_LOCK_RECORD_PID=1
+  CHECKOUT_LOCK_RECORD_START_KIND_HEX=70726f632d73746174
+  CHECKOUT_LOCK_RECORD_START_TOKEN_HEX=313233
+  checkout_lock_record_liveness
+  [[ "$CHECKOUT_LOCK_LIVENESS" == unknown ]]
+); then
+  fail "checkout lock treated a process-probe backend change as PID reuse"
+fi
+
+# shellcheck disable=SC2329 # Overrides are called by the sourced fragment.
+if ! (
+  # A failed signal probe is not proof of death: EPERM and policy restrictions
+  # can hide a process whose PID is still observable. Use this test shell rather
+  # than system PID 1 because Android may hide system processes from Termux even
+  # though the app's own processes remain visible. Force that ambiguity and
+  # require the liveness layer to stay fail-closed.
+  checkout_lock_process_identity() { return 1; }
+  kill() { return 1; }
+  CHECKOUT_LOCK_RECORD_HOST_HEX=$(checkout_lock_hex \
+    "$(LC_ALL=C command uname -n)")
+  # shellcheck disable=SC2030 # This probe is intentionally subshell-local.
+  CHECKOUT_LOCK_RECORD_PID=$$
+  CHECKOUT_LOCK_RECORD_START_KIND_HEX=70726f632d73746174
+  CHECKOUT_LOCK_RECORD_START_TOKEN_HEX=30
+  checkout_lock_record_liveness
+  [[ "$CHECKOUT_LOCK_LIVENESS" == unknown ]]
+); then
+  fail "checkout lock treated an ambiguous process probe as positive death"
+fi
+
+lock_probe_bin="$tmp/lock-probe-bin"
+mkdir -p "$lock_probe_bin"
+cat >"$lock_probe_bin/ps" <<'EOF'
+#!/usr/bin/env bash
+exit 2
+EOF
+chmod 0755 "$lock_probe_bin/ps"
+# shellcheck disable=SC2329 # Overrides are called by the sourced fragment.
+if ! (
+  checkout_lock_process_identity() { return 1; }
+  checkout_lock_procfs_authoritative() { return 1; }
+  kill() { return 1; }
+  PATH="$lock_probe_bin:$PATH"
+  CHECKOUT_LOCK_RECORD_HOST_HEX=$(checkout_lock_hex \
+    "$(LC_ALL=C command uname -n)")
+  # shellcheck disable=SC2030 # This probe is intentionally subshell-local.
+  CHECKOUT_LOCK_RECORD_PID=1
+  CHECKOUT_LOCK_RECORD_START_KIND_HEX=70732d6c7374617274
+  CHECKOUT_LOCK_RECORD_START_TOKEN_HEX=30
+  checkout_lock_record_liveness
+  [[ "$CHECKOUT_LOCK_LIVENESS" == unknown ]]
+); then
+  fail "checkout lock trusted a non-authoritative procfs absence"
+fi
+
+# shellcheck disable=SC2034 # Record globals are read by the sourced fragment.
+if ! (
+  zombie_parent=
+  trap 'if [[ -n "$zombie_parent" ]]; then
+          kill -CONT "$zombie_parent" 2>/dev/null || true
+          wait "$zombie_parent" 2>/dev/null || true
+        fi' EXIT
+  zombie_pid_file="$tmp/lock-zombie.pid"
+  # shellcheck disable=SC2016 # The child shell owns these expansions.
+  "$active_bash" -c '
+    sleep 0.05 &
+    child=$!
+    printf "%s\n" "$child" >"$1"
+    kill -STOP "$$"
+    wait "$child"
+  ' _ "$zombie_pid_file" &
+  zombie_parent=$!
+  for _ in {1..100}; do
+    [[ -s "$zombie_pid_file" ]] && break
+    sleep 0.01
+  done
+  [[ -s "$zombie_pid_file" ]] || exit 1
+  zombie_pid=$(sed -n '1p' "$zombie_pid_file")
+  zombie_state=
+  for _ in {1..100}; do
+    zombie_state=$(LC_ALL=C command ps -o stat= -p "$zombie_pid" \
+      2>/dev/null | command awk 'NR == 1 { print substr($1, 1, 1) }')
+    [[ "$zombie_state" == Z ]] && break
+    sleep 0.01
+  done
+  [[ "$zombie_state" == Z ]] || exit 1
+  checkout_lock_process_identity "$zombie_pid" || exit 1
+  CHECKOUT_LOCK_RECORD_HOST_HEX=$(checkout_lock_hex \
+    "$(LC_ALL=C command uname -n)")
+  # shellcheck disable=SC2030 # This probe is intentionally subshell-local.
+  CHECKOUT_LOCK_RECORD_PID=$zombie_pid
+  # shellcheck disable=SC2031 # Values were freshly set by the real probe above.
+  CHECKOUT_LOCK_RECORD_START_KIND_HEX=$CHECKOUT_LOCK_START_KIND_HEX
+  # shellcheck disable=SC2031 # Values were freshly set by the real probe above.
+  CHECKOUT_LOCK_RECORD_START_TOKEN_HEX=$CHECKOUT_LOCK_START_TOKEN_HEX
+  checkout_lock_record_liveness
+  [[ "$CHECKOUT_LOCK_LIVENESS" == dead ]]
+); then
+  fail "checkout lock did not classify an actual zombie owner as dead"
+fi
+
+lock_record_fixture_dir="$tmp/lock-record-fixtures"
+mkdir -p "$lock_record_fixture_dir"
+checkout_dir=/tmp/tool
+checkout_parent=/tmp
+checkout_name=tool
+lock_fixture_count=0
+while IFS=$'\t' read -r \
+  lock_case fixture_role fixture_nonce fixture_owner_nonce fixture_pid \
+  fixture_host_hex fixture_start_kind_hex fixture_start_token_hex \
+  fixture_checkout_hex fixture_expected; do
+  [[ -n "$lock_case" && "$lock_case" != \#* ]] || continue
+  lock_fixture_count=$((lock_fixture_count + 1))
+  fixture_record="$lock_record_fixture_dir/$lock_case"
+  case "$fixture_role" in
+    owner)
+      fixture_role_hex=6f776e6572
+      fixture_expected_role=owner
+      ;;
+    claim)
+      fixture_role_hex=636c61696d
+      fixture_expected_role=claim
+      ;;
+    *)
+      fixture_role_hex=$(checkout_lock_hex "$fixture_role")
+      fixture_expected_role=owner
+      ;;
+  esac
+  [[ "$fixture_owner_nonce" != - ]] || fixture_owner_nonce=
+  {
+    printf '%s\n' 'cgraf78 checkout mutation lock v1'
+    printf 'role=%s\n' "$fixture_role_hex"
+    printf 'nonce=%s\n' "$fixture_nonce"
+    printf 'owner_nonce=%s\n' "$fixture_owner_nonce"
+    printf 'pid=%s\n' "$fixture_pid"
+    printf 'host_hex=%s\n' "$fixture_host_hex"
+    printf 'start_kind_hex=%s\n' "$fixture_start_kind_hex"
+    printf 'start_token_hex=%s\n' "$fixture_start_token_hex"
+    printf 'checkout_hex=%s\n' "$fixture_checkout_hex"
+  } >"$fixture_record"
+  chmod 0600 "$fixture_record"
+  if checkout_lock_load_record \
+    "$fixture_record" "$fixture_expected_role" "$fixture_nonce" \
+    "$fixture_owner_nonce"; then
+    fixture_actual=valid
+  else
+    fixture_actual=invalid
+  fi
+  [[ "$fixture_actual" == "$fixture_expected" ]] ||
+    fail "checkout lock record fixture $lock_case: expected $fixture_expected, got $fixture_actual"
+done <"$root/checkout-installer/fixtures/checkout-lock-v1-records.tsv"
+[[ "$lock_fixture_count" -ge 10 ]] ||
+  fail "checkout lock record conformance fixture is incomplete"
+
+for exact_record_role in owner claim; do
+  exact_record_source="$root/checkout-installer/fixtures/checkout-lock-v1-${exact_record_role}-record.txt"
+  exact_record="$lock_record_fixture_dir/exact-$exact_record_role"
+  cp "$exact_record_source" "$exact_record"
+  chmod 0600 "$exact_record"
+  if [[ "$exact_record_role" == owner ]]; then
+    exact_record_nonce=0123456789abcdef0123456789abcdef
+    exact_record_owner_nonce=
+  else
+    exact_record_nonce=fedcba9876543210fedcba9876543210
+    exact_record_owner_nonce=0123456789abcdef0123456789abcdef
+  fi
+  checkout_lock_load_record \
+    "$exact_record" "$exact_record_role" "$exact_record_nonce" \
+    "$exact_record_owner_nonce" ||
+    fail "checkout lock rejected the exact $exact_record_role wire fixture"
+done
+
+nul_record="$lock_record_fixture_dir/nul-owner"
+{
+  sed -n '1p' \
+    "$root/checkout-installer/fixtures/checkout-lock-v1-owner-record.txt"
+  printf 'role=6f776e6572\0\n'
+  sed -n '3,9p' \
+    "$root/checkout-installer/fixtures/checkout-lock-v1-owner-record.txt"
+} >"$nul_record"
+chmod 0600 "$nul_record"
+if checkout_lock_load_record \
+  "$nul_record" owner 0123456789abcdef0123456789abcdef ''; then
+  fail "checkout lock record parser silently discarded a NUL byte"
+fi
+
+unterminated_record="$lock_record_fixture_dir/unterminated-owner"
+sed -n '1,8p' \
+  "$root/checkout-installer/fixtures/checkout-lock-v1-owner-record.txt" \
+  >"$unterminated_record"
+printf 'checkout_hex=2f746d702f746f6f6c' >>"$unterminated_record"
+chmod 0600 "$unterminated_record"
+if checkout_lock_load_record \
+  "$unterminated_record" owner 0123456789abcdef0123456789abcdef ''; then
+  fail "checkout lock record parser accepted a missing final newline"
+fi
+
+lock_fixture_unhex() {
+  local value=$1 byte
+
+  [[ "$value" =~ ^([0-9a-f][0-9a-f])+$ ]] || return 1
+  while [[ -n "$value" ]]; do
+    byte=${value:0:2}
+    value=${value:2}
+    printf '%b' "\\x$byte"
+  done
+}
+
+lock_wire_fixture_count=0
+while IFS=$'\t' read -r lock_case fixture_input fixture_expected; do
+  [[ -n "$lock_case" && "$lock_case" != \#* ]] || continue
+  lock_wire_fixture_count=$((lock_wire_fixture_count + 1))
+  case "$lock_case" in
+    canonical-target)
+      fixture_name=${fixture_input%%|*}
+      fixture_nonce=${fixture_input#*|}
+      fixture_actual=".${fixture_name}.install.lock.owner.${fixture_nonce}/."
+      ;;
+    ps-lstart-normalize)
+      fixture_actual=$(lock_fixture_unhex "$fixture_input" |
+        checkout_lock_normalize_ps_lstart)
+      fixture_actual=$(checkout_lock_hex "$fixture_actual")
+      ;;
+    *) fail "unknown checkout lock wire fixture: $lock_case" ;;
+  esac
+  [[ "$fixture_actual" == "$fixture_expected" ]] ||
+    fail "checkout lock wire fixture $lock_case: expected $fixture_expected, got $fixture_actual"
+done <"$root/checkout-installer/fixtures/checkout-lock-v1-wire.tsv"
+[[ "$lock_wire_fixture_count" -eq 2 ]] ||
+  fail "checkout lock wire conformance fixture is incomplete"
+
+write_lock_state_record() {
+  local record=$1 role=$2 nonce=$3 owner_nonce=$4 pid=$5
+
+  checkout_lock_write_record "$record" "$role" "$nonce" "$owner_nonce" ||
+    return 1
+  sed "s/^pid=.*/pid=$pid/" "$record" >"$record.next" || return 1
+  mv "$record.next" "$record" || return 1
+  chmod 0600 "$record"
+}
+
+# State vectors control liveness explicitly. The record parser is still real;
+# only the platform process probe is replaced so every symbolic state is
+# deterministic on Linux, macOS, and Termux.
+checkout_lock_record_liveness() {
+  # shellcheck disable=SC2031 # Later fixture records set the main-shell value.
+  case "$CHECKOUT_LOCK_RECORD_PID" in
+    111) CHECKOUT_LOCK_LIVENESS=$fixture_owner_liveness ;;
+    222) CHECKOUT_LOCK_LIVENESS=$fixture_claim_liveness ;;
+    *) return 1 ;;
+  esac
+}
+
+lock_state_fixture_root="$tmp/lock-state-fixtures"
+mkdir -p "$lock_state_fixture_root"
+lock_state_fixture_count=0
+while IFS=$'\t' read -r \
+  lock_case fixture_canonical fixture_owner_record fixture_owner_liveness \
+  fixture_claim_count fixture_claim_liveness fixture_tombstone \
+  fixture_expected; do
+  [[ -n "$lock_case" && "$lock_case" != \#* ]] || continue
+  lock_state_fixture_count=$((lock_state_fixture_count + 1))
+  checkout_parent="$lock_state_fixture_root/$lock_case"
+  checkout_name=tool
+  # shellcheck disable=SC2034 # Read by the sourced lock fragment.
+  checkout_dir="$checkout_parent/$checkout_name"
+  lock_dir="$checkout_parent/.tool.install.lock"
+  fixture_owner_nonce=0123456789abcdef0123456789abcdef
+  fixture_owner_basename=".tool.install.lock.owner.$fixture_owner_nonce"
+  fixture_owner_target="$fixture_owner_basename/."
+  fixture_owner_dir="$checkout_parent/$fixture_owner_basename"
+  mkdir -p "$checkout_parent"
+
+  case "$fixture_canonical" in
+    missing) ;;
+    legacy-directory) mkdir "$lock_dir" ;;
+    hostile-symlink) ln -s ../../escape "$lock_dir" ;;
+    valid-symlink | dangling-symlink)
+      ln -s "$fixture_owner_target" "$lock_dir"
+      ;;
+    *) fail "unknown checkout lock canonical fixture: $fixture_canonical" ;;
+  esac
+
+  if [[ "$fixture_canonical" == valid-symlink &&
+    "$fixture_claim_count" -eq 0 &&
+    "$fixture_owner_record" != - ]]; then
+    mkdir "$fixture_owner_dir"
+    chmod 0700 "$fixture_owner_dir"
+    write_lock_state_record \
+      "$fixture_owner_dir/owner-v1" owner "$fixture_owner_nonce" '' 111 ||
+      fail "cannot create owner fixture: $lock_case"
+    if [[ "$fixture_owner_record" == malformed ]]; then
+      printf 'extra=field\n' >>"$fixture_owner_dir/owner-v1"
+    fi
+  fi
+
+  fixture_claim_index=0
+  while [[ "$fixture_claim_index" -lt "$fixture_claim_count" ]]; do
+    fixture_claim_index=$((fixture_claim_index + 1))
+    fixture_claim_nonce=$(printf '%032x' "$fixture_claim_index")
+    fixture_claim_dir="$checkout_parent/.tool.install.lock.claim.${fixture_owner_nonce}.${fixture_claim_nonce}"
+    mkdir -p "$fixture_claim_dir/owner"
+    chmod 0700 "$fixture_claim_dir" "$fixture_claim_dir/owner"
+    write_lock_state_record \
+      "$fixture_claim_dir/claim-v1" claim "$fixture_claim_nonce" \
+      "$fixture_owner_nonce" 222 ||
+      fail "cannot create claim fixture: $lock_case"
+    write_lock_state_record \
+      "$fixture_claim_dir/owner/owner-v1" owner "$fixture_owner_nonce" '' \
+      111 || fail "cannot create nested owner fixture: $lock_case"
+    if [[ "$fixture_tombstone" == present ]]; then
+      ln -s "$fixture_owner_target" "$fixture_claim_dir/owner/canonical"
+    fi
+  done
+
+  checkout_lock_classify ||
+    fail "cannot classify checkout lock state fixture: $lock_case"
+  case "$CHECKOUT_LOCK_STATE" in
+    missing)
+      if [[ "$fixture_expected" == cleanup-acquire ]]; then
+        checkout_lock_cleanup_detached_claims ||
+          fail "cannot clean detached checkout lock fixture: $lock_case"
+        fixture_actual=cleanup-acquire
+      else
+        fixture_actual=acquire
+      fi
+      ;;
+    legacy) fixture_actual=wait-legacy ;;
+    malformed) fixture_actual=fail ;;
+    owner-live | owner-unknown | claim-live | claim-unknown)
+      fixture_actual='wait'
+      ;;
+    owner-dead) fixture_actual=claim ;;
+    claim-dead) fixture_actual=reclaim ;;
+    retry) fixture_actual=retry ;;
+    *) fixture_actual="unexpected-$CHECKOUT_LOCK_STATE" ;;
+  esac
+  [[ "$fixture_actual" == "$fixture_expected" ]] ||
+    fail "checkout lock state fixture $lock_case: expected $fixture_expected, got $fixture_actual"
+done <"$root/checkout-installer/fixtures/checkout-lock-v1-states.tsv"
+[[ "$lock_state_fixture_count" -ge 12 ]] ||
+  fail "checkout lock state conformance fixture is incomplete"
 
 standalone="$tmp/standalone"
 standalone_marker="$tmp/standalone-delegate-ran"
@@ -427,6 +3278,31 @@ set -e
 repo_url="file://$remote"
 managed="$tmp/managed/example-tool"
 pipe_log="$tmp/pipe.log"
+
+# Existing consumers deliberately keep the historical XDG checkout layout.
+# An ambient Shdeps installation root must not change generated installer
+# behavior unless the consumer explicitly opts into the new destination
+# contract added for dot.
+legacy_default_home="$tmp/legacy-default-home"
+legacy_default_xdg="$tmp/legacy-default-xdg"
+legacy_default_root="$legacy_default_xdg/cgraf78/checkouts/example-tool"
+legacy_default_log="$tmp/legacy-default.log"
+mkdir -p "$legacy_default_home"
+CHECKOUT_TEST_LOG="$legacy_default_log" \
+  HOME="$legacy_default_home" \
+  XDG_DATA_HOME="$legacy_default_xdg" \
+  SHDEPS_INSTALL_DIR="$tmp/ambient-shdeps-root" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
+  "$active_bash" -s <"$source_work/install.sh" >/dev/null ||
+  fail "legacy consumer did not retain its default checkout destination"
+[[ -d "$legacy_default_root/.git" && ! -L "$legacy_default_root" ]] ||
+  fail "legacy consumer did not use the XDG checkouts destination"
+[[ ! -e "$tmp/ambient-shdeps-root/example/example-tool" ]] ||
+  fail "ambient SHDEPS_INSTALL_DIR changed an unconfigured consumer destination"
+grep -Fqx "root=$(cd "$legacy_default_root" && pwd -P)" "$legacy_default_log" ||
+  fail "legacy default checkout delegated from the wrong root"
+grep -Fqx 'checkout_lock=held' "$legacy_default_log" ||
+  fail "piped legacy checkout delegate did not run under its mutation lock"
 
 truncated="$tmp/truncated-install.sh"
 sed '$d' "$source_work/install.sh" >"$truncated"
@@ -558,6 +3434,8 @@ grep -Fq '<protocol.ssh.allow=always>' "$git_probe_env_log" ||
   fail "piped install did not explicitly allow SSH Git remotes"
 grep -Fqx 'arg2=two words' "$pipe_log" ||
   fail "piped install did not preserve argument boundaries"
+grep -Fqx 'checkout_lock=held' "$pipe_log" ||
+  fail "piped checkout delegate did not run under its mutation lock"
 [[ $(git -C "$managed" remote get-url origin) == "$repo_url" ]] ||
   fail "managed checkout retained the wrong origin"
 [[ $(git -C "$managed" branch --show-current) == main ]] ||
@@ -1400,5 +4278,133 @@ set -e
 if compgen -G "$tmp/failed/.example-tool.clone.*" >/dev/null; then
   fail "failed clone left a staging checkout"
 fi
+
+# Dot opts into the Shdeps destination contract. The generated installer must
+# use the same base-root precedence as Shdeps itself: SHDEPS_INSTALL_DIR wins,
+# otherwise HOME/.local/share is used, and XDG_DATA_HOME is irrelevant.
+printf '%s\n' \
+  'CHECKOUT_INSTALLER_DEFAULT_DESTINATION=shdeps' \
+  'CHECKOUT_INSTALLER_LOCK_PROTOCOL=v1' \
+  >>"$source_work/scripts/checkout-installer.conf"
+"$root/checkout-installer/render.sh" "$source_work" >/dev/null
+git -C "$source_work" add scripts/checkout-installer.conf install.sh
+git -C "$source_work" commit --quiet -m 'use shdeps destination fixture'
+git -C "$source_work" push --quiet
+
+run_shdeps_destination_case() {
+  local name=$1 xdg_state=$2 shdeps_state=$3 expected_base=$4
+  local case_home="$tmp/shdeps-destination-$name/home"
+  local case_log="$tmp/shdeps-destination-$name.log"
+  local case_xdg="$tmp/shdeps-destination-$name/data"
+  local case_shdeps="$tmp/shdeps-destination-$name/install"
+  local expected_base expected
+
+  mkdir -p "$case_home"
+  (
+    unset XDG_DATA_HOME SHDEPS_INSTALL_DIR
+    [[ "$xdg_state" == unset ]] || export XDG_DATA_HOME="$case_xdg"
+    case "$shdeps_state" in
+      unset) ;;
+      set) export SHDEPS_INSTALL_DIR="$case_shdeps" ;;
+      trailing) export SHDEPS_INSTALL_DIR="$case_shdeps/" ;;
+      *) fail "unknown Shdeps root fixture state: $shdeps_state" ;;
+    esac
+    HOME="$case_home" CHECKOUT_TEST_LOG="$case_log" \
+      CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
+      "$active_bash" -s <"$source_work/install.sh" >/dev/null
+  ) || fail "shdeps destination case failed: $name"
+
+  case "$expected_base" in
+    home) expected_base="$case_home/.local/share" ;;
+    shdeps) expected_base="$case_shdeps" ;;
+    *) fail "unknown expected Shdeps root fixture state: $expected_base" ;;
+  esac
+  expected="$expected_base/example/example-tool"
+  [[ -d "$expected/.git" && ! -L "$expected" ]] ||
+    fail "shdeps destination case used the wrong checkout root: $name"
+  grep -Fqx "root=$(cd "$expected" && pwd -P)" "$case_log" ||
+    fail "shdeps destination case delegated from the wrong root: $name"
+}
+
+while IFS=$'\t' read -r root_case root_xdg root_shdeps root_expected; do
+  [[ -n "$root_case" && "$root_case" != \#* ]] || continue
+  [[ "$root_shdeps" != root ]] || continue
+  run_shdeps_destination_case \
+    "$root_case" "$root_xdg" "$root_shdeps" "$root_expected"
+done <"$root/checkout-installer/fixtures/shdeps-root-v1.tsv"
+
+# The root-directory vector cannot safely run a real checkout in a test. Load
+# only the generated pure resolver function and verify the same vector without
+# touching /example on the host.
+shdeps_resolver_definition=$(sed -n \
+  '/^  resolve_default_checkout_dir()/,/^  }/p' "$source_work/install.sh")
+[[ -n "$shdeps_resolver_definition" ]] ||
+  fail "generated installer does not expose its pure destination resolver"
+eval "$shdeps_resolver_definition"
+SHDEPS_INSTALL_DIR=/
+# shellcheck disable=SC2034 # Read by the generated function loaded through eval.
+checkout_default_destination=shdeps \
+  checkout_repo=example/example-tool \
+  checkout_slug=example-tool
+HOME="$tmp/shdeps-destination-root/home"
+root_resolved=$(resolve_default_checkout_dir)
+unset SHDEPS_INSTALL_DIR
+[[ "$root_resolved" == /example/example-tool ]] ||
+  fail "Shdeps root-directory destination did not normalize correctly"
+
+shdeps_override="$tmp/shdeps-destination-override/explicit/example-tool"
+CHECKOUT_TEST_LOG="$tmp/shdeps-destination-override.log" \
+  HOME="$tmp/shdeps-destination-override/home" \
+  XDG_DATA_HOME="$tmp/shdeps-destination-override/data" \
+  SHDEPS_INSTALL_DIR="$tmp/shdeps-destination-override/install" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$shdeps_override" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
+  "$active_bash" -s <"$source_work/install.sh" >/dev/null ||
+  fail "explicit checkout destination did not override Shdeps mode"
+grep -Fqx "root=$(cd "$shdeps_override" && pwd -P)" \
+  "$tmp/shdeps-destination-override.log" ||
+  fail "explicit checkout destination did not win in Shdeps mode"
+
+# Shdeps deliberately owns a different repository-root transition journal.
+# An interrupted Shdeps directory-to-link handoff can leave its exact previous
+# generation parked while the canonical checkout path is absent. The generated
+# installer owns neither that format nor its backup: after acquiring the shared
+# checkout lock it may fill the absent canonical path with a new managed clone,
+# but it must leave the opaque Shdeps recovery authority byte-identical for
+# the Shdeps-owned recovery implementation to interpret or reject later.
+shdeps_handoff="$tmp/shdeps-handoff/example-tool"
+shdeps_handoff_journal="$tmp/shdeps-handoff/.example-tool.shdeps-repo-transition-v1"
+shdeps_handoff_record_expected="$tmp/shdeps-handoff-record.expected"
+shdeps_handoff_sentinel_expected="$tmp/shdeps-handoff-sentinel.expected"
+mkdir -p "$shdeps_handoff_journal/previous"
+printf 'opaque shdeps repository transition record\n' \
+  >"$shdeps_handoff_record_expected"
+printf 'parked generation\n' >"$shdeps_handoff_sentinel_expected"
+cp "$shdeps_handoff_record_expected" "$shdeps_handoff_journal/record"
+cp "$shdeps_handoff_sentinel_expected" \
+  "$shdeps_handoff_journal/previous/sentinel"
+CHECKOUT_TEST_LOG="$tmp/shdeps-handoff.log" \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$shdeps_handoff" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="$repo_url" \
+  "$active_bash" -s <"$source_work/install.sh" >/dev/null ||
+  fail "checkout installer could not fill an interrupted Shdeps handoff"
+[[ -d "$shdeps_handoff/.git" && ! -L "$shdeps_handoff" ]] ||
+  fail "checkout installer did not publish a managed handoff generation"
+grep -Fqx "root=$(cd "$shdeps_handoff" && pwd -P)" \
+  "$tmp/shdeps-handoff.log" ||
+  fail "checkout installer delegated from the wrong handoff generation"
+grep -Fqx 'checkout_lock_kind=v1' "$tmp/shdeps-handoff.log" ||
+  fail "Shdeps handoff did not use the shared v1 checkout lock"
+files_identical "$shdeps_handoff_record_expected" "$shdeps_handoff_journal/record" ||
+  fail "checkout installer changed Shdeps transition authority"
+files_identical "$shdeps_handoff_sentinel_expected" \
+  "$shdeps_handoff_journal/previous/sentinel" ||
+  fail "checkout installer changed Shdeps parked generation"
+[[ $(LC_ALL=C ls -A1 "$shdeps_handoff_journal") == $'previous\nrecord' ]] ||
+  fail "checkout installer added state to the Shdeps transition journal"
+[[ $(LC_ALL=C ls -A1 "$shdeps_handoff_journal/previous") == sentinel ]] ||
+  fail "checkout installer added state to the Shdeps parked generation"
+
+"$BASH" "$root/test/checkout-installer-development-test"
 
 printf 'checkout-installer-test: ok\n'

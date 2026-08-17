@@ -14,7 +14,9 @@ program	.github/actions/upload-release-assets/upload.sh
 program	.github/actions/verify-consumer-sync/verify.sh
 program	.github/actions/verify-release-scripts/verify.sh
 program	consumer-ci/sync.sh
+program	checkout-installer/bash-resolver-v1.sh.in
 program	checkout-installer/install.sh.in
+program	checkout-installer/lock-v1.sh.in
 program	checkout-installer/render.sh
 program	examples/release.conf
 program	release-installer/install.sh.in
@@ -27,7 +29,10 @@ program	release-scripts/release.sh
 program	release-scripts/smoke-release.sh
 program	release-scripts/sync.sh
 program	test/consumer-sync-test
+program	test/checkout-installer-bash32-test
+program	test/checkout-installer-development-test
 program	test/checkout-installer-test
+program	test/dotfiles-bootstrap-test
 program	test/dotfiles-public-deps-test
 program	test/examples-test
 program	test/infra-retry-test

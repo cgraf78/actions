@@ -15,7 +15,8 @@ this repo and by other `cgraf78` repositories.
   `dtolnay/rust-toolchain`.
 - `musl-build-prereqs` installs the musl linker toolchain, and optionally adds
   the Rust musl target, for repos whose crates link C code.
-- `dotfiles-bootstrap` runs the dotfiles bootstrap/update/doctor flow in CI.
+- `dotfiles-bootstrap` runs the full dotfiles update, Mise, and doctor flow or
+  stages and installs a cutover-locked standalone Dot payload for sandbox CI.
 - `verify-release-scripts` is the narrow byte, mode, and managed-file-set check
   for vendored release scripts.
 - `verify-consumer-sync` is the consumer-facing gate: it requires every
@@ -28,6 +29,15 @@ Keep composite actions narrow and reusable. If behavior is only needed by a
 single reusable workflow, prefer keeping it in that workflow until a second
 consumer appears.
 
+`dotfiles-bootstrap` defaults to `mode: full`. `mode: stage` publishes a
+private, self-contained payload at `stage-directory`; `mode: install-staged`
+validates and installs that payload against the destination client's cutover
+lock. The staged modes reuse the lock as the only Dot revision decision and do
+not run the full host Mise or doctor steps. Before `full` or `install-staged`
+invokes Dot, the action clears inherited XDG path-root overrides so the client
+checkout under `HOME` remains the authoritative configuration; other client
+environment variables are preserved.
+
 `shellcheck-inventory` expects a tracked, nonsymlink inventory whose records
 are `program<TAB>path` or `fixture<TAB>path`. It discovers shell programs from
 Git rather than trusting the inventory alone, so new ShellCheck-supported
@@ -36,3 +46,8 @@ coverage decisions but are not linted as standalone programs. The caller must
 check out one repository at the `GITHUB_WORKSPACE` root and pass a normalized,
 repository-relative inventory path. Newline-containing paths cannot be encoded
 in the line-oriented inventory and therefore fail closed.
+
+A tracked shell-program symlink is accepted only as an alias to an inventoried,
+tracked, regular shell program inside the same repository. The alias itself is
+not an inventory row and is not linted twice. Absolute, broken, external,
+chained, or untracked targets remain errors.

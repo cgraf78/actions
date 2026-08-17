@@ -1,0 +1,436 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+action=$root/.github/actions/dotfiles-bootstrap/action.yml
+
+fail() {
+  printf 'not ok - %s\n' "$*" >&2
+  exit 1
+}
+
+write_tool() {
+  local path=$1 body=$2
+
+  printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' "$body" >"$path"
+  chmod 0755 "$path"
+}
+
+run_bootstrap() {
+  local home=$1 log=$2 github_env=$3 github_path=$4 repo_url=${5:-}
+  local mode=${6:-full} stage_dir=${7:-}
+  local bootstrap=${8:-$root/.github/actions/dotfiles-bootstrap/install.sh}
+
+  (
+    cd "$home"
+    HOME="$home" \
+      PATH="${DOTFILES_BOOTSTRAP_TEST_PATH_PREFIX:-}$tmp/bin:$PATH" \
+      GITHUB_ENV="$github_env" \
+      GITHUB_PATH="$github_path" \
+      DOTFILES_BOOTSTRAP_TEST_LOG="$log" \
+      DOTFILES_BOOTSTRAP_DOT_REPO_URL="$repo_url" \
+      DOTFILES_BOOTSTRAP_MODE="$mode" \
+      DOTFILES_BOOTSTRAP_STAGE_DIR="$stage_dir" \
+      bash "$bootstrap"
+  )
+}
+
+run_bootstrap_with_hostile_xdg() {
+  local environment_log=$1
+  shift
+
+  (
+    export DOTFILES_BOOTSTRAP_TEST_ENV_LOG=$environment_log
+    export DOTFILES_BOOTSTRAP_PRESERVE=preserved
+    export XDG_CONFIG_HOME=$tmp/host-xdg/config
+    export XDG_DATA_HOME=$tmp/host-xdg/data
+    export XDG_STATE_HOME=$tmp/host-xdg/state
+    export XDG_CACHE_HOME=$tmp/host-xdg/cache
+    export XDG_RUNTIME_DIR=$tmp/host-xdg/runtime
+    run_bootstrap "$@"
+  )
+}
+
+assert_checkout_xdg_environment() {
+  local environment_log=$1 label=$2
+  local expected
+
+  expected=$'XDG_CONFIG_HOME=<unset>\nXDG_DATA_HOME=<unset>\nXDG_STATE_HOME=<unset>\nXDG_CACHE_HOME=<unset>\nXDG_RUNTIME_DIR=<unset>\nDOTFILES_BOOTSTRAP_PRESERVE=preserved'
+  [[ $(cat "$environment_log") == "$expected" ]] ||
+    fail "$label did not isolate checkout-owned XDG roots"
+}
+
+prepare_cutover_client() {
+  local home=$1 origin=$2 revision=$3 checkout_mode=${4:-attached}
+
+  mkdir -p "$home/.local/lib/dotfiles"
+  printf 'cgraf78 dot client cutover v1\nminimum_revision=%s\n' \
+    "$revision" >"$home/.local/lib/dotfiles/dot-cutover.lock"
+  git -C "$home" init --quiet --initial-branch=main --template=''
+  git -C "$home" config user.name 'Dotfiles bootstrap client test'
+  git -C "$home" config user.email dotfiles-bootstrap-client@example.invalid
+  git -C "$home" config core.hooksPath /dev/null
+  git -C "$home" add .local/lib/dotfiles/dot-cutover.lock
+  git -C "$home" commit --quiet -m fixture
+  git -C "$home" remote add origin "$origin"
+  if [[ "$checkout_mode" == detached ]]; then
+    git -C "$home" checkout --quiet --detach
+  fi
+}
+
+yq -e '.inputs.mode.default == "full"' "$action" >/dev/null ||
+  fail 'dotfiles bootstrap mode does not default to full'
+yq -e '.inputs."stage-directory".default == ""' "$action" >/dev/null ||
+  fail 'dotfiles bootstrap stage directory does not default to empty'
+# shellcheck disable=SC2016 # Match the literal Actions expression in action.yml.
+yq -e '.runs.steps[] | select(.id == "bootstrap").env.DOTFILES_BOOTSTRAP_MODE == "${{ inputs.mode }}"' \
+  "$action" >/dev/null ||
+  fail 'dotfiles bootstrap action does not pass its mode through the environment'
+yq -e '.runs.steps[] | select(.name == "Run doctor smoke checks").if == "inputs.mode == '\''full'\''"' \
+  "$action" >/dev/null ||
+  fail 'dotfiles bootstrap action does not limit doctor to full mode'
+
+mkdir -p "$tmp/bin"
+# shellcheck disable=SC2016 # Expanded only by the generated fixture program.
+write_tool "$tmp/bin/mise" '
+case ${1:-} in
+  --version | trust | install) exit 0 ;;
+  *) exit 1 ;;
+esac'
+for tool in actionlint ruff shellcheck shfmt zizmor; do
+  write_tool "$tmp/bin/$tool" 'exit 0'
+done
+
+dot_repo=$tmp/dot
+mkdir -p "$dot_repo"
+git -C "$dot_repo" init --quiet --initial-branch=main --template=''
+git -C "$dot_repo" config user.name 'Dotfiles bootstrap test'
+git -C "$dot_repo" config user.email dotfiles-bootstrap@example.invalid
+git -C "$dot_repo" config core.hooksPath /dev/null
+cat >"$dot_repo/install.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf 'installer\n' >>"${DOTFILES_BOOTSTRAP_TEST_LOG:?}"
+mkdir -p "$HOME/.local/bin" "$HOME/.local/share/cgraf78/dot/bin"
+cat >"$HOME/.local/share/cgraf78/dot/bin/dot" <<'DOT'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'dot:%s\n' "$*" >>"${DOTFILES_BOOTSTRAP_TEST_LOG:?}"
+if [[ -n ${DOTFILES_BOOTSTRAP_TEST_ENV_LOG:-} ]]; then
+  {
+    printf 'XDG_CONFIG_HOME=%s\n' "${XDG_CONFIG_HOME-<unset>}"
+    printf 'XDG_DATA_HOME=%s\n' "${XDG_DATA_HOME-<unset>}"
+    printf 'XDG_STATE_HOME=%s\n' "${XDG_STATE_HOME-<unset>}"
+    printf 'XDG_CACHE_HOME=%s\n' "${XDG_CACHE_HOME-<unset>}"
+    printf 'XDG_RUNTIME_DIR=%s\n' "${XDG_RUNTIME_DIR-<unset>}"
+    printf 'DOTFILES_BOOTSTRAP_PRESERVE=%s\n' \
+      "${DOTFILES_BOOTSTRAP_PRESERVE-<unset>}"
+  } >>"$DOTFILES_BOOTSTRAP_TEST_ENV_LOG"
+fi
+DOT
+chmod 0755 "$HOME/.local/share/cgraf78/dot/bin/dot"
+ln -s ../share/cgraf78/dot/bin/dot "$HOME/.local/bin/dot"
+EOF
+chmod 0755 "$dot_repo/install.sh"
+git -C "$dot_repo" add install.sh
+git -C "$dot_repo" commit --quiet -m fixture
+dot_revision=$(git -C "$dot_repo" rev-parse HEAD)
+
+stage_home=$tmp/stage-home
+stage_log=$tmp/stage.log
+stage_env=$tmp/stage.env
+stage_path=$tmp/stage.path
+stage_payload=$tmp/staged-dot-bootstrap
+stage_client_origin=file://$tmp/stage-client-origin.git
+prepare_cutover_client "$stage_home" "$stage_client_origin" "$dot_revision"
+: >"$stage_log"
+: >"$stage_env"
+: >"$stage_path"
+run_bootstrap "$stage_home" "$stage_log" "$stage_env" "$stage_path" \
+  "$dot_repo" stage "$stage_payload" ||
+  fail 'locked Dot payload staging failed'
+[[ ! -s "$stage_log" && ! -s "$stage_env" && ! -s "$stage_path" ]] ||
+  fail 'payload staging performed host installation side effects'
+[[ ! -e "$stage_home/.local/bin/dot" &&
+  ! -L "$stage_home/.local/bin/dot" ]] ||
+  fail 'payload staging installed Dot into the host client'
+[[ -f "$stage_payload/payload-v1" &&
+  ! -L "$stage_payload/payload-v1" &&
+  $(<"$stage_payload/payload-v1") == 'cgraf78 dotfiles bootstrap payload v1' ]] ||
+  fail 'payload staging did not publish its exact format marker'
+[[ -f "$stage_payload/bootstrap.sh" &&
+  ! -L "$stage_payload/bootstrap.sh" &&
+  -x "$stage_payload/bootstrap.sh" ]] ||
+  fail 'payload staging did not publish a regular executable bootstrap'
+[[ -d "$stage_payload/dot-origin.git" &&
+  ! -L "$stage_payload/dot-origin.git" ]] ||
+  fail 'payload staging did not publish a regular Dot origin'
+[[ $(git --git-dir="$stage_payload/dot-origin.git" rev-parse refs/heads/main) == "$dot_revision" ]] ||
+  fail 'payload staging did not pin the cutover-locked Dot revision'
+
+failing_chmod_bin=$tmp/failing-chmod-bin
+mkdir "$failing_chmod_bin"
+DOTFILES_BOOTSTRAP_TEST_REAL_CHMOD=$(command -v chmod)
+export DOTFILES_BOOTSTRAP_TEST_REAL_CHMOD
+# shellcheck disable=SC2016 # Expanded only by the generated chmod fixture.
+write_tool "$failing_chmod_bin/chmod" '
+if [[ ${1:-} == 0400 ]]; then
+  case ${2:-} in
+    */payload-v1 | */.payload-v1.tmp) exit 86 ;;
+  esac
+fi
+exec "${DOTFILES_BOOTSTRAP_TEST_REAL_CHMOD:?}" "$@"'
+incomplete_payload=$tmp/incomplete-payload
+if DOTFILES_BOOTSTRAP_TEST_PATH_PREFIX="$failing_chmod_bin:" \
+  run_bootstrap "$stage_home" "$tmp/incomplete-stage.log" \
+  "$tmp/incomplete-stage.env" "$tmp/incomplete-stage.path" "$dot_repo" \
+  stage "$incomplete_payload" >/dev/null 2>&1; then
+  fail 'payload staging ignored completion-marker chmod failure'
+fi
+[[ ! -e "$incomplete_payload/payload-v1" &&
+  ! -L "$incomplete_payload/payload-v1" ]] ||
+  fail 'failed payload staging published its completion marker'
+incomplete_home=$tmp/incomplete-home
+incomplete_log=$tmp/incomplete.log
+incomplete_env=$tmp/incomplete.env
+prepare_cutover_client "$incomplete_home" \
+  "file://$tmp/incomplete-origin.git" "$dot_revision" detached
+: >"$incomplete_log"
+: >"$incomplete_env"
+if run_bootstrap "$incomplete_home" "$incomplete_log" "$incomplete_env" \
+  "$tmp/incomplete.path" "file://$tmp/unreachable-dot-origin.git" \
+  install-staged "$incomplete_payload" "$incomplete_payload/bootstrap.sh" \
+  >/dev/null 2>&1; then
+  fail 'install-staged accepted an incompletely published payload'
+fi
+[[ ! -s "$incomplete_log" && ! -s "$incomplete_env" &&
+  ! -e "$incomplete_home/.local/bin/dot" &&
+  ! -L "$incomplete_home/.local/bin/dot" ]] ||
+  fail 'incomplete staged payload mutated the client before rejection'
+
+unsafe_marker_home=$tmp/unsafe-marker-home
+unsafe_marker_log=$tmp/unsafe-marker.log
+unsafe_marker_env=$tmp/unsafe-marker.env
+prepare_cutover_client "$unsafe_marker_home" \
+  "file://$tmp/unsafe-marker-origin.git" "$dot_revision" detached
+: >"$unsafe_marker_log"
+: >"$unsafe_marker_env"
+chmod 0600 "$stage_payload/payload-v1"
+if run_bootstrap "$unsafe_marker_home" "$unsafe_marker_log" \
+  "$unsafe_marker_env" "$tmp/unsafe-marker.path" \
+  "file://$tmp/unreachable-dot-origin.git" install-staged "$stage_payload" \
+  "$stage_payload/bootstrap.sh" >/dev/null 2>&1; then
+  fail 'install-staged accepted an unsafe completion-marker mode'
+fi
+chmod 0400 "$stage_payload/payload-v1"
+[[ ! -s "$unsafe_marker_log" && ! -s "$unsafe_marker_env" &&
+  ! -e "$unsafe_marker_home/.local/bin/dot" &&
+  ! -L "$unsafe_marker_home/.local/bin/dot" ]] ||
+  fail 'unsafe staged payload mutated the client before rejection'
+
+for line_break in $'\n' $'\r'; do
+  multiline_stage_payload="${tmp}/staged-dot-bootstrap${line_break}INJECTED=value"
+  if run_bootstrap "$stage_home" "$tmp/multiline-stage.log" \
+    "$tmp/multiline-stage.env" "$tmp/multiline-stage.path" "$dot_repo" \
+    stage "$multiline_stage_payload" >/dev/null 2>&1; then
+    fail 'payload staging accepted a multiline destination'
+  fi
+  [[ ! -e "$multiline_stage_payload" && ! -L "$multiline_stage_payload" ]] ||
+    fail 'multiline payload staging published a destination before rejection'
+done
+
+newline_install_payload="${tmp}/"$'staged-dot-install\nINJECTED=value'
+newline_install_home=$tmp/newline-install-home
+newline_install_log=$tmp/newline-install.log
+newline_install_env=$tmp/newline-install.env
+prepare_cutover_client "$newline_install_home" \
+  "file://$tmp/newline-install-origin.git" "$dot_revision" detached
+: >"$newline_install_log"
+: >"$newline_install_env"
+mv "$stage_payload" "$newline_install_payload"
+if run_bootstrap "$newline_install_home" "$newline_install_log" \
+  "$newline_install_env" "$tmp/newline-install.path" \
+  "file://$tmp/unreachable-dot-origin.git" install-staged \
+  "$newline_install_payload" "$newline_install_payload/bootstrap.sh" \
+  >/dev/null 2>&1; then
+  fail 'staged payload installation accepted a multiline destination'
+fi
+mv "$newline_install_payload" "$stage_payload"
+[[ ! -s "$newline_install_log" && ! -s "$newline_install_env" &&
+  ! -e "$newline_install_home/.local/bin/dot" &&
+  ! -L "$newline_install_home/.local/bin/dot" ]] ||
+  fail 'multiline staged payload mutated the client before rejection'
+
+foreign_payload=$tmp/foreign-payload
+mkdir "$foreign_payload"
+printf 'foreign\n' >"$foreign_payload/owned"
+if run_bootstrap "$stage_home" "$tmp/foreign-stage.log" \
+  "$tmp/foreign-stage.env" "$tmp/foreign-stage.path" "$dot_repo" \
+  stage "$foreign_payload" >/dev/null 2>&1; then
+  fail 'payload staging overwrote an existing destination'
+fi
+[[ $(<"$foreign_payload/owned") == foreign ]] ||
+  fail 'failed payload staging changed a foreign destination'
+
+replacement_repo=$tmp/replacement-dot
+git clone --quiet --no-hardlinks "$dot_repo" "$replacement_repo"
+git -C "$replacement_repo" config user.name 'Dotfiles bootstrap replacement test'
+git -C "$replacement_repo" config user.email \
+  dotfiles-bootstrap-replacement@example.invalid
+git -C "$replacement_repo" config core.hooksPath /dev/null
+cat >"$replacement_repo/install.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf 'replacement-installer\n' >>"${DOTFILES_BOOTSTRAP_TEST_LOG:?}"
+exit 87
+EOF
+chmod 0755 "$replacement_repo/install.sh"
+git -C "$replacement_repo" add install.sh
+git -C "$replacement_repo" commit --quiet -m replacement-fixture
+replacement_revision=$(git -C "$replacement_repo" rev-parse HEAD)
+git --git-dir="$stage_payload/dot-origin.git" fetch --quiet --no-tags \
+  "$replacement_repo" "$replacement_revision"
+git --git-dir="$stage_payload/dot-origin.git" replace \
+  "$dot_revision" "$replacement_revision"
+[[ $(git --git-dir="$stage_payload/dot-origin.git" \
+  rev-parse refs/heads/main) == "$dot_revision" ]] ||
+  fail 'replacement-ref fixture changed the locked main ref'
+replacement_installer=$(git --git-dir="$stage_payload/dot-origin.git" \
+  show "$dot_revision:install.sh")
+[[ $replacement_installer == *replacement-installer* ]] ||
+  fail 'replacement-ref fixture does not substitute the locked installer'
+
+staged_home=$tmp/staged-home
+staged_log=$tmp/staged.log
+staged_env=$tmp/staged.env
+staged_path=$tmp/staged.path
+staged_xdg_env=$tmp/staged-xdg.env
+staged_client_origin=file://$tmp/staged-client-origin.git
+prepare_cutover_client "$staged_home" "$staged_client_origin" \
+  "$dot_revision" detached
+: >"$staged_log"
+: >"$staged_env"
+: >"$staged_path"
+: >"$staged_xdg_env"
+run_bootstrap_with_hostile_xdg "$staged_xdg_env" \
+  "$staged_home" "$staged_log" "$staged_env" "$staged_path" \
+  "file://$tmp/unreachable-dot-origin.git" install-staged "$stage_payload" \
+  "$stage_payload/bootstrap.sh" ||
+  fail 'staged Dot payload installation failed'
+[[ $(cat "$staged_log") == $'installer\ndot:init --branch dot-ci-bootstrap '"$staged_client_origin" ]] ||
+  fail 'staged payload did not install and adopt the exact client checkout'
+[[ -x "$staged_home/.local/share/cgraf78/dot/bin/dot" ]] ||
+  fail 'staged payload did not install the standalone Dot runtime'
+[[ $(<"$staged_env") == "SHDEPS_DOT_REPO=$stage_payload/dot-origin.git" ]] ||
+  fail 'staged payload did not preserve its exact Dot origin for later commands'
+[[ ! -s "$staged_path" ]] ||
+  fail 'staged payload unexpectedly published full-host PATH state'
+assert_checkout_xdg_environment "$staged_xdg_env" 'staged payload installation'
+
+mismatch_home=$tmp/mismatch-home
+mismatch_log=$tmp/mismatch.log
+prepare_cutover_client "$mismatch_home" "file://$tmp/mismatch-origin.git" \
+  ffffffffffffffffffffffffffffffffffffffff
+: >"$mismatch_log"
+if run_bootstrap "$mismatch_home" "$mismatch_log" "$tmp/mismatch.env" \
+  "$tmp/mismatch.path" "file://$tmp/unreachable-dot-origin.git" \
+  install-staged "$stage_payload" "$stage_payload/bootstrap.sh" \
+  >/dev/null 2>&1; then
+  fail 'staged payload accepted a client with a different cutover lock'
+fi
+[[ ! -s "$mismatch_log" &&
+  ! -e "$mismatch_home/.local/bin/dot" &&
+  ! -L "$mismatch_home/.local/bin/dot" ]] ||
+  fail 'mismatched staged payload mutated the client before rejection'
+
+cutover_home=$tmp/cutover-home
+cutover_log=$tmp/cutover.log
+cutover_env=$tmp/cutover.env
+cutover_path=$tmp/cutover.path
+cutover_xdg_env=$tmp/cutover-xdg.env
+cutover_client_origin=file://$tmp/client-origin.git
+prepare_cutover_client "$cutover_home" "$cutover_client_origin" \
+  "$dot_revision" detached
+: >"$cutover_log"
+: >"$cutover_env"
+: >"$cutover_path"
+: >"$cutover_xdg_env"
+run_bootstrap_with_hostile_xdg "$cutover_xdg_env" \
+  "$cutover_home" "$cutover_log" "$cutover_env" \
+  "$cutover_path" "$dot_repo" ||
+  fail 'cutover bootstrap failed'
+[[ $(cat "$cutover_log") == $'installer\ndot:init --branch dot-ci-bootstrap '"$cutover_client_origin" ]] ||
+  fail 'cutover bootstrap did not adopt the detached client before convergence'
+[[ $(git -C "$cutover_home" symbolic-ref --short HEAD) == dot-ci-bootstrap ]] ||
+  fail 'cutover bootstrap did not bind its detached checkout to the init branch'
+if git -C "$cutover_home" rev-parse --verify '@{u}' >/dev/null 2>&1; then
+  fail 'cutover bootstrap attached an upstream to the detached client'
+fi
+cutover_origin=$(sed -n 's/^SHDEPS_DOT_REPO=//p' "$cutover_env")
+[[ -n "$cutover_origin" && -d "$cutover_origin" ]] ||
+  fail 'cutover bootstrap did not preserve its exact job-scoped dot origin'
+[[ $(git --git-dir="$cutover_origin" rev-parse refs/heads/main) == "$dot_revision" ]] ||
+  fail 'cutover bootstrap origin did not pin the reviewed dot revision'
+assert_checkout_xdg_environment "$cutover_xdg_env" 'full cutover bootstrap'
+
+attached_home=$tmp/attached-home
+attached_log=$tmp/attached.log
+attached_origin=file://$tmp/attached-origin.git
+prepare_cutover_client "$attached_home" "$attached_origin" "$dot_revision"
+git -C "$attached_home" update-ref refs/remotes/origin/main HEAD
+git -C "$attached_home" config branch.main.remote origin
+git -C "$attached_home" config branch.main.merge refs/heads/main
+git -C "$attached_home" rev-parse --verify '@{u}' >/dev/null ||
+  fail 'attached cutover fixture has no initial upstream'
+: >"$attached_log"
+run_bootstrap "$attached_home" "$attached_log" "$tmp/attached.env" \
+  "$tmp/attached.path" "$dot_repo" ||
+  fail 'attached cutover bootstrap failed'
+[[ $(cat "$attached_log") == $'installer\ndot:init --branch dot-ci-bootstrap '"$attached_origin" ]] ||
+  fail 'cutover bootstrap did not preserve no-pull adoption for an attached client'
+[[ $(git -C "$attached_home" symbolic-ref --short HEAD) == dot-ci-bootstrap ]] ||
+  fail 'cutover bootstrap did not isolate its attached checkout from upstream pulls'
+if git -C "$attached_home" rev-parse --verify '@{u}' >/dev/null 2>&1; then
+  fail 'cutover bootstrap left an upstream on the attached client'
+fi
+
+legacy_home=$tmp/legacy-home
+legacy_log=$tmp/legacy.log
+legacy_env=$tmp/legacy.env
+legacy_path=$tmp/legacy.path
+mkdir -p "$legacy_home/.local/bin"
+cat >"$legacy_home/.local/bin/dot" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'dot:%s\n' "$*" >>"${DOTFILES_BOOTSTRAP_TEST_LOG:?}"
+EOF
+chmod 0755 "$legacy_home/.local/bin/dot"
+: >"$legacy_log"
+: >"$legacy_env"
+: >"$legacy_path"
+run_bootstrap "$legacy_home" "$legacy_log" "$legacy_env" "$legacy_path" ||
+  fail 'legacy bootstrap failed'
+[[ $(cat "$legacy_log") == 'dot:update --skip-pull' ]] ||
+  fail 'legacy bootstrap changed its skip-pull contract'
+[[ ! -s "$legacy_env" ]] ||
+  fail 'legacy bootstrap exported standalone-engine state'
+
+malformed_home=$tmp/malformed-home
+malformed_log=$tmp/malformed.log
+mkdir -p "$malformed_home/.local/lib/dotfiles" "$malformed_home/.local/bin"
+printf 'foreign\n' >"$malformed_home/.local/lib/dotfiles/dot-cutover.lock"
+cp "$legacy_home/.local/bin/dot" "$malformed_home/.local/bin/dot"
+: >"$malformed_log"
+if run_bootstrap "$malformed_home" "$malformed_log" \
+  "$tmp/malformed.env" "$tmp/malformed.path" "$dot_repo" >/dev/null 2>&1; then
+  fail 'malformed cutover lock was accepted'
+fi
+[[ ! -s "$malformed_log" ]] ||
+  fail 'malformed cutover lock allowed bootstrap mutation'
+
+echo 'ok - dotfiles bootstrap supports legacy and locked standalone engines'

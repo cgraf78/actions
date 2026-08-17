@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+
+fail() {
+  printf 'checkout-installer-bash32-test: %s\n' "$*" >&2
+  exit 1
+}
+
+[[ ${BASH_VERSINFO[0]} -eq 3 ]] ||
+  fail "expected stock Bash 3.x, got $BASH_VERSION"
+
+# First prove that the real stock interpreter is rejected. The second probe
+# replaces candidate discovery with an always-old host model so this remains
+# deterministic even if a runner image happens to preinstall Homebrew Bash.
+# shellcheck source=checkout-installer/bash-resolver-v1.sh.in
+. "$root/checkout-installer/bash-resolver-v1.sh.in"
+if _checkout_bash_v1_probe /bin/bash; then
+  fail 'stock /bin/bash unexpectedly satisfied the Bash 4+ contract'
+fi
+_checkout_bash_v1_probe() {
+  return 1
+}
+
+resolver_state="$tmp/resolver-state"
+set +e
+resolver_output=$(XDG_STATE_HOME="$resolver_state" \
+  checkout_bash_v1_select only-bash3 '' 2>&1)
+resolver_status=$?
+set -e
+[[ "$resolver_status" -ne 0 &&
+  "$resolver_output" == *'Bash 4 or newer was not found; install it and retry'* ]] ||
+  fail 'automatic Bash exhaustion was not actionable'
+[[ ! -e "$resolver_state" && ! -L "$resolver_state" ]] ||
+  fail 'failed automatic Bash discovery wrote a runtime hint'
+
+# Exercise the self-contained installer separately. A strict stock-Bash
+# override must fail before checkout-parent creation, Git, locks, or delegates.
+consumer="$tmp/consumer"
+mkdir -p "$consumer/scripts" "$consumer/support"
+cat >"$consumer/scripts/checkout-installer.conf" <<'EOF'
+# shellcheck shell=bash
+# shellcheck disable=SC2034
+CHECKOUT_INSTALLER_ENABLED=true
+CHECKOUT_INSTALLER_REPO=example/example-tool
+CHECKOUT_INSTALLER_BASH_RESOLVER=v1
+EOF
+cat >"$consumer/support/install-checkout.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 90
+EOF
+chmod 0755 "$consumer/support/install-checkout.sh"
+/bin/bash "$root/checkout-installer/render.sh" "$consumer" >/dev/null
+
+installer_state="$tmp/installer-state"
+managed_checkout="$tmp/managed/example-tool"
+set +e
+installer_output=$(XDG_STATE_HOME="$installer_state" \
+  CGRAF78_CHECKOUT_INSTALL_BASH=/bin/bash \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$managed_checkout" \
+  /bin/bash "$consumer/install.sh" 2>&1)
+installer_status=$?
+set -e
+[[ "$installer_status" -ne 0 &&
+  "$installer_output" == *'explicit interpreter is not Bash 4 or newer: /bin/bash'* ]] ||
+  fail 'stock-Bash installer failure was not actionable'
+[[ ! -e "$installer_state" && ! -L "$installer_state" ]] ||
+  fail 'stock-Bash installer failure wrote a runtime hint'
+[[ ! -e "$managed_checkout" && ! -L "$managed_checkout" &&
+  ! -e "${managed_checkout%/*}" && ! -L "${managed_checkout%/*}" ]] ||
+  fail 'stock-Bash installer failure mutated the checkout destination'
+
+printf 'checkout-installer-bash32-test: ok\n'

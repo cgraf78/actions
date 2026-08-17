@@ -269,11 +269,14 @@ jobs:
 | `termux-profiles`     | `""`     | Android override. Empty reuses `profiles`, then falls back to `runtime`.            |
 
 Supported generic profiles are `base`, `jq`, `python`, `zsh`, `lua`, `neovim`,
-`tmux`, `openssh-netcat-lsof`, `procps`, and `shellcheck`. Termux additionally
-supports `runtime` as a lightweight alternative to `base`: both provide Bash
-and `termux-exec`, while `base` also provides Git and curl. The `procps`
-profile provides a full procps-compatible `ps` on Linux; macOS uses its system
-`ps` without an additional Homebrew package.
+`tmux`, `openssh-netcat-lsof`, `procps`, `cron`, `fd`, `ripgrep`, `hostname`,
+and `shellcheck`. Termux additionally supports `runtime` as a lightweight
+alternative to `base`: both provide Bash and `termux-exec`, while `base` also
+provides Git and curl. The `procps` profile provides a full procps-compatible
+`ps` on Linux; macOS uses its system `ps` without an additional Homebrew
+package. The command-oriented profiles intentionally follow platform naming:
+for example, `fd` installs Debian's `fdfind`, while platforms that package the
+command as `fd` keep that name.
 
 Termux installs the Android equivalents of generic profile capabilities from
 the same profile list, including when a named setup mode is selected. Its job
@@ -290,7 +293,13 @@ executables and their shared libraries on one supported Termux package state.
 `force-dotfiles-update` maps to the dotfiles `SHDEPS_FORCE=1` API at the
 conventional-platform bootstrap boundary. It defaults off so ordinary callers
 keep the cache-first bootstrap. Termux starts from a fresh application sandbox
-and does not restore or invoke that shared bootstrap action.
+and does not restore that cache. With `setup: dotfiles`, the worker instead uses
+the shared bootstrap action to stage the standalone Dot revision named by the
+caller's cutover lock, transports the payload into the sandbox, and validates
+and installs it before the caller command. No Termux consumer carries a second
+Dot revision or lock parser. The named setup composes the `cron`, `fd`,
+`ripgrep`, and `hostname` profiles on both conventional platforms and Termux,
+because the portable base-dotfiles suites exercise those system commands.
 
 When `shellcheck-inventory-path` is nonempty, the workflow installs ShellCheck
 once on Ubuntu and invokes the pinned
@@ -328,9 +337,11 @@ repo actually tests.
 
 ### Inputs
 
-| Input     | Default  | Contract                                                             |
-| --------- | -------- | -------------------------------------------------------------------- |
-| `command` | required | Caller-owned command run after checkout with `shell: /bin/bash {0}`. |
+| Input                       | Default  | Contract                                                                                   |
+| --------------------------- | -------- | ------------------------------------------------------------------------------------------ |
+| `command`                   | required | Caller-owned command run after checkout with `shell: /bin/bash {0}`.                       |
+| `provision_modern_bash`     | `false`  | Installs Homebrew Bash 4+ after the optional stock-shell preflight and exports its path.    |
+| `pre_provision_command`     | empty    | Optional caller command run under stock Bash before modern Bash provisioning.              |
 
 ### Secrets
 
@@ -344,6 +355,13 @@ The workflow prints `/bin/bash --version` before evaluating `command`. Callers
 should invoke their script with `/bin/bash` explicitly when the script is not
 directly executable or when the test is meant to verify the script under the
 stock shell regardless of its shebang.
+
+Modern Bash provisioning is opt-in so ordinary Bash 3.2 consumers retain the
+stock runner environment and avoid unrelated Homebrew/network work. A caller
+that exercises a Bash-runtime handoff can use `pre_provision_command` to prove
+its Bash-3.2-only failure contract before setting `provision_modern_bash: true`;
+the final `command` receives the validated candidate path in
+`CHECKOUT_INSTALLER_TEST_MODERN_BASH`.
 
 ## `rust-ci.yml`
 
@@ -464,6 +482,12 @@ installs the checksum-pinned official Termux APK, copies the caller checkout to
 `$HOME/project`, and runs the caller's command under Termux Bash with `errexit`,
 `nounset`, and `pipefail` enabled. Callers do not depend on the emulator,
 bootstrap, or sandbox-transport implementation.
+
+For `setup: dotfiles`, the worker reads the checked-out client's cutover lock on
+the Ubuntu host, stages that exact standalone Dot engine, and installs it with
+the Termux-provided Bash and Git before running caller code. The copied checkout
+is never added to the trusted bootstrap `PATH`; its tracked client adapter is
+used only after the standalone runtime has been installed and validated.
 
 | Input               | Default  | Contract                                                              |
 | ------------------- | -------- | --------------------------------------------------------------------- |

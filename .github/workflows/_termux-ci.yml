@@ -56,6 +56,15 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Stage locked Dot bootstrap payload
+        if: inputs.setup == 'dotfiles'
+        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@b8f922ff1f0d957fe8c8898f8b4f033884723729
+        env:
+          HOME: ${{ github.workspace }}
+        with:
+          mode: stage
+          stage-directory: ${{ runner.temp }}/dotfiles-bootstrap-payload
+
       - name: Install host Rust toolchain
         if: inputs.host-command != '' && inputs.rust-toolchain != ''
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
@@ -65,7 +74,7 @@ jobs:
 
       - name: Configure host Android NDK toolchain
         if: inputs.host-command != '' && inputs.rust-toolchain != ''
-        uses: cgraf78/actions/.github/actions/android-rust-toolchain@438864f7da4781edb0d5e5468835169e52fd4b32
+        uses: cgraf78/actions/.github/actions/android-rust-toolchain@b8f922ff1f0d957fe8c8898f8b4f033884723729
         with:
           rust-target: x86_64-linux-android
 
@@ -106,6 +115,7 @@ jobs:
       - name: Prepare Termux host runner
         shell: bash
         env:
+          DOTFILES_BOOTSTRAP_PAYLOAD: ${{ runner.temp }}/dotfiles-bootstrap-payload
           PROFILES: ${{ inputs.profiles }}
           SETUP: ${{ inputs.setup }}
           TERMUX_CI_COMMAND: ${{ inputs.command }}
@@ -114,16 +124,30 @@ jobs:
           profiles_b64=$(printf '%s' "$PROFILES" | base64 --wrap=0)
           setup_b64=$(printf '%s' "$SETUP" | base64 --wrap=0)
           workdir_b64=$(printf '%s' "$TERMUX_CI_WORKING_DIRECTORY" | base64 --wrap=0)
+          payload_b64=$(printf '%s' "$DOTFILES_BOOTSTRAP_PAYLOAD" | base64 --wrap=0)
+          payload_name=${DOTFILES_BOOTSTRAP_PAYLOAD##*/}
+          case "$payload_name" in
+            '' | . | .. | *[!A-Za-z0-9._-]*)
+              echo "unsafe Dot bootstrap payload name: $payload_name" >&2
+              exit 1
+              ;;
+          esac
+          payload_name_b64=$(printf '%s' "$payload_name" | base64 --wrap=0)
           printf '%s' "$TERMUX_CI_COMMAND" >"$RUNNER_TEMP/termux-ci-command"
           {
             printf '%s\n' '#!/data/data/com.termux/files/usr/bin/bash' 'set -euo pipefail'
             printf "profiles_b64='%s'\n" "$profiles_b64"
             printf "setup_b64='%s'\n" "$setup_b64"
             printf "workdir_b64='%s'\n" "$workdir_b64"
+            printf "payload_name_b64='%s'\n" "$payload_name_b64"
             cat <<'RUNNER'
           export HOME=/data/data/com.termux/files/home
           export PREFIX=/data/data/com.termux/files/usr
           export TMPDIR=$PREFIX/tmp
+          # Do not let the copied caller checkout substitute Bash or Git before
+          # the locked runtime is installed. Keep bootstrap lookup limited to
+          # Termux-owned tools; the tracked client adapter is invoked explicitly
+          # only after that runtime exists.
           export PATH=$PREFIX/bin
           export TERMUX_PKG_NO_MIRROR_SELECT=1
           # The bootstrap APK otherwise probes mirrors and may select one with
@@ -140,6 +164,12 @@ jobs:
               exit 2
               ;;
           esac
+          # Match the conventional-platform named setup by composing the same
+          # command capabilities. Keeping these as profiles preserves one
+          # package-policy vocabulary across the two workers.
+          if [[ "$setup" == dotfiles ]]; then
+            profiles=${profiles:+$profiles,}cron,fd,ripgrep,hostname
+          fi
           has_profile() {
             case ",$profiles," in
               *",$1,"*) return 0 ;;
@@ -151,7 +181,7 @@ jobs:
           # `runtime` keeps smoke-only callers lean and avoids Git's OpenSSH
           # dependency and first-install host-key setup.
           packages=(bash termux-exec)
-          if has_profile base; then
+          if has_profile base || [[ "$setup" == dotfiles ]]; then
             packages+=(git curl)
           elif ! has_profile runtime; then
             echo "Termux profiles must include base or runtime" >&2
@@ -166,6 +196,10 @@ jobs:
           has_profile openssh-netcat-lsof &&
             packages+=(openssh netcat-openbsd lsof)
           has_profile procps && packages+=(procps)
+          has_profile cron && packages+=(cronie)
+          has_profile fd && packages+=(fd)
+          has_profile ripgrep && packages+=(ripgrep)
+          has_profile hostname && packages+=(inetutils)
           has_profile shellcheck && packages+=(shellcheck)
           apt-get update
           # The pinned APK can predate the live Termux repository. Termux does
@@ -187,8 +221,36 @@ jobs:
             exit 1
           }
           export LD_PRELOAD="$termux_exec_lib"
-          workdir=$(printf %s "$workdir_b64" | base64 -d)
           project_root=$(cd "$HOME/project" && pwd -P)
+          if [[ "$setup" == dotfiles ]]; then
+            payload_name=$(printf %s "$payload_name_b64" | base64 -d)
+            case "$payload_name" in
+              '' | . | .. | *[!A-Za-z0-9._-]*)
+                echo "unsafe Dot bootstrap payload name: $payload_name" >&2
+                exit 1
+                ;;
+            esac
+            dotfiles_payload=$TMPDIR/$payload_name
+            [[ -d "$dotfiles_payload" && ! -L "$dotfiles_payload" &&
+              -f "$dotfiles_payload/bootstrap.sh" &&
+              ! -L "$dotfiles_payload/bootstrap.sh" ]] || {
+              echo "locked Dot bootstrap payload is unavailable: $dotfiles_payload" >&2
+              exit 1
+            }
+            export SHDEPS_DOT_REPO="$dotfiles_payload/dot-origin.git"
+            (
+              cd "$project_root"
+              HOME="$project_root" \
+                DOTFILES_BOOTSTRAP_MODE=install-staged \
+                DOTFILES_BOOTSTRAP_STAGE_DIR="$dotfiles_payload" \
+                "$PREFIX/bin/bash" "$dotfiles_payload/bootstrap.sh"
+            )
+            [[ -x "$project_root/.local/share/cgraf78/dot/bin/dot" ]] || {
+              echo 'locked standalone Dot runtime was not installed' >&2
+              exit 1
+            }
+          fi
+          workdir=$(printf %s "$workdir_b64" | base64 -d)
           workdir_path=$(cd "$project_root/$workdir" && pwd -P)
           case "$workdir_path" in
             "$project_root"|"$project_root"/*) ;;
@@ -200,6 +262,9 @@ jobs:
           } >"$RUNNER_TEMP/termux-ci-runner"
           {
             printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail'
+            printf "setup_b64='%s'\n" "$setup_b64"
+            printf "payload_b64='%s'\n" "$payload_b64"
+            printf "payload_name_b64='%s'\n" "$payload_name_b64"
             cat <<'SCRIPT'
           apk="$RUNNER_TEMP/termux.apk"
           echo "Installing Termux APK"
@@ -225,6 +290,46 @@ jobs:
           adb shell run-as com.termux mkdir -p files/home/project files/usr/tmp
           tar -C "$GITHUB_WORKSPACE" -cf - . |
             timeout 120 adb shell run-as com.termux tar -C files/home/project -xf -
+
+          setup=$(printf %s "$setup_b64" | base64 -d)
+          if [[ "$setup" == dotfiles ]]; then
+            dotfiles_payload=$(printf %s "$payload_b64" | base64 -d)
+            payload_name=$(printf %s "$payload_name_b64" | base64 -d)
+            case "$payload_name" in
+              '' | . | .. | *[!A-Za-z0-9._-]*)
+                echo "unsafe Dot bootstrap payload name: $payload_name" >&2
+                exit 1
+                ;;
+            esac
+            [[ ${dotfiles_payload##*/} == "$payload_name" ]] || {
+              echo 'Dot bootstrap payload name does not match its source path' >&2
+              exit 1
+            }
+            payload_parent=${dotfiles_payload%/*}
+            [[ -n "$payload_parent" && "$payload_parent" != "$dotfiles_payload" &&
+              -d "$payload_parent" && ! -L "$payload_parent" &&
+              -d "$dotfiles_payload" && ! -L "$dotfiles_payload" &&
+              -f "$dotfiles_payload/payload-v1" &&
+              ! -L "$dotfiles_payload/payload-v1" &&
+              -f "$dotfiles_payload/bootstrap.sh" &&
+              ! -L "$dotfiles_payload/bootstrap.sh" &&
+              -d "$dotfiles_payload/dot-origin.git" &&
+              ! -L "$dotfiles_payload/dot-origin.git" ]] || {
+              echo "locked Dot bootstrap payload is unsafe: $dotfiles_payload" >&2
+              exit 1
+            }
+            # `test -e` is false for a dangling symlink. Reject `-L`
+            # separately so extraction preserves the no-clobber boundary for
+            # every existing path type.
+            if adb shell run-as com.termux test -e "files/usr/tmp/$payload_name" ||
+              adb shell run-as com.termux test -L "files/usr/tmp/$payload_name"; then
+              echo "Termux Dot bootstrap destination already exists: $payload_name" >&2
+              exit 1
+            fi
+            echo "Copying locked Dot bootstrap payload"
+            tar -C "$payload_parent" -cf - "$payload_name" |
+              timeout 120 adb shell run-as com.termux tar -C files/usr/tmp -xf -
+          fi
 
           echo "Copying Termux runner"
           tar -C "$RUNNER_TEMP" -cf - termux-ci-command termux-ci-runner |

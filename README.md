@@ -138,6 +138,10 @@ the official Termux application sandbox on a hardware-accelerated Android x86_64
 emulator. The caller checkout is copied into `$HOME/project`, with Termux's real
 `HOME`, `PREFIX`, `TMPDIR`, and `PATH`.
 
+With `setup: dotfiles`, the worker stages the standalone Dot revision named by
+the caller's cutover lock, transports that exact payload into the sandbox, and
+installs it with Termux's trusted Bash before any caller command runs.
+
 ```yaml
 jobs:
   termux:
@@ -237,8 +241,8 @@ than one worker are split into first-party composite actions:
 - `.github/actions/shellcheck-inventory/` validates each caller's reviewed
   program/fixture inventory and runs ShellCheck without guessing which fixture
   fragments are standalone programs.
-- `.github/actions/dotfiles-bootstrap/` owns `dot update`, `mise install`, and
-  `dot doctor`.
+- `.github/actions/dotfiles-bootstrap/` owns the full `dot update`, Mise, and
+  doctor flow plus cutover-locked payload staging and sandbox installation.
 - `.github/actions/verify-release-scripts/` fails a consumer whose vendored
   release scripts no longer match `release-scripts/`.
 - `.github/actions/verify-consumer-sync/` enforces one consumer lock across all
@@ -257,9 +261,10 @@ than one worker are split into first-party composite actions:
 
 Callers pin reusable workflows to reviewed commit SHAs and use dependency PRs
 to roll shared fixes across the fleet. Consumer lock verification prevents a
-partial bump from mixing revisions. Internal self-pins remain an explicit
-bootstrap exception because a commit cannot contain its own hash; they point to
-earlier reviewed commits and are covered by this repository's tests.
+partial bump from mixing revisions. This repository uses the same lock and
+synchronizer for its internal self-pins; because a commit cannot contain its
+own hash, that lock names the immediately preceding reviewed commit and a
+follow-up commit contains only the synchronized refs and their verification.
 
 ## License
 

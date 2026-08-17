@@ -197,6 +197,41 @@ _shellcheck_file_dialect() {
   esac
 }
 
+_shellcheck_internal_symlink_target() {
+  local path=$1 literal link_dir target_path target_dir target_base
+  local target_parent target_absolute target_relative
+
+  literal=$(readlink "$repo_root/$path" 2>/dev/null) || return 1
+  case "$literal" in
+    '' | /* | *$'\n'* | *$'\r'*) return 1 ;;
+  esac
+  case "$path" in
+    */*) link_dir=$repo_root/${path%/*} ;;
+    *) link_dir=$repo_root ;;
+  esac
+  target_path=$link_dir/$literal
+  case "$target_path" in
+    */*)
+      target_dir=${target_path%/*}
+      target_base=${target_path##*/}
+      ;;
+    *) return 1 ;;
+  esac
+  target_parent=$(cd -P -- "$target_dir" 2>/dev/null && pwd -P) || return 1
+  target_absolute=$target_parent/$target_base
+  case "$target_absolute" in
+    "$repo_root"/*) target_relative=${target_absolute#"$repo_root"/} ;;
+    *) return 1 ;;
+  esac
+  [[ -f "$target_absolute" && ! -L "$target_absolute" ]] || return 1
+  git --literal-pathspecs -C "$repo_root" ls-files --error-unmatch -- \
+    "$target_relative" >/dev/null 2>&1 || return 1
+  _shellcheck_file_is_program "$target_relative" || return 1
+  _shellcheck_array_contains "$target_relative" \
+    "${inventory_paths[@]+"${inventory_paths[@]}"}" || return 1
+  printf '%s\n' "$target_relative"
+}
+
 inventory_paths=()
 lint_files=()
 fixture_files=()
@@ -264,8 +299,12 @@ discovered=()
 while IFS= read -r -d '' path; do
   if _shellcheck_file_is_program "$path"; then
     if [[ -L "$repo_root/$path" ]]; then
-      _fail "shellcheck: shell program is a symbolic link: $(_shellcheck_display_path "$path")"
-      inventory_ok=0
+      if target=$(_shellcheck_internal_symlink_target "$path"); then
+        _pass "shellcheck: internal shell alias: $path -> $target"
+      else
+        _fail "shellcheck: shell program is a symbolic link: $(_shellcheck_display_path "$path")"
+        inventory_ok=0
+      fi
     else
       discovered+=("$path")
     fi

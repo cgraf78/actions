@@ -31,7 +31,8 @@ has_profile() {
 }
 
 needs_centos_epel() {
-  has_profile shellcheck || has_profile neovim
+  has_profile shellcheck || has_profile neovim || has_profile fd ||
+    has_profile ripgrep
 }
 
 add_pkg() {
@@ -41,9 +42,9 @@ add_pkg() {
 }
 
 install_package_lists() {
-  # Only generic profiles reach this function. Named setup modes use explicit
-  # commands because their package boundaries are part of repo-specific CI
-  # contracts.
+  # Generic profiles reach this function directly. Named setup modes may add a
+  # small repo-specific bootstrap base, then compose the same profile package
+  # lists so command capabilities keep one cross-platform mapping.
   case "$MATRIX_NAME" in
     macOS)
       if [ -n "$brew_pkgs" ]; then

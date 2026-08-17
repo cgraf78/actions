@@ -79,7 +79,8 @@ Dependabot SHA bump is expected to fail with the synchronization command until
 a maintainer regenerates the consumer. This is deliberate fail-closed behavior,
 not a bot failure to ignore.
 
-The actions repository's internal self-pins are a bootstrap exception. A commit
-cannot contain its own hash, so internal reusable workflows must point to an
-earlier reviewed actions commit. Consumer repositories do not have that cycle
-and must use the single-lock contract above.
+The actions repository also uses this command on itself. A commit cannot
+contain its own hash, so first commit the provider changes, then run
+`consumer-ci/sync.sh .` from that clean commit and commit the resulting lock
+and internal refs as a small follow-up. Consumer repositories do not have that
+cycle and pin the final reviewed commit directly.

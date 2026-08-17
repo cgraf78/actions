@@ -11,10 +11,12 @@ PREREQS_DIR=$REPO_ROOT/.github/actions/shell-ci-prereqs
 # shellcheck source=.github/actions/shell-ci-prereqs/dotfiles.sh
 . "$PREREQS_DIR/dotfiles.sh"
 
+# shellcheck disable=SC2329 # Sourced setup code invokes this test seam indirectly.
 install_package_lists() {
   :
 }
 
+# shellcheck disable=SC2329 # Alpine setup invokes this test seam indirectly.
 ensure_lua_command() {
   :
 }
@@ -67,6 +69,23 @@ assert_eq procps "$apk_pkgs" 'procps Alpine packages'
 
 printf 'ok - procps profile package mapping\n'
 
+export MATRIX_NAME=Debian
+export PROFILES=cron,fd,ripgrep,hostname
+install_profile_prereqs
+
+assert_eq 'fd ripgrep' "$brew_pkgs" \
+  'system-command profiles use built-in macOS cron and hostname'
+assert_eq 'cron fd-find ripgrep hostname' "$apt_pkgs" \
+  'system-command apt packages'
+assert_eq 'cronie fd ripgrep inetutils' "$arch_pkgs" \
+  'system-command Arch packages'
+assert_eq 'cronie fd-find ripgrep hostname' "$dnf_pkgs" \
+  'system-command dnf packages'
+assert_eq 'dcron fd ripgrep' "$apk_pkgs" \
+  'system-command Alpine packages'
+
+printf 'ok - shared profiles map dotfiles system commands\n'
+
 export MATRIX_NAME=Ubuntu
 export PROFILES=shellcheck
 pinned_shellcheck_calls=0
@@ -81,6 +100,20 @@ assert_eq shellcheck "$apt_pkgs" 'Debian keeps its native ShellCheck package'
 assert_eq 0 "$pinned_shellcheck_calls" 'Debian does not install Ubuntu pinned ShellCheck'
 
 printf 'ok - Ubuntu ShellCheck profile uses pinned installer\n'
+
+# The profile assertions above inspect collected package lists without running
+# a host package manager. Restore the production installer for the named-setup
+# integration checks below, while keeping privilege and Lua effects inside the
+# command fixtures.
+unset -f install_package_lists
+# shellcheck source=.github/actions/shell-ci-prereqs/lib.sh
+. "$PREREQS_DIR/lib.sh"
+sudo_if_available() {
+  "$@"
+}
+ensure_lua_command() {
+  :
+}
 
 mock_bin=$(mktemp -d)
 trap 'rm -rf "$mock_bin"' EXIT HUP INT TERM
@@ -100,24 +133,27 @@ export PATH
 export MATRIX_NAME=Debian
 install_dotfiles_bootstrap_prereqs
 assert_contains \
-  'apt-get install -y git curl sudo openssh-client lsof netcat-openbsd procps' \
-  "$(cat "$command_log")" 'dotfiles Debian installs ps'
+  'apt-get install -y git curl sudo openssh-client lsof netcat-openbsd procps cron fd-find ripgrep hostname' \
+  "$(cat "$command_log")" 'dotfiles Debian installs required system commands'
 
 : >"$command_log"
 export MATRIX_NAME='CentOS Stream'
 install_dotfiles_bootstrap_prereqs
 assert_contains \
-  'dnf install -y --allowerasing git curl sudo openssh-clients lsof nmap-ncat procps-ng' \
-  "$(cat "$command_log")" 'dotfiles dnf installs ps'
+  'dnf install -y --allowerasing epel-release' \
+  "$(cat "$command_log")" 'dotfiles CentOS enables capability packages'
+assert_contains \
+  'dnf install -y --allowerasing git curl sudo openssh-clients lsof nmap-ncat procps-ng cronie fd-find ripgrep hostname' \
+  "$(cat "$command_log")" 'dotfiles dnf installs required system commands'
 
 : >"$command_log"
 export MATRIX_NAME=Alpine
 install_dotfiles_bootstrap_prereqs
 assert_contains \
-  'apk add --no-cache git curl sudo bash coreutils shellcheck lua5.4 openssh-client lsof netcat-openbsd procps' \
-  "$(cat "$command_log")" 'dotfiles Alpine installs full ps'
+  'apk add --no-cache git curl sudo bash coreutils shellcheck lua5.4 openssh-client lsof netcat-openbsd procps dcron fd ripgrep' \
+  "$(cat "$command_log")" 'dotfiles Alpine installs required system commands'
 
-printf 'ok - dotfiles setup installs process tools\n'
+printf 'ok - dotfiles setup composes shared system-command profiles\n'
 
 (
   # Re-source the production helper after replacing commands used by the

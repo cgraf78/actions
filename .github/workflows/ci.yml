@@ -157,6 +157,8 @@ jobs:
     uses: ./.github/workflows/bash32-ci.yml
     with:
       command: /bin/bash test/checkout-installer-test
+      provision_modern_bash: true
+      pre_provision_command: /bin/bash test/checkout-installer-bash32-test
 
   release-asset-upload-bash32:
     name: Release asset upload / Bash 3.2
@@ -171,6 +173,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Verify internal Actions sync
+        uses: cgraf78/actions/.github/actions/verify-consumer-sync@b8f922ff1f0d957fe8c8898f8b4f033884723729
 
       - name: Install actionlint
         shell: bash
@@ -230,6 +235,10 @@ jobs:
       - name: Test public dotfiles dependencies
         shell: bash
         run: test/dotfiles-public-deps-test
+
+      - name: Test dotfiles bootstrap transitions
+        shell: bash
+        run: test/dotfiles-bootstrap-test
 
       - name: Test infrastructure retry classification
         shell: bash
