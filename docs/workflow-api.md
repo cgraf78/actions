@@ -300,6 +300,18 @@ and installs it before the caller command. No Termux consumer carries a second
 Dot revision or lock parser. The named setup composes the `cron`, `fd`,
 `ripgrep`, and `hostname` profiles on both conventional platforms and Termux,
 because the portable base-dotfiles suites exercise those system commands.
+Both bootstrap paths set Dot's invocation-scoped provider override after those
+profiles are installed. Dot still validates the committed config and converges
+repositories, overlays, and extensions, but it does not install the client's
+complete workstation dependency policy in shared CI. The override is not
+persisted, so a later ordinary `dot init` or `dot update` honors the configured
+provider normally. On conventional platforms other than Alpine, the workflow's
+existing pinned Mise step supplies the runtime and the bootstrap action installs
+the client's committed Mise lock; this replaces the one bootstrap prerequisite
+previously supplied indirectly by Shdeps without creating a second Mise pin.
+Because this mode intentionally omits workstation-only provider dependencies,
+the action also omits its full-provider doctor smoke step; the caller's normal
+test command remains the required verification surface.
 
 When `shellcheck-inventory-path` is nonempty, the workflow installs ShellCheck
 once on Ubuntu and invokes the pinned
@@ -487,7 +499,10 @@ For `setup: dotfiles`, the worker reads the checked-out client's cutover lock on
 the Ubuntu host, stages that exact standalone Dot engine, and installs it with
 the Termux-provided Bash and Git before running caller code. The copied checkout
 is never added to the trusted bootstrap `PATH`; its tracked client adapter is
-used only after the standalone runtime has been installed and validated.
+used only after the standalone runtime has been installed and validated. The
+install invocation skips provider convergence because the worker has already
+installed the requested prerequisite profiles; it does not change the client's
+committed provider configuration.
 
 | Input               | Default  | Contract                                                              |
 | ------------------- | -------- | --------------------------------------------------------------------- |

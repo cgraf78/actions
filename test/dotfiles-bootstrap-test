@@ -89,9 +89,9 @@ yq -e '.inputs."stage-directory".default == ""' "$action" >/dev/null ||
 yq -e '.runs.steps[] | select(.id == "bootstrap").env.DOTFILES_BOOTSTRAP_MODE == "${{ inputs.mode }}"' \
   "$action" >/dev/null ||
   fail 'dotfiles bootstrap action does not pass its mode through the environment'
-yq -e '.runs.steps[] | select(.name == "Run doctor smoke checks").if == "inputs.mode == '\''full'\''"' \
+yq -e '.runs.steps[] | select(.name == "Run doctor smoke checks").if == "inputs.mode == '\''full'\'' && env.DOT_INIT_SKIP_PROVIDER != '\''1'\''"' \
   "$action" >/dev/null ||
-  fail 'dotfiles bootstrap action does not limit doctor to full mode'
+  fail 'dotfiles bootstrap action does not scope doctor to full provider convergence'
 
 mkdir -p "$tmp/bin"
 # shellcheck disable=SC2016 # Expanded only by the generated fixture program.

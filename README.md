@@ -140,7 +140,12 @@ emulator. The caller checkout is copied into `$HOME/project`, with Termux's real
 
 With `setup: dotfiles`, the worker stages the standalone Dot revision named by
 the caller's cutover lock, transports that exact payload into the sandbox, and
-installs it with Termux's trusted Bash before any caller command runs.
+installs it with Termux's trusted Bash before any caller command runs. The
+bootstrap still adopts the client and converges its repositories, overlays,
+and extensions, but skips the client dependency provider for that invocation
+because the workflow has already installed its explicit prerequisite profiles.
+The committed provider setting is unchanged and applies to later ordinary Dot
+runs.
 
 ```yaml
 jobs:
@@ -241,8 +246,9 @@ than one worker are split into first-party composite actions:
 - `.github/actions/shellcheck-inventory/` validates each caller's reviewed
   program/fixture inventory and runs ShellCheck without guessing which fixture
   fragments are standalone programs.
-- `.github/actions/dotfiles-bootstrap/` owns the full `dot update`, Mise, and
-  doctor flow plus cutover-locked payload staging and sandbox installation.
+- `.github/actions/dotfiles-bootstrap/` owns Dot bootstrap, locked Mise tools,
+  full-provider doctor checks, and cutover-locked payload staging and sandbox
+  installation.
 - `.github/actions/verify-release-scripts/` fails a consumer whose vendored
   release scripts no longer match `release-scripts/`.
 - `.github/actions/verify-consumer-sync/` enforces one consumer lock across all

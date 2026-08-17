@@ -53,7 +53,7 @@ jobs:
         # This neutral action is the OS-matrix source of truth. Future Rust,
         # C++, or other reusable workflows should call the same action, then
         # run language-specific setup/tests against the returned matrix.
-        uses: cgraf78/actions/.github/actions/platform-matrix@190f1a08019d412264c8909471495f5be846752b
+        uses: cgraf78/actions/.github/actions/platform-matrix@ffc4c2c599813c18d9240875dff1049297acf1bb
         with:
           matrix-set: ${{ inputs.matrix-set }}
 
@@ -70,7 +70,7 @@ jobs:
       - name: Install OS prerequisites
         # Keep first-party prerequisites pinned so an outer reusable-workflow
         # SHA controls every executable action in the call graph.
-        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@190f1a08019d412264c8909471495f5be846752b
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@ffc4c2c599813c18d9240875dff1049297acf1bb
         with:
           matrix-name: ${{ matrix.name }}
           profiles: ${{ inputs.profiles }}
@@ -127,9 +127,10 @@ jobs:
             checkrun-dev-tools-${{ runner.os }}-${{ runner.arch }}-${{ matrix.name }}-
 
       - name: Install pinned Mise
-        if: inputs.setup == 'checkrun' && matrix.name != 'Alpine'
-        # Alpine deliberately keeps the smaller historical prerequisite-only
-        # path; every other platform consumes the committed tool lock.
+        if: (inputs.setup == 'checkrun' || inputs.setup == 'dotfiles') && matrix.name != 'Alpine'
+        # Checkrun and dotfiles use different committed tool locks but share
+        # this one reviewed Mise runtime. Alpine deliberately keeps the smaller
+        # historical prerequisite-only path.
         uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
         with:
           version: 2026.7.11
@@ -199,10 +200,18 @@ jobs:
 
       - name: Bootstrap dotfiles dependencies
         if: inputs.setup == 'dotfiles'
-        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@190f1a08019d412264c8909471495f5be846752b
+        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@ffc4c2c599813c18d9240875dff1049297acf1bb
         env:
+          # GH_TOKEN is the explicit cross-repository dependency credential.
+          # The automatic GITHUB_TOKEN is scoped to the caller repository and
+          # can hide public release metadata from Shdeps, so reserve it for
+          # Mise's separate download boundary instead of exporting it here.
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
-          GITHUB_TOKEN: ${{ github.token }}
+          MISE_GITHUB_TOKEN: ${{ github.token }}
+          # The matrix already installed its explicit prerequisite profiles.
+          # Adopt and converge the client without also installing its complete
+          # workstation provider policy; later ordinary Dot runs still honor it.
+          DOT_INIT_SKIP_PROVIDER: '1'
           MATRIX_NAME: ${{ matrix.name }}
           SHDEPS_FORCE: ${{ inputs.force-dotfiles-update && '1' || '0' }}
 
