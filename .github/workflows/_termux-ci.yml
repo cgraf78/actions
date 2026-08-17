@@ -144,6 +144,10 @@ jobs:
           export HOME=/data/data/com.termux/files/home
           export PREFIX=/data/data/com.termux/files/usr
           export TMPDIR=$PREFIX/tmp
+          # Do not let the copied caller checkout substitute Bash or Git before
+          # the locked runtime is installed. Keep bootstrap lookup limited to
+          # Termux-owned tools; the tracked client adapter is invoked explicitly
+          # only after that runtime exists.
           export PATH=$PREFIX/bin
           export TERMUX_PKG_NO_MIRROR_SELECT=1
           # The bootstrap APK otherwise probes mirrors and may select one with
@@ -314,6 +318,9 @@ jobs:
               echo "locked Dot bootstrap payload is unsafe: $dotfiles_payload" >&2
               exit 1
             }
+            # `test -e` is false for a dangling symlink. Reject `-L`
+            # separately so extraction preserves the no-clobber boundary for
+            # every existing path type.
             if adb shell run-as com.termux test -e "files/usr/tmp/$payload_name" ||
               adb shell run-as com.termux test -L "files/usr/tmp/$payload_name"; then
               echo "Termux Dot bootstrap destination already exists: $payload_name" >&2

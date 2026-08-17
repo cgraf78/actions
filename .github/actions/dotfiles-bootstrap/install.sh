@@ -65,6 +65,9 @@ dotfiles_bootstrap_file_has_mode() {
 }
 
 dotfiles_bootstrap_engine_git() {
+  # Replacement refs are ambient repository state. Revision verification and
+  # installer extraction must address the fetched object itself; otherwise
+  # rev-parse can match the lock while ls-tree or show reads substituted bytes.
   GIT_NO_REPLACE_OBJECTS=1 git "$@"
 }
 
@@ -135,9 +138,11 @@ dotfiles_bootstrap_install_engine_origin() {
 
   export CGRAF78_CHECKOUT_INSTALL_REPO_URL=$origin
   export SHDEPS_DOT_REPO=$origin
-  # The installed checkout keeps this exact origin for the rest of the job.
-  # Preserve it beyond this composite-action step instead of introducing a
-  # second hard-coded dot revision or racing the public branch tip.
+  # Both exports are intentional: the checkout installer consumes the first
+  # for managed checkout clone/update, while Dot/Shdeps consumes the second for
+  # later provider operations. Keep both bound to this one verified origin and
+  # preserve it beyond this composite-action step instead of introducing a
+  # second hard-coded revision or racing the public branch tip.
   if [[ -n ${GITHUB_ENV:-} ]]; then
     printf 'SHDEPS_DOT_REPO=%s\n' "$origin" >>"$GITHUB_ENV"
   fi
@@ -281,6 +286,9 @@ dotfiles_bootstrap_require_stage_directory() {
     echo "dotfiles bootstrap $mode mode requires a stage directory" >&2
     return 1
   }
+  # `install-staged` may persist the derived origin through GITHUB_ENV. Reject
+  # line breaks before any filesystem mutation so the path cannot create an
+  # additional or malformed environment record.
   case $destination in
     *$'\n'* | *$'\r'*)
       echo 'dotfiles bootstrap stage directory must be a single-line path' >&2
@@ -300,6 +308,9 @@ dotfiles_bootstrap_use_checkout_roots() {
 
 bootstrap_mode=${DOTFILES_BOOTSTRAP_MODE:-full}
 stage_directory=${DOTFILES_BOOTSTRAP_STAGE_DIR:-}
+# GitHub resolves the composite action on the host, outside sandboxes such as
+# the Termux guest. `stage` prepares one locked, self-verifying payload there;
+# `install-staged` consumes that payload without choosing a second revision.
 case $bootstrap_mode in
   stage)
     dotfiles_bootstrap_require_stage_directory \
