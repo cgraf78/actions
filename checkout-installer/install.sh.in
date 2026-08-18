@@ -75,6 +75,7 @@
     return 1
   }
 
+  [[ -n ${HOME:-} ]] || die 'HOME is not set'
   select_bootstrap_git ||
     die 'host Git is unavailable outside HOME'
 
@@ -467,8 +468,6 @@
   fi
 
   command -v git >/dev/null 2>&1 || die 'git is required for a piped install'
-  [[ -n ${HOME:-} ]] || die 'HOME is not set'
-
   repo_url=${CGRAF78_CHECKOUT_INSTALL_REPO_URL:-$default_repo_url}
   checkout_dir=${CGRAF78_CHECKOUT_INSTALL_DIR:-}
   if [[ -z "$checkout_dir" ]]; then
