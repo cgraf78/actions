@@ -58,7 +58,7 @@ jobs:
 
       - name: Stage locked Dot bootstrap payload
         if: inputs.setup == 'dotfiles'
-        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@1723f9c7a4edb4812257d6b7288bb676fb9d147e
+        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@761a286a8f06396e07339f7247eb350e172dfdce
         env:
           HOME: ${{ github.workspace }}
         with:
@@ -74,7 +74,7 @@ jobs:
 
       - name: Configure host Android NDK toolchain
         if: inputs.host-command != '' && inputs.rust-toolchain != ''
-        uses: cgraf78/actions/.github/actions/android-rust-toolchain@1723f9c7a4edb4812257d6b7288bb676fb9d147e
+        uses: cgraf78/actions/.github/actions/android-rust-toolchain@761a286a8f06396e07339f7247eb350e172dfdce
         with:
           rust-target: x86_64-linux-android
 
