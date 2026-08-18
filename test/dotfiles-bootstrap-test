@@ -65,10 +65,20 @@ assert_checkout_xdg_environment() {
 
 prepare_cutover_client() {
   local home=$1 origin=$2 revision=$3 checkout_mode=${4:-attached}
+  local lock_version=${5:-v1} phase=${6:-prepare}
 
   mkdir -p "$home/.local/lib/dotfiles"
-  printf 'cgraf78 dot client cutover v1\nminimum_revision=%s\n' \
-    "$revision" >"$home/.local/lib/dotfiles/dot-cutover.lock"
+  case $lock_version in
+    v1)
+      printf 'cgraf78 dot client cutover v1\nminimum_revision=%s\n' \
+        "$revision" >"$home/.local/lib/dotfiles/dot-cutover.lock"
+      ;;
+    v4)
+      printf 'cgraf78 dot client cutover v4\nphase=%s\nminimum_revision=%s\nreadiness_generation=client-topology-prepare-v1\n' \
+        "$phase" "$revision" >"$home/.local/lib/dotfiles/dot-cutover.lock"
+      ;;
+    *) fail "unsupported cutover fixture version: $lock_version" ;;
+  esac
   git -C "$home" init --quiet --initial-branch=main --template=''
   git -C "$home" config user.name 'Dotfiles bootstrap client test'
   git -C "$home" config user.email dotfiles-bootstrap-client@example.invalid
@@ -79,6 +89,22 @@ prepare_cutover_client() {
   if [[ "$checkout_mode" == detached ]]; then
     git -C "$home" checkout --quiet --detach
   fi
+}
+
+assert_cutover_lock_rejected() {
+  local slug=$1 description=$2 contents=$3
+  local home=$tmp/malformed-$slug log=$tmp/malformed-$slug.log
+
+  mkdir -p "$home/.local/lib/dotfiles" "$home/.local/bin"
+  printf '%s' "$contents" >"$home/.local/lib/dotfiles/dot-cutover.lock"
+  cp "$legacy_home/.local/bin/dot" "$home/.local/bin/dot"
+  : >"$log"
+  if run_bootstrap "$home" "$log" "$tmp/malformed-$slug.env" \
+    "$tmp/malformed-$slug.path" "$dot_repo" >/dev/null 2>&1; then
+    fail "$description was accepted"
+  fi
+  [[ ! -s "$log" && ! -e "$home/.local/share/cgraf78/dot" ]] ||
+    fail "$description allowed bootstrap mutation"
 }
 
 yq -e '.inputs.mode.default == "full"' "$action" >/dev/null ||
@@ -148,7 +174,8 @@ stage_env=$tmp/stage.env
 stage_path=$tmp/stage.path
 stage_payload=$tmp/staged-dot-bootstrap
 stage_client_origin=file://$tmp/stage-client-origin.git
-prepare_cutover_client "$stage_home" "$stage_client_origin" "$dot_revision"
+prepare_cutover_client "$stage_home" "$stage_client_origin" "$dot_revision" \
+  attached v4 prepare
 : >"$stage_log"
 : >"$stage_env"
 : >"$stage_path"
@@ -360,7 +387,7 @@ cutover_path=$tmp/cutover.path
 cutover_xdg_env=$tmp/cutover-xdg.env
 cutover_client_origin=file://$tmp/client-origin.git
 prepare_cutover_client "$cutover_home" "$cutover_client_origin" \
-  "$dot_revision" detached
+  "$dot_revision" detached v4 active
 : >"$cutover_log"
 : >"$cutover_env"
 : >"$cutover_path"
@@ -427,17 +454,24 @@ run_bootstrap "$legacy_home" "$legacy_log" "$legacy_env" "$legacy_path" ||
 [[ ! -s "$legacy_env" ]] ||
   fail 'legacy bootstrap exported standalone-engine state'
 
-malformed_home=$tmp/malformed-home
-malformed_log=$tmp/malformed.log
-mkdir -p "$malformed_home/.local/lib/dotfiles" "$malformed_home/.local/bin"
-printf 'foreign\n' >"$malformed_home/.local/lib/dotfiles/dot-cutover.lock"
-cp "$legacy_home/.local/bin/dot" "$malformed_home/.local/bin/dot"
-: >"$malformed_log"
-if run_bootstrap "$malformed_home" "$malformed_log" \
-  "$tmp/malformed.env" "$tmp/malformed.path" "$dot_repo" >/dev/null 2>&1; then
-  fail 'malformed cutover lock was accepted'
-fi
-[[ ! -s "$malformed_log" ]] ||
-  fail 'malformed cutover lock allowed bootstrap mutation'
+assert_cutover_lock_rejected foreign 'foreign cutover lock' $'foreign\n'
+assert_cutover_lock_rejected v1-extra 'v1 cutover lock with an extra line' \
+  $'cgraf78 dot client cutover v1\nminimum_revision='"$dot_revision"$'\nextra=true\n'
+assert_cutover_lock_rejected v4-missing \
+  'v4 cutover lock without a readiness generation' \
+  $'cgraf78 dot client cutover v4\nphase=prepare\nminimum_revision='"$dot_revision"$'\n'
+assert_cutover_lock_rejected v4-phase 'v4 cutover lock with an unknown phase' \
+  $'cgraf78 dot client cutover v4\nphase=paused\nminimum_revision='"$dot_revision"$'\nreadiness_generation=client-topology-prepare-v1\n'
+assert_cutover_lock_rejected v4-revision \
+  'v4 cutover lock with a malformed revision' \
+  $'cgraf78 dot client cutover v4\nphase=prepare\nminimum_revision=deadbeef\nreadiness_generation=client-topology-prepare-v1\n'
+assert_cutover_lock_rejected v4-generation \
+  'v4 cutover lock with a malformed readiness generation' \
+  $'cgraf78 dot client cutover v4\nphase=prepare\nminimum_revision='"$dot_revision"$'\nreadiness_generation=Client/Topology\n'
+assert_cutover_lock_rejected v4-order \
+  'v4 cutover lock with reordered fields' \
+  $'cgraf78 dot client cutover v4\nphase=prepare\nreadiness_generation=client-topology-prepare-v1\nminimum_revision='"$dot_revision"$'\n'
+assert_cutover_lock_rejected v4-extra 'v4 cutover lock with an extra line' \
+  $'cgraf78 dot client cutover v4\nphase=prepare\nminimum_revision='"$dot_revision"$'\nreadiness_generation=client-topology-prepare-v1\nextra=true\n'
 
-echo 'ok - dotfiles bootstrap supports legacy and locked standalone engines'
+echo 'ok - dotfiles bootstrap supports legacy and v1/v4 locked standalone engines'

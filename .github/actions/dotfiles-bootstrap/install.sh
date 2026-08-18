@@ -24,7 +24,9 @@ retry() {
 }
 
 dotfiles_bootstrap_read_cutover() {
-  local lock=$1 size header revision_line extra=''
+  local LC_ALL=C
+  local lock=$1 size header phase_line='' revision_line=''
+  local generation_line='' extra='' phase generation
 
   [[ -f "$lock" && ! -L "$lock" ]] || return 1
   size=$(wc -c <"$lock" 2>/dev/null) || return 1
@@ -35,13 +37,33 @@ dotfiles_bootstrap_read_cutover() {
   [[ ${#size} -le 4 && $size -le 1024 ]] || return 1
   {
     IFS= read -r header || return 1
-    IFS= read -r revision_line || return 1
+    case $header in
+      'cgraf78 dot client cutover v1')
+        IFS= read -r revision_line || return 1
+        ;;
+      'cgraf78 dot client cutover v4')
+        IFS= read -r phase_line || return 1
+        IFS= read -r revision_line || return 1
+        IFS= read -r generation_line || return 1
+        ;;
+      *) return 1 ;;
+    esac
     if IFS= read -r extra || [[ -n $extra ]]; then
       return 1
     fi
   } <"$lock"
-  [[ $header == 'cgraf78 dot client cutover v1' &&
-    $revision_line == minimum_revision=* ]] || return 1
+  if [[ $header == 'cgraf78 dot client cutover v4' ]]; then
+    [[ $phase_line == phase=* &&
+      $generation_line == readiness_generation=* ]] || return 1
+    phase=${phase_line#phase=}
+    case $phase in
+      prepare | active) ;;
+      *) return 1 ;;
+    esac
+    generation=${generation_line#readiness_generation=}
+    [[ $generation =~ ^[0-9a-z][0-9a-z-]{0,63}$ ]] || return 1
+  fi
+  [[ $revision_line == minimum_revision=* ]] || return 1
   revision_line=${revision_line#minimum_revision=}
   [[ $revision_line =~ ^[0-9a-f]{40}$ ]] || return 1
   printf '%s\n' "$revision_line"
