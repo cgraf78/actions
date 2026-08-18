@@ -228,7 +228,7 @@ jobs:
           matrix.enabled &&
           (matrix.rust-target == 'aarch64-linux-android' ||
           matrix.rust-target == 'x86_64-linux-android')
-        uses: cgraf78/actions/.github/actions/android-rust-toolchain@2f18032921bb80d3a69b25e54c547aa7d0b1de89
+        uses: cgraf78/actions/.github/actions/android-rust-toolchain@4987bfbee6148f0d07a613f5dd520fc4d9dc1733
         with:
           rust-target: ${{ matrix.rust-target }}
 
@@ -240,7 +240,7 @@ jobs:
         if: >-
           matrix.enabled && inputs.install-musl-tools &&
           endsWith(matrix.rust-target, '-musl')
-        uses: cgraf78/actions/.github/actions/musl-build-prereqs@2f18032921bb80d3a69b25e54c547aa7d0b1de89
+        uses: cgraf78/actions/.github/actions/musl-build-prereqs@4987bfbee6148f0d07a613f5dd520fc4d9dc1733
 
       - name: Run repo setup
         if: matrix.enabled && inputs.setup-command != ''
@@ -282,7 +282,7 @@ jobs:
 
       - name: Upload release assets
         if: matrix.enabled
-        uses: cgraf78/actions/.github/actions/upload-release-assets@2f18032921bb80d3a69b25e54c547aa7d0b1de89
+        uses: cgraf78/actions/.github/actions/upload-release-assets@4987bfbee6148f0d07a613f5dd520fc4d9dc1733
         with:
           asset-glob: ${{ inputs.asset-glob }}
           github-token: ${{ github.token }}
