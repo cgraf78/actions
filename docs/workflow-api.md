@@ -310,9 +310,10 @@ caller's cutover lock, transports the payload into the sandbox, and validates
 and installs it before the caller command. No Termux consumer carries a second
 Dot revision or lock parser. A later provider run receives the same staged
 origin as an exact `file://` URL, preserving Shdeps' origin-identity contract.
-The named setup composes the `cron`, `fd`,
-`ripgrep`, and `hostname` profiles on both conventional platforms and Termux,
-because the portable base-dotfiles suites exercise those system commands.
+The named setup composes the `cron`, `fd`, `ripgrep`, `hostname`, and `python`
+profiles on both conventional platforms and Termux. The portable base-dotfiles
+suites exercise the system commands directly and use Python for their bounded
+timeout supervisor.
 The default conventional bootstrap and the initial Termux bootstrap set Dot's
 invocation-scoped provider override after those profiles are installed. Dot
 still validates the committed config and converges repositories, overlays, and
