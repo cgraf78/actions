@@ -97,11 +97,11 @@ contracts() {
   check '.on.workflow_call.inputs.profiles.default == "runtime"' termux-ci.yml
   check '.on.workflow_call.inputs.profiles.default == "runtime"' _termux-ci.yml
 
-  check '.jobs.termux.steps[] | select(.name == "Stage locked Dot bootstrap payload").if == "inputs.setup == '\''dotfiles'\''"' _termux-ci.yml
-  check ".jobs.termux.steps[] | select(.name == \"Stage locked Dot bootstrap payload\").uses == \"cgraf78/actions/.github/actions/dotfiles-bootstrap@$actions_lock\"" _termux-ci.yml
-  check '.jobs.termux.steps[] | select(.name == "Stage locked Dot bootstrap payload").env.HOME == "${{ github.workspace }}"' _termux-ci.yml
-  check '.jobs.termux.steps[] | select(.name == "Stage locked Dot bootstrap payload").with.mode == "stage"' _termux-ci.yml
-  check '.jobs.termux.steps[] | select(.name == "Stage locked Dot bootstrap payload").with."stage-directory" == "${{ runner.temp }}/dotfiles-bootstrap-payload"' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Stage exact Dot bootstrap payload").if == "inputs.setup == '\''dotfiles'\''"' _termux-ci.yml
+  check ".jobs.termux.steps[] | select(.name == \"Stage exact Dot bootstrap payload\").uses == \"cgraf78/actions/.github/actions/dotfiles-bootstrap@$actions_lock\"" _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Stage exact Dot bootstrap payload").env.HOME == "${{ github.workspace }}"' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Stage exact Dot bootstrap payload").with.mode == "stage"' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Stage exact Dot bootstrap payload").with."stage-directory" == "${{ runner.temp }}/dotfiles-bootstrap-payload"' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").env.DOTFILES_BOOTSTRAP_PAYLOAD == "${{ runner.temp }}/dotfiles-bootstrap-payload"' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("unsupported Termux setup mode")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("apt-get update")' _termux-ci.yml
@@ -123,7 +123,7 @@ contracts() {
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("$project_root/.local/bin") | not' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("export SHDEPS_DOT_REPO=\"file://$dotfiles_payload/dot-origin.git\"")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("[[ -x \"$project_root/.local/share/cgraf78/dot/bin/dot\" ]]")' _termux-ci.yml
-  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("Copying locked Dot bootstrap payload")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("Copying exact Dot bootstrap payload")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("adb shell run-as com.termux test -L \"files/usr/tmp/$payload_name\"")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | split("DOTFILES_BOOTSTRAP_MODE=install-staged") | select(length == 2) | .[1] | contains("bash -euo pipefail \"$TMPDIR/termux-ci-command\"")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("bash -euo pipefail \"$TMPDIR/termux-ci-command\"")' _termux-ci.yml

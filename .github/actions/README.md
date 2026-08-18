@@ -16,7 +16,7 @@ this repo and by other `cgraf78` repositories.
 - `musl-build-prereqs` installs the musl linker toolchain, and optionally adds
   the Rust musl target, for repos whose crates link C code.
 - `dotfiles-bootstrap` installs Dot and locked Mise tools, runs doctor when the
-  full dependency provider converges, or stages and installs a cutover-locked
+  full dependency provider converges, or stages and installs one exact
   standalone Dot payload for sandbox CI.
 - `verify-release-scripts` is the narrow byte, mode, and managed-file-set check
   for vendored release scripts.
@@ -32,15 +32,16 @@ consumer appears.
 
 `dotfiles-bootstrap` defaults to `mode: full`. `mode: stage` publishes a
 private, self-contained payload at `stage-directory`; `mode: install-staged`
-validates and installs that payload against the destination client's cutover
-lock. The staged modes reuse the lock as the only Dot revision decision and do
-not run the full host Mise or doctor steps. Before `full` or `install-staged`
-invokes Dot, the action clears inherited XDG path-root overrides so the client
-checkout under `HOME` remains the authoritative configuration; other client
-environment variables are preserved. When shared CI explicitly suppresses the
-client dependency provider, `full` mode also suppresses its workstation-wide
-doctor smoke check; the caller's repository tests remain the verifier for that
-deliberately smaller dependency surface.
+validates and installs that payload. Staging resolves current Dot `main` once;
+installation consumes the exact self-contained origin without making a second
+network or revision decision. The staged modes do not run the full host Mise or
+doctor steps. Before `full` or `install-staged` invokes Dot, the action clears
+inherited XDG path-root overrides so the client checkout under `HOME` remains
+the authoritative configuration; other client environment variables are
+preserved. When shared CI explicitly suppresses the client dependency provider,
+`full` mode also suppresses its workstation-wide doctor smoke check; the
+caller's repository tests remain the verifier for that deliberately smaller
+dependency surface.
 
 `shellcheck-inventory` expects a tracked, nonsymlink inventory whose records
 are `program<TAB>path` or `fixture<TAB>path`. It discovers shell programs from
