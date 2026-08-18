@@ -260,8 +260,35 @@ dotfiles_bootstrap_staged_origin() {
   DOTFILES_BOOTSTRAP_STAGED_ORIGIN=$origin
 }
 
+dotfiles_bootstrap_standalone_runtime() {
+  local checkout=${CGRAF78_CHECKOUT_INSTALL_DIR:-}
+  local install_home
+
+  # Match the generated checkout installer's destination precedence. This
+  # keeps adoption bound to the checkout just installed even when CI selects a
+  # non-default Shdeps root, without introducing another revision decision.
+  if [[ -z "$checkout" ]]; then
+    install_home=${SHDEPS_INSTALL_DIR:-$HOME/.local/share}
+    while [[ "$install_home" != / && "$install_home" == */ ]]; do
+      install_home=${install_home%/}
+    done
+    case $install_home in
+      /) checkout=/cgraf78/dot ;;
+      *) checkout=$install_home/cgraf78/dot ;;
+    esac
+  fi
+  printf '%s/bin/dot\n' "$checkout"
+}
+
 dotfiles_bootstrap_adopt_client() {
-  local branch origin
+  local branch origin runtime
+
+  runtime=$(dotfiles_bootstrap_standalone_runtime) || return 1
+
+  [[ -f "$runtime" && ! -L "$runtime" && -x "$runtime" ]] || {
+    echo "dotfiles bootstrap installed no standalone runtime: $runtime" >&2
+    return 1
+  }
 
   [[ -d "$HOME/.git" && ! -L "$HOME/.git" ]] || {
     echo "dotfiles bootstrap requires an ordinary Git checkout at HOME: $HOME" >&2
@@ -289,7 +316,10 @@ dotfiles_bootstrap_adopt_client() {
     echo 'dotfiles bootstrap synthetic client branch unexpectedly has an upstream' >&2
     return 1
   fi
-  retry .local/bin/dot init --branch "$branch" "$origin"
+  # The client command remains a phase-aware adapter during cutover. Adoption
+  # must use the locked engine installed above so prepare mode cannot fall back
+  # into a legacy checkout that an ordinary CI workspace does not contain.
+  retry "$runtime" init --branch "$branch" "$origin"
 }
 
 dotfiles_bootstrap_require_cutover_revision() {

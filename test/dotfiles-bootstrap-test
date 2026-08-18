@@ -34,6 +34,8 @@ run_bootstrap() {
       DOTFILES_BOOTSTRAP_DOT_REPO_URL="$repo_url" \
       DOTFILES_BOOTSTRAP_MODE="$mode" \
       DOTFILES_BOOTSTRAP_STAGE_DIR="$stage_dir" \
+      CGRAF78_CHECKOUT_INSTALL_DIR="${CGRAF78_CHECKOUT_INSTALL_DIR-}" \
+      SHDEPS_INSTALL_DIR="${SHDEPS_INSTALL_DIR-}" \
       bash "$bootstrap"
   )
 }
@@ -107,6 +109,38 @@ assert_cutover_lock_rejected() {
     fail "$description allowed bootstrap mutation"
 }
 
+assert_prepare_adapter_uses_standalone() {
+  local slug=$1 label=$2 checkout=$3 exact_root=$4 shdeps_root=$5
+  local home=$tmp/prepare-$slug-home log=$tmp/prepare-$slug.log
+  local adapter_log=$tmp/prepare-$slug-adapter.log
+  local origin=file://$tmp/prepare-$slug-origin.git
+
+  prepare_cutover_client "$home" "$origin" "$dot_revision" \
+    detached v4 prepare
+  mkdir -p "$home/.local/bin"
+  cat >"$home/.local/bin/dot" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'adapter:%s\n' "\$*" >>"$adapter_log"
+EOF
+  chmod 0755 "$home/.local/bin/dot"
+  : >"$log"
+  : >"$adapter_log"
+  CGRAF78_CHECKOUT_INSTALL_DIR="$exact_root" \
+    SHDEPS_INSTALL_DIR="$shdeps_root" \
+    run_bootstrap "$home" "$log" "$tmp/prepare-$slug.env" \
+    "$tmp/prepare-$slug.path" "$dot_repo" ||
+    fail "prepare bootstrap with $label and a retained client adapter failed"
+  [[ $(cat "$log") == $'installer\ndot:init --branch dot-ci-bootstrap '"$origin" ]] ||
+    fail "prepare bootstrap with $label did not adopt through the installed standalone runtime"
+  [[ ! -s "$adapter_log" ]] ||
+    fail "prepare bootstrap with $label invoked the retained client adapter during adoption"
+  [[ -f "$home/.local/bin/dot" && ! -L "$home/.local/bin/dot" ]] ||
+    fail "prepare bootstrap with $label did not preserve the regular client adapter"
+  [[ -x "$checkout/bin/dot" ]] ||
+    fail "prepare bootstrap with $label did not install the selected standalone runtime"
+}
+
 yq -e '.inputs.mode.default == "full"' "$action" >/dev/null ||
   fail 'dotfiles bootstrap mode does not default to full'
 yq -e '.inputs."stage-directory".default == ""' "$action" >/dev/null ||
@@ -141,10 +175,21 @@ cat >"$dot_repo/install.sh" <<'EOF'
 set -euo pipefail
 
 printf 'installer\n' >>"${DOTFILES_BOOTSTRAP_TEST_LOG:?}"
-mkdir -p "$HOME/.local/bin" "$HOME/.local/share/cgraf78/dot/bin"
+checkout=${CGRAF78_CHECKOUT_INSTALL_DIR:-}
+if [[ -z "$checkout" ]]; then
+  install_home=${SHDEPS_INSTALL_DIR:-$HOME/.local/share}
+  while [[ "$install_home" != / && "$install_home" == */ ]]; do
+    install_home=${install_home%/}
+  done
+  case $install_home in
+    /) checkout=/cgraf78/dot ;;
+    *) checkout=$install_home/cgraf78/dot ;;
+  esac
+fi
+mkdir -p "$HOME/.local/bin" "$checkout/bin"
 printf '%s\n' "${CGRAF78_CHECKOUT_INSTALL_REPO_URL:?}" > \
-  "$HOME/.local/share/cgraf78/dot/bootstrap-origin"
-cat >"$HOME/.local/share/cgraf78/dot/bin/dot" <<'DOT'
+  "$checkout/bootstrap-origin"
+cat >"$checkout/bin/dot" <<'DOT'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'dot:%s\n' "$*" >>"${DOTFILES_BOOTSTRAP_TEST_LOG:?}"
@@ -160,8 +205,10 @@ if [[ -n ${DOTFILES_BOOTSTRAP_TEST_ENV_LOG:-} ]]; then
   } >>"$DOTFILES_BOOTSTRAP_TEST_ENV_LOG"
 fi
 DOT
-chmod 0755 "$HOME/.local/share/cgraf78/dot/bin/dot"
-ln -s ../share/cgraf78/dot/bin/dot "$HOME/.local/bin/dot"
+chmod 0755 "$checkout/bin/dot"
+if [[ ! -e "$HOME/.local/bin/dot" && ! -L "$HOME/.local/bin/dot" ]]; then
+  ln -s "$checkout/bin/dot" "$HOME/.local/bin/dot"
+fi
 EOF
 chmod 0755 "$dot_repo/install.sh"
 git -C "$dot_repo" add install.sh
@@ -411,6 +458,16 @@ cutover_origin=$(sed -n 's/^SHDEPS_DOT_REPO=//p' "$cutover_env")
 [[ $(<"$cutover_home/.local/share/cgraf78/dot/bootstrap-origin") == "$cutover_origin" ]] ||
   fail 'cutover bootstrap did not give the installer its exact file origin'
 assert_checkout_xdg_environment "$cutover_xdg_env" 'full cutover bootstrap'
+
+prepare_exact_checkout=$tmp/prepare-exact-checkout
+assert_prepare_adapter_uses_standalone \
+  exact-root 'an exact checkout override' "$prepare_exact_checkout" \
+  "$prepare_exact_checkout" "$tmp/prepare-ignored-shdeps-root"
+prepare_shdeps_root=$tmp/prepare-shdeps-root
+assert_prepare_adapter_uses_standalone \
+  shdeps-root 'a non-default Shdeps root' \
+  "$prepare_shdeps_root/cgraf78/dot" \
+  '' "$prepare_shdeps_root/"
 
 attached_home=$tmp/attached-home
 attached_log=$tmp/attached.log
