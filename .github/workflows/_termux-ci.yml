@@ -56,7 +56,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Stage locked Dot bootstrap payload
+      - name: Stage exact Dot bootstrap payload
         if: inputs.setup == 'dotfiles'
         uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@4987bfbee6148f0d07a613f5dd520fc4d9dc1733
         env:
@@ -145,9 +145,9 @@ jobs:
           export PREFIX=/data/data/com.termux/files/usr
           export TMPDIR=$PREFIX/tmp
           # Do not let the copied caller checkout substitute Bash or Git before
-          # the locked runtime is installed. Keep bootstrap lookup limited to
-          # Termux-owned tools; the tracked client adapter is invoked explicitly
-          # only after that runtime exists.
+          # the exact staged runtime is installed. Keep bootstrap lookup limited
+          # to Termux-owned tools; invoke the tracked client front door only
+          # after that runtime exists.
           export PATH=$PREFIX/bin
           export TERMUX_PKG_NO_MIRROR_SELECT=1
           # The bootstrap APK otherwise probes mirrors and may select one with
@@ -234,7 +234,7 @@ jobs:
             [[ -d "$dotfiles_payload" && ! -L "$dotfiles_payload" &&
               -f "$dotfiles_payload/bootstrap.sh" &&
               ! -L "$dotfiles_payload/bootstrap.sh" ]] || {
-              echo "locked Dot bootstrap payload is unavailable: $dotfiles_payload" >&2
+              echo "Dot bootstrap payload is unavailable: $dotfiles_payload" >&2
               exit 1
             }
             # install-staged binds the managed checkout to this exact file URL.
@@ -250,7 +250,7 @@ jobs:
                 "$PREFIX/bin/bash" "$dotfiles_payload/bootstrap.sh"
             )
             [[ -x "$project_root/.local/share/cgraf78/dot/bin/dot" ]] || {
-              echo 'locked standalone Dot runtime was not installed' >&2
+              echo 'standalone Dot runtime was not installed' >&2
               exit 1
             }
           fi
@@ -319,7 +319,7 @@ jobs:
               ! -L "$dotfiles_payload/bootstrap.sh" &&
               -d "$dotfiles_payload/dot-origin.git" &&
               ! -L "$dotfiles_payload/dot-origin.git" ]] || {
-              echo "locked Dot bootstrap payload is unsafe: $dotfiles_payload" >&2
+              echo "Dot bootstrap payload is unsafe: $dotfiles_payload" >&2
               exit 1
             }
             # `test -e` is false for a dangling symlink. Reject `-L`
@@ -330,7 +330,7 @@ jobs:
               echo "Termux Dot bootstrap destination already exists: $payload_name" >&2
               exit 1
             fi
-            echo "Copying locked Dot bootstrap payload"
+            echo "Copying exact Dot bootstrap payload"
             tar -C "$payload_parent" -cf - "$payload_name" |
               timeout 120 adb shell run-as com.termux tar -C files/usr/tmp -xf -
           fi
