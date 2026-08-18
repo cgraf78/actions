@@ -28,7 +28,9 @@ install_dotfiles_bootstrap_prereqs() {
       ;;
   esac
 
-  PROFILES=cron,fd,ripgrep,hostname
+  # Python runs dot-test's portable timeout supervisor; keep it part of the
+  # named setup so every dotfiles consumer gets the same bounded test runner.
+  PROFILES=cron,fd,ripgrep,hostname,python
   collect_profile_prereqs
   install_package_lists
   PROFILES=$dotfiles_caller_profiles

@@ -133,7 +133,7 @@ export PATH
 export MATRIX_NAME=Debian
 install_dotfiles_bootstrap_prereqs
 assert_contains \
-  'apt-get install -y git curl sudo openssh-client lsof netcat-openbsd procps cron fd-find ripgrep hostname' \
+  'apt-get install -y git curl sudo openssh-client lsof netcat-openbsd procps python3 cron fd-find ripgrep hostname' \
   "$(cat "$command_log")" 'dotfiles Debian installs required system commands'
 
 : >"$command_log"
@@ -143,14 +143,14 @@ assert_contains \
   'dnf install -y --allowerasing epel-release' \
   "$(cat "$command_log")" 'dotfiles CentOS enables capability packages'
 assert_contains \
-  'dnf install -y --allowerasing git curl sudo openssh-clients lsof nmap-ncat procps-ng cronie fd-find ripgrep hostname' \
+  'dnf install -y --allowerasing git curl sudo openssh-clients lsof nmap-ncat procps-ng python3 cronie fd-find ripgrep hostname' \
   "$(cat "$command_log")" 'dotfiles dnf installs required system commands'
 
 : >"$command_log"
 export MATRIX_NAME=Alpine
 install_dotfiles_bootstrap_prereqs
 assert_contains \
-  'apk add --no-cache git curl sudo bash coreutils shellcheck lua5.4 openssh-client lsof netcat-openbsd procps dcron fd ripgrep' \
+  'apk add --no-cache git curl sudo bash coreutils shellcheck lua5.4 openssh-client lsof netcat-openbsd procps python3 dcron fd ripgrep' \
   "$(cat "$command_log")" 'dotfiles Alpine installs required system commands'
 
 printf 'ok - dotfiles setup composes shared system-command profiles\n'

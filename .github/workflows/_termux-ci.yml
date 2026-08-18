@@ -168,7 +168,7 @@ jobs:
           # command capabilities. Keeping these as profiles preserves one
           # package-policy vocabulary across the two workers.
           if [[ "$setup" == dotfiles ]]; then
-            profiles=${profiles:+$profiles,}cron,fd,ripgrep,hostname
+            profiles=${profiles:+$profiles,}cron,fd,ripgrep,hostname,python
           fi
           has_profile() {
             case ",$profiles," in

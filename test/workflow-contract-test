@@ -110,7 +110,7 @@ contracts() {
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("--force-confold")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("packages=(bash termux-exec)")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("if has_profile base || [[ \"$setup\" == dotfiles ]]; then\n  packages+=(git curl)\nelif ! has_profile runtime; then")' _termux-ci.yml
-  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("if [[ \"$setup\" == dotfiles ]]; then\n  profiles=${profiles:+$profiles,}cron,fd,ripgrep,hostname\nfi")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("if [[ \"$setup\" == dotfiles ]]; then\n  profiles=${profiles:+$profiles,}cron,fd,ripgrep,hostname,python\nfi")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("has_profile cron && packages+=(cronie)")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("has_profile fd && packages+=(fd)")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("has_profile ripgrep && packages+=(ripgrep)")' _termux-ci.yml
