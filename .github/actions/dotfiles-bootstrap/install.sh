@@ -125,26 +125,28 @@ dotfiles_bootstrap_verify_engine_origin() {
 }
 
 dotfiles_bootstrap_prepare_engine_origin() {
-  local revision=$1 staging=$2 repo_url origin fetched
+  local requested_revision=$1 staging=$2 repo_url origin fetched fetch_ref
 
   [[ -d "$staging" && ! -L "$staging" ]] || return 1
   origin=$staging/dot-origin.git
   [[ ! -e "$origin" && ! -L "$origin" ]] || return 1
   repo_url=${DOTFILES_BOOTSTRAP_DOT_REPO_URL:-https://github.com/cgraf78/dot.git}
   dotfiles_bootstrap_engine_git init --quiet --bare "$origin"
+  fetch_ref=${requested_revision:-refs/heads/main}
   retry dotfiles_bootstrap_engine_git --git-dir="$origin" fetch --quiet \
-    --force --no-tags --depth=1 "$repo_url" "$revision"
+    --force --no-tags --depth=1 "$repo_url" "$fetch_ref"
   fetched=$(dotfiles_bootstrap_engine_git --git-dir="$origin" \
     rev-parse --verify 'FETCH_HEAD^{commit}')
-  [[ $fetched == "$revision" ]] || {
-    echo "dot bootstrap fetched $fetched, expected $revision" >&2
+  if [[ -n $requested_revision && $fetched != "$requested_revision" ]]; then
+    echo "dot bootstrap fetched $fetched, expected $requested_revision" >&2
     return 1
-  }
+  fi
   dotfiles_bootstrap_engine_git --git-dir="$origin" \
-    update-ref refs/heads/main "$revision"
+    update-ref refs/heads/main "$fetched"
   dotfiles_bootstrap_engine_git --git-dir="$origin" \
     symbolic-ref HEAD refs/heads/main
-  dotfiles_bootstrap_verify_engine_origin "$origin" "$revision"
+  dotfiles_bootstrap_verify_engine_origin "$origin" "$fetched" || return 1
+  DOTFILES_BOOTSTRAP_ENGINE_REVISION=$fetched
 }
 
 dotfiles_bootstrap_install_engine_origin() {
@@ -181,7 +183,7 @@ dotfiles_bootstrap_install_engine_origin() {
     GIT_NO_REPLACE_OBJECTS=1 bash "$installer"
 }
 
-dotfiles_bootstrap_locked_engine() {
+dotfiles_bootstrap_engine() {
   local revision=$1 staging
   local stage_parent=${RUNNER_TEMP:-${TMPDIR:-/tmp}}
 
@@ -189,7 +191,7 @@ dotfiles_bootstrap_locked_engine() {
   chmod 0700 "$staging"
   dotfiles_bootstrap_prepare_engine_origin "$revision" "$staging" || return 1
   dotfiles_bootstrap_install_engine_origin \
-    "$revision" "$staging/dot-origin.git"
+    "$DOTFILES_BOOTSTRAP_ENGINE_REVISION" "$staging/dot-origin.git"
 }
 
 dotfiles_bootstrap_stage_payload() {
@@ -262,8 +264,15 @@ dotfiles_bootstrap_staged_origin() {
   [[ $script_parent == "$payload_root" ]] || return 1
 
   origin=$payload/dot-origin.git
+  [[ -d $origin && ! -L $origin ]] || return 1
+  if [[ -z $revision ]]; then
+    revision=$(dotfiles_bootstrap_engine_git --git-dir="$origin" \
+      rev-parse --verify 'refs/heads/main^{commit}' 2>/dev/null) || return 1
+    [[ $revision =~ ^[0-9a-f]{40}$ ]] || return 1
+  fi
   dotfiles_bootstrap_verify_engine_origin "$origin" "$revision" || return 1
   DOTFILES_BOOTSTRAP_STAGED_ORIGIN=$origin
+  DOTFILES_BOOTSTRAP_STAGED_REVISION=$revision
 }
 
 dotfiles_bootstrap_standalone_runtime() {
@@ -322,20 +331,18 @@ dotfiles_bootstrap_adopt_client() {
     echo 'dotfiles bootstrap synthetic client branch unexpectedly has an upstream' >&2
     return 1
   fi
-  # The client command remains a phase-aware adapter during cutover. Adoption
-  # must use the locked engine installed above so prepare mode cannot fall back
-  # into a legacy checkout that an ordinary CI workspace does not contain.
+  # Invoke the runtime just installed rather than the tracked client front door:
+  # on a clean checkout that front door cannot dispatch until this adoption
+  # step publishes the standalone checkout and public library.
   retry "$runtime" init --branch "$branch" "$origin"
 }
 
-dotfiles_bootstrap_require_cutover_revision() {
+dotfiles_bootstrap_select_revision() {
   local lock=$HOME/.local/lib/dotfiles/dot-cutover.lock
 
-  [[ -e "$lock" || -L "$lock" ]] || {
-    echo "dotfiles bootstrap requires a cutover lock: $lock" >&2
-    return 1
-  }
-  DOTFILES_BOOTSTRAP_CUTOVER_REVISION=$(dotfiles_bootstrap_read_cutover "$lock") || {
+  DOTFILES_BOOTSTRAP_SELECTED_REVISION=
+  [[ -e "$lock" || -L "$lock" ]] || return 0
+  DOTFILES_BOOTSTRAP_SELECTED_REVISION=$(dotfiles_bootstrap_read_cutover "$lock") || {
     echo "unsafe or malformed dot cutover lock: $lock" >&2
     return 1
   }
@@ -371,26 +378,27 @@ dotfiles_bootstrap_use_checkout_roots() {
 bootstrap_mode=${DOTFILES_BOOTSTRAP_MODE:-full}
 stage_directory=${DOTFILES_BOOTSTRAP_STAGE_DIR:-}
 # GitHub resolves the composite action on the host, outside sandboxes such as
-# the Termux guest. `stage` prepares one locked, self-verifying payload there;
-# `install-staged` consumes that payload without choosing a second revision.
+# the Termux guest. `stage` resolves current Dot once and prepares a
+# self-verifying payload there; `install-staged` consumes that exact payload
+# without making a second network or revision decision.
 case $bootstrap_mode in
   stage)
     dotfiles_bootstrap_require_stage_directory \
       "$bootstrap_mode" "$stage_directory" || exit 2
-    dotfiles_bootstrap_require_cutover_revision
+    dotfiles_bootstrap_select_revision
     dotfiles_bootstrap_stage_payload \
-      "$DOTFILES_BOOTSTRAP_CUTOVER_REVISION" "$stage_directory"
+      "$DOTFILES_BOOTSTRAP_SELECTED_REVISION" "$stage_directory"
     exit 0
     ;;
   install-staged)
     dotfiles_bootstrap_require_stage_directory \
       "$bootstrap_mode" "$stage_directory" || exit 2
-    dotfiles_bootstrap_require_cutover_revision
+    dotfiles_bootstrap_select_revision
     dotfiles_bootstrap_staged_origin \
-      "$stage_directory" "$DOTFILES_BOOTSTRAP_CUTOVER_REVISION"
+      "$stage_directory" "$DOTFILES_BOOTSTRAP_SELECTED_REVISION"
     dotfiles_bootstrap_use_checkout_roots
     dotfiles_bootstrap_install_engine_origin \
-      "$DOTFILES_BOOTSTRAP_CUTOVER_REVISION" \
+      "$DOTFILES_BOOTSTRAP_STAGED_REVISION" \
       "$DOTFILES_BOOTSTRAP_STAGED_ORIGIN"
     dotfiles_bootstrap_adopt_client
     exit 0
@@ -408,17 +416,13 @@ dotfiles_bootstrap_use_checkout_roots
 # explicitly verify the tools that later dotfiles checks rely on so a partial
 # bootstrap failure is reported at the source. Keep CI setup non-quiet: the
 # dependency logs are the evidence we need when bootstrap behavior regresses.
-standalone_engine=false
-cutover_lock=$HOME/.local/lib/dotfiles/dot-cutover.lock
-if [[ -e "$cutover_lock" || -L "$cutover_lock" ]]; then
-  dot_revision=$(dotfiles_bootstrap_read_cutover "$cutover_lock") || {
-    echo "unsafe or malformed dot cutover lock: $cutover_lock" >&2
-    exit 1
-  }
-  dotfiles_bootstrap_locked_engine "$dot_revision"
-  standalone_engine=true
-fi
-if [[ "$standalone_engine" == true ]]; then
+dotfiles_bootstrap_select_revision
+if [[ -n $DOTFILES_BOOTSTRAP_SELECTED_REVISION ||
+  (-d $HOME/.git && ! -L $HOME/.git) ]]; then
+  # Post-cutover clients no longer carry a migration lock. Resolve main once,
+  # install that exact fetched object, and retain the historical lock only as a
+  # compatibility override for older callers of this immutable action release.
+  dotfiles_bootstrap_engine "$DOTFILES_BOOTSTRAP_SELECTED_REVISION"
   dotfiles_bootstrap_adopt_client
 else
   retry .local/bin/dot update --skip-pull
