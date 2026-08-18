@@ -175,6 +175,13 @@ cat >"$dot_repo/install.sh" <<'EOF'
 set -euo pipefail
 
 printf 'installer\n' >>"${DOTFILES_BOOTSTRAP_TEST_LOG:?}"
+if [[ -n ${DOTFILES_BOOTSTRAP_TEST_INSTALL_ROOTS_LOG:-} ]]; then
+  {
+    printf 'PREFIX=%s\n' "${PREFIX-<unset>}"
+    printf 'BIN_DIR=%s\n' "${BIN_DIR-<unset>}"
+    printf 'DOT_PUBLIC_LIB=%s\n' "${DOT_PUBLIC_LIB-<unset>}"
+  } >"$DOTFILES_BOOTSTRAP_TEST_INSTALL_ROOTS_LOG"
+fi
 checkout=${CGRAF78_CHECKOUT_INSTALL_DIR:-}
 if [[ -z "$checkout" ]]; then
   install_home=${SHDEPS_INSTALL_DIR:-$HOME/.local/share}
@@ -386,6 +393,7 @@ staged_log=$tmp/staged.log
 staged_env=$tmp/staged.env
 staged_path=$tmp/staged.path
 staged_xdg_env=$tmp/staged-xdg.env
+staged_install_roots=$tmp/staged-install-roots.log
 staged_client_origin=file://$tmp/staged-client-origin.git
 prepare_cutover_client "$staged_home" "$staged_client_origin" \
   "$dot_revision" detached
@@ -393,11 +401,16 @@ prepare_cutover_client "$staged_home" "$staged_client_origin" \
 : >"$staged_env"
 : >"$staged_path"
 : >"$staged_xdg_env"
-run_bootstrap_with_hostile_xdg "$staged_xdg_env" \
-  "$staged_home" "$staged_log" "$staged_env" "$staged_path" \
-  "file://$tmp/unreachable-dot-origin.git" install-staged "$stage_payload" \
-  "$stage_payload/bootstrap.sh" ||
-  fail 'staged Dot payload installation failed'
+(
+  export PREFIX=$tmp/termux-prefix
+  export BIN_DIR=$PREFIX/bin
+  export DOT_PUBLIC_LIB=$PREFIX/lib/dot
+  export DOTFILES_BOOTSTRAP_TEST_INSTALL_ROOTS_LOG=$staged_install_roots
+  run_bootstrap_with_hostile_xdg "$staged_xdg_env" \
+    "$staged_home" "$staged_log" "$staged_env" "$staged_path" \
+    "file://$tmp/unreachable-dot-origin.git" install-staged "$stage_payload" \
+    "$stage_payload/bootstrap.sh"
+) || fail 'staged Dot payload installation failed'
 [[ $(cat "$staged_log") == $'installer\ndot:init --branch dot-ci-bootstrap '"$staged_client_origin" ]] ||
   fail 'staged payload did not install and adopt the exact client checkout'
 [[ -x "$staged_home/.local/share/cgraf78/dot/bin/dot" ]] ||
@@ -410,6 +423,8 @@ staged_dot_origin="file://$stage_payload/dot-origin.git"
 [[ ! -s "$staged_path" ]] ||
   fail 'staged payload unexpectedly published full-host PATH state'
 assert_checkout_xdg_environment "$staged_xdg_env" 'staged payload installation'
+[[ $(cat "$staged_install_roots") == $'PREFIX='"$staged_home/.local"$'\nBIN_DIR='"$staged_home/.local/bin"$'\nDOT_PUBLIC_LIB='"$staged_home/.local/lib/dot" ]] ||
+  fail 'staged payload inherited foreign public installation roots'
 
 mismatch_home=$tmp/mismatch-home
 mismatch_log=$tmp/mismatch.log

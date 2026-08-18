@@ -172,7 +172,13 @@ dotfiles_bootstrap_install_engine_origin() {
   if [[ -n ${GITHUB_ENV:-} ]]; then
     printf 'SHDEPS_DOT_REPO=%s\n' "$origin_url" >>"$GITHUB_ENV"
   fi
-  GIT_NO_REPLACE_OBJECTS=1 bash "$installer"
+  # The runner's PREFIX can name a platform package tree (notably Termux).
+  # This action prepares the checked-out client, so keep Dot's command and
+  # public library on the same HOME-local surfaces used by every later update.
+  PREFIX=$HOME/.local \
+    BIN_DIR=$HOME/.local/bin \
+    DOT_PUBLIC_LIB=$HOME/.local/lib/dot \
+    GIT_NO_REPLACE_OBJECTS=1 bash "$installer"
 }
 
 dotfiles_bootstrap_locked_engine() {
