@@ -58,7 +58,7 @@ jobs:
         # This neutral action is the OS-matrix source of truth. Future Rust,
         # C++, or other reusable workflows should call the same action, then
         # run language-specific setup/tests against the returned matrix.
-        uses: cgraf78/actions/.github/actions/platform-matrix@761a286a8f06396e07339f7247eb350e172dfdce
+        uses: cgraf78/actions/.github/actions/platform-matrix@5a73eda280155fd2ff1009068ccf9a52f8c252d5
         with:
           matrix-set: ${{ inputs.matrix-set }}
 
@@ -75,7 +75,7 @@ jobs:
       - name: Install OS prerequisites
         # Keep first-party prerequisites pinned so an outer reusable-workflow
         # SHA controls every executable action in the call graph.
-        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@761a286a8f06396e07339f7247eb350e172dfdce
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@5a73eda280155fd2ff1009068ccf9a52f8c252d5
         with:
           matrix-name: ${{ matrix.name }}
           profiles: ${{ inputs.profiles }}
@@ -213,7 +213,7 @@ jobs:
 
       - name: Bootstrap dotfiles dependencies
         if: inputs.setup == 'dotfiles'
-        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@761a286a8f06396e07339f7247eb350e172dfdce
+        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@5a73eda280155fd2ff1009068ccf9a52f8c252d5
         env:
           # The explicit cross-repository token wins for private dependencies.
           # Full-provider public CI still needs authenticated release metadata:
