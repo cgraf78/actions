@@ -234,6 +234,27 @@ run_case shellcheck-connection \
 grep -Fq 'rerun-failed-jobs' "$tmp/shellcheck-connection/gh-calls" ||
   fail "ShellCheck prerequisite connection failure was not rerun"
 
+# The shared curl guard exits 28 after its bounded transport retries.
+# In the pinned ShellCheck action boundary that is the same retryable
+# transport condition as a connection reset, not a repository-owned lint
+# failure.
+mkdir -p "$tmp/shellcheck-stall-logs"
+write_jobs "$tmp/shellcheck-stall-jobs.json" \
+  '35:shell / ShellCheck:failure' \
+  '36:shell / Required:failure'
+cat >"$tmp/shellcheck-stall-logs/35.log" <<'EOF'
+Run cgraf78/actions/.github/actions/shell-ci-prereqs@8eaac8e384ae89e9c1aaf675dd23689cfe73fa7c
+  profiles: base,shellcheck
+  setup: none
+curl: (28) Operation too slow. Less than 1024 bytes/sec transferred the last 30 seconds
+Error: Process completed with exit code 28.
+EOF
+
+run_case shellcheck-stall \
+  "$tmp/shellcheck-stall-jobs.json" "$tmp/shellcheck-stall-logs"
+grep -Fq 'rerun-failed-jobs' "$tmp/shellcheck-stall/gh-calls" ||
+  fail "ShellCheck prerequisite bounded stall was not rerun"
+
 # A recovered curl warning followed by an integrity failure is not transport
 # infrastructure. Its final process exit does not match the earlier curl
 # diagnostic, so it must stay red even though inventory has not begun yet.
@@ -311,6 +332,33 @@ EOF
 run_case termux-partial "$tmp/termux-partial-jobs.json" "$tmp/termux-logs"
 if grep -Fq 'rerun-failed-jobs' "$tmp/termux-partial/gh-calls"; then
   fail "partial Termux signature was rerun"
+fi
+
+# Runner timeouts have no action-owned marker. The bounded allowlist therefore
+# needs both the exact named network bootstrap step and the runner's current
+# timeout text; an application timeout must remain red.
+mkdir -p "$tmp/shellcheck-timeout-logs" "$tmp/app-timeout-logs"
+write_jobs "$tmp/shellcheck-timeout-jobs.json" \
+  '29:shell / ShellCheck:failure' \
+  '30:shell / Required:failure'
+cat >"$tmp/shellcheck-timeout-logs/29.log" <<'EOF'
+Install ShellCheck prerequisites
+The action has timed out.
+EOF
+
+run_case shellcheck-timeout \
+  "$tmp/shellcheck-timeout-jobs.json" "$tmp/shellcheck-timeout-logs"
+grep -Fq 'rerun-failed-jobs' "$tmp/shellcheck-timeout/gh-calls" ||
+  fail "ShellCheck prerequisite timeout was not rerun"
+
+cat >"$tmp/app-timeout-logs/29.log" <<'EOF'
+Run tests
+The action has timed out.
+EOF
+
+run_case app-timeout "$tmp/shellcheck-timeout-jobs.json" "$tmp/app-timeout-logs"
+if grep -Fq 'rerun-failed-jobs' "$tmp/app-timeout/gh-calls"; then
+  fail "application timeout was rerun"
 fi
 
 write_jobs "$tmp/app-jobs.json" \

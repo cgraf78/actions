@@ -10,6 +10,118 @@ sudo_if_available() {
   fi
 }
 
+# Command prefix form of sudo_if_available, for the package commands that are
+# wrapped by `bounded`. A supervisor cannot exec a shell function, so those
+# call sites need the privilege decision as an expandable word instead.
+if command -v sudo >/dev/null 2>&1; then
+  SUDO=sudo
+else
+  SUDO=
+fi
+
+# Bound every package-manager network operation.
+#
+# Package managers do not fail fast on a stalled mirror: a wedged socket to
+# azure.archive.ubuntu.com leaves `apt-get update` blocked with no output and
+# no exit, so the job burns the workflow timeout instead of failing into the
+# retry path. Give each manager its native transfer timeout where it has one,
+# and wrap the whole command in a hard supervisor as the backstop for the ones
+# that do not.
+PKG_NETWORK_TIMEOUT=${PKG_NETWORK_TIMEOUT:-30}
+# Debian-family setup performs two independent retry loops: update and install.
+# Three 50s attempts for each, 5s/10s backoffs, and a 5s forced-kill grace
+# consume at most 6m. That leaves room for the capped pinned downloads below
+# and runner overhead inside the platform workflow's 10m prerequisite-step
+# cap.
+PKG_COMMAND_TIMEOUT=${PKG_COMMAND_TIMEOUT:-50}
+PKG_COMMAND_KILL_AFTER=${PKG_COMMAND_KILL_AFTER:-5}
+PKG_RETRIES=${PKG_RETRIES:-3}
+
+# Native per-transfer knobs. Retries stay at the manager level too, so a single
+# slow mirror is re-tried without re-running the whole (expensive) command.
+APT_NET_OPTS="-o Acquire::http::Timeout=$PKG_NETWORK_TIMEOUT -o Acquire::https::Timeout=$PKG_NETWORK_TIMEOUT -o Acquire::Retries=$PKG_RETRIES"
+DNF_NET_OPTS="--setopt=timeout=$PKG_NETWORK_TIMEOUT --setopt=retries=$PKG_RETRIES"
+APK_NET_OPTS="--timeout $PKG_NETWORK_TIMEOUT"
+
+# Shared download options for every curl in this action.
+#
+# `--retry` alone does not help a transfer that connects and then goes quiet:
+# curl waits indefinitely for bytes that never arrive. `--speed-limit` with
+# `--speed-time` detects a stalled body, while `--max-time` makes the bound
+# absolute even when a transfer keeps trickling. Keep the retry window short
+# enough that the ShellCheck path (two apt loops, then this download) still
+# finishes or emits its failure before the workflow's 10m prerequisite-step
+# cap.
+CURL_SPEED_TIME=${CURL_SPEED_TIME:-30}
+CURL_RETRIES=${CURL_RETRIES:-2}
+CURL_RETRY_DELAY=${CURL_RETRY_DELAY:-1}
+CURL_MAX_TIME=${CURL_MAX_TIME:-60}
+CURL_NET_OPTS="--connect-timeout 10 --max-time $CURL_MAX_TIME --speed-limit 1024 --speed-time $CURL_SPEED_TIME --retry $CURL_RETRIES --retry-all-errors --retry-delay $CURL_RETRY_DELAY"
+
+bounded() {
+  # Its short `-k` spelling is shared by GNU coreutils and BusyBox, unlike a
+  # GNU-only long option. Stock macOS lacks `timeout`, so use its preinstalled
+  # Python to supervise a separate process group there; silently running brew
+  # unsupervised would defeat the prerequisite-step bound.
+  if command -v timeout >/dev/null 2>&1; then
+    timeout -k "$PKG_COMMAND_KILL_AFTER" "$PKG_COMMAND_TIMEOUT" "$@"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 - "$PKG_COMMAND_TIMEOUT" "$PKG_COMMAND_KILL_AFTER" "$@" <<'PY'
+import os
+import signal
+import subprocess
+import sys
+
+timeout = float(sys.argv[1])
+grace = float(sys.argv[2])
+process = subprocess.Popen(sys.argv[3:], start_new_session=True)
+try:
+    status = process.wait(timeout=timeout)
+except subprocess.TimeoutExpired:
+    os.killpg(process.pid, signal.SIGTERM)
+    try:
+        status = process.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+        status = 124
+
+sys.exit(status if status >= 0 else 128 - status)
+PY
+  else
+    echo 'bounded package command requires timeout or python3' >&2
+    return 127
+  fi
+}
+
+retry_pkg() {
+  # Covers mirror flake that the managers' own retry knobs do not, and turns a
+  # `bounded` timeout kill into a retry rather than an immediate job failure.
+  _attempt=1
+  while :; do
+    # Capture the status inside `else`. A bare `$?` after `fi` reads the exit
+    # status of the `if` compound itself, which is 0 when the condition fails
+    # and there is no else branch - that would report an exhausted retry loop
+    # as success.
+    if bounded "$@"; then
+      return 0
+    else
+      _rc=$?
+    fi
+    if [ "$_attempt" -ge "$PKG_RETRIES" ]; then
+      # Stable marker consumed by infra-retry's allowlist. Keep the wording in
+      # sync with is_retryable_bounded_stall in .github/actions/infra-retry.
+      echo "infra-stall: package command exhausted bounded retries" >&2
+      echo "package command failed after $PKG_RETRIES attempts (exit $_rc): $*" >&2
+      return "$_rc"
+    fi
+    _delay=$((_attempt * 5))
+    echo "package command failed (attempt $_attempt/$PKG_RETRIES, exit $_rc); retrying in ${_delay}s..." >&2
+    sleep "$_delay"
+    _attempt=$((_attempt + 1))
+  done
+}
+
 verify_sha256() {
   expected=$1
   file=$2
@@ -50,24 +162,26 @@ install_package_lists() {
       if [ -n "$brew_pkgs" ]; then
         # Package lists are assembled by trusted profile names.
         # shellcheck disable=SC2086
-        brew install $brew_pkgs
+        retry_pkg brew install $brew_pkgs
       fi
       ;;
     Debian | Ubuntu | WSL)
       if [ -n "$apt_pkgs" ]; then
-        sudo_if_available apt-get update
-        # Package lists are assembled by trusted profile names.
+        # Package lists and network options are assembled here, not by callers.
         # shellcheck disable=SC2086
-        sudo_if_available apt-get install -y $apt_pkgs
+        retry_pkg $SUDO apt-get $APT_NET_OPTS update
+        # shellcheck disable=SC2086
+        retry_pkg $SUDO apt-get $APT_NET_OPTS install -y $apt_pkgs
       fi
       ;;
     Arch)
       pacman-key --init
       pacman-key --populate
       if [ -n "$arch_pkgs" ]; then
-        # Package lists are assembled by trusted profile names.
+        # pacman has no transfer-timeout option of its own, so the `bounded`
+        # supervisor in retry_pkg is the only stall guard on this platform.
         # shellcheck disable=SC2086
-        pacman -Syu --noconfirm $arch_pkgs
+        retry_pkg pacman -Syu --noconfirm $arch_pkgs
       fi
       ;;
     CentOS* | Fedora)
@@ -75,18 +189,19 @@ install_package_lists() {
         if [ "$MATRIX_NAME" != "Fedora" ] && needs_centos_epel; then
           # Keep the base image small, but enable EPEL for profiles whose dnf
           # packages are not shipped in the base CentOS Stream repos.
-          dnf install -y --allowerasing epel-release
+          # shellcheck disable=SC2086
+          retry_pkg dnf $DNF_NET_OPTS install -y --allowerasing epel-release
         fi
         # Package lists are assembled by trusted profile names.
         # shellcheck disable=SC2086
-        dnf install -y --allowerasing $dnf_pkgs
+        retry_pkg dnf $DNF_NET_OPTS install -y --allowerasing $dnf_pkgs
       fi
       ;;
     Alpine)
       if [ -n "$apk_pkgs" ]; then
         # Package lists are assembled by trusted profile names.
         # shellcheck disable=SC2086
-        apk add --no-cache $apk_pkgs
+        retry_pkg apk $APK_NET_OPTS add --no-cache $apk_pkgs
       fi
       ;;
   esac
@@ -129,7 +244,8 @@ install_yq_v4() {
 
   tmp="${RUNNER_TEMP:-/tmp}/yq"
   rm -f "$tmp"
-  if ! curl -fsSL --retry 3 --retry-all-errors --retry-delay 1 \
+  # shellcheck disable=SC2086
+  if ! curl -fsSL $CURL_NET_OPTS \
     "https://github.com/mikefarah/yq/releases/download/v${version}/yq_${os}_${arch}" \
     -o "$tmp"; then
     rm -f "$tmp"
@@ -166,7 +282,8 @@ install_pinned_shellcheck() {
 
   rm -rf "$install_dir"
   mkdir -p "$RUNNER_TEMP"
-  curl -fsSL --retry 3 --retry-all-errors --retry-delay 1 \
+  # shellcheck disable=SC2086
+  curl -fsSL $CURL_NET_OPTS \
     "$url" -o "$archive"
   verify_sha256 "$checksum" "$archive"
   tar -xJf "$archive" -C "$RUNNER_TEMP"

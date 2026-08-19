@@ -10,6 +10,8 @@ PREREQS_DIR=$REPO_ROOT/.github/actions/shell-ci-prereqs
 . "$PREREQS_DIR/profiles.sh"
 # shellcheck source=.github/actions/shell-ci-prereqs/dotfiles.sh
 . "$PREREQS_DIR/dotfiles.sh"
+# shellcheck source=.github/actions/shell-ci-prereqs/checkrun.sh
+. "$PREREQS_DIR/checkrun.sh"
 
 # shellcheck disable=SC2329 # Sourced setup code invokes this test seam indirectly.
 install_package_lists() {
@@ -52,6 +54,39 @@ assert_contains() {
       ;;
   esac
 }
+
+# Debian-family prerequisite setup can retry both `apt-get update` and
+# `apt-get install`. Account for every bounded attempt, backoff, and forced
+# kill grace so the full path leaves runner overhead inside the 10m step cap.
+kill_after=${PKG_COMMAND_KILL_AFTER:-0}
+retry_window=$((2 * ((PKG_COMMAND_TIMEOUT + kill_after) * PKG_RETRIES + \
+  5 * PKG_RETRIES * (PKG_RETRIES - 1) / 2)))
+if [ "$retry_window" -gt 450 ]; then
+  printf 'not ok - package retry window (%ss) leaves too little headroom in the 10m step cap\n' \
+    "$retry_window" >&2
+  exit 1
+fi
+
+printf 'ok - package retries fit beneath the prerequisite step timeout\n'
+
+# Ubuntu's pinned ShellCheck path performs those two apt loops and then a
+# separate curl retry loop. Curl's `--retry N` means one initial try plus N
+# retries, and `--max-time` caps each try, so include all of them when proving
+# the complete path cannot spend the runner's 10m step cap before emitting a
+# classified failure.
+curl_retries=${CURL_RETRIES:-3}
+curl_max_time=${CURL_MAX_TIME:-60}
+curl_retry_delay=${CURL_RETRY_DELAY:-1}
+curl_window=$(((curl_retries + 1) * curl_max_time + \
+  curl_retries * curl_retry_delay))
+shellcheck_window=$((retry_window + curl_window))
+if [ "$shellcheck_window" -gt 550 ]; then
+  printf 'not ok - ShellCheck prerequisite window (%ss) leaves too little headroom in the 10m step cap\n' \
+    "$shellcheck_window" >&2
+  exit 1
+fi
+
+printf 'ok - ShellCheck download and package retries fit beneath the step timeout\n'
 
 export PROFILES=procps
 brew_pkgs=
@@ -127,33 +162,92 @@ MOCK
   chmod +x "$mock_bin/$command"
 done
 
+# lib.sh chooses the sudo command prefix when it is sourced. Keep the fixture
+# portable between a passwordless CI sudo and a local sudo that prompts, while
+# still exercising the production prefix form used by retry_pkg.
+cat >"$mock_bin/sudo" <<'MOCK'
+#!/bin/sh
+exec "$@"
+MOCK
+chmod +x "$mock_bin/sudo"
+
 PATH="$mock_bin:$PATH"
 export PATH
+
+cat >"$mock_bin/timeout" <<'MOCK'
+#!/bin/sh
+printf 'timeout %s\n' "$*" >>"$command_log"
+MOCK
+chmod +x "$mock_bin/timeout"
+
+: >"$command_log"
+bounded true
+assert_eq 'timeout -k 5 50 true' "$(cat "$command_log")" \
+  'bounded package command uses portable forced-kill syntax'
+
+# Hosted macOS has no GNU/BusyBox timeout command. Its fallback must still
+# enter a real supervisor rather than executing Homebrew unsupervised.
+fallback_bin=$mock_bin/python-fallback
+mkdir -p "$fallback_bin"
+cat >"$fallback_bin/python3" <<'MOCK'
+#!/bin/sh
+printf 'python3 %s\n' "$*" >>"$command_log"
+MOCK
+chmod +x "$fallback_bin/python3"
+: >"$command_log"
+(
+  # shellcheck disable=SC2030 # The fallback's PATH is intentionally isolated.
+  PATH=$fallback_bin
+  export PATH
+  bounded true
+)
+assert_eq 'python3 - 50 5 true' "$(cat "$command_log")" \
+  'bounded package command uses the macOS Python supervisor'
 
 export MATRIX_NAME=Debian
 install_dotfiles_bootstrap_prereqs
 assert_contains \
-  'apt-get install -y git curl sudo openssh-client lsof netcat-openbsd procps python3 cron fd-find ripgrep hostname' \
+  'apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 install -y git curl sudo openssh-client lsof netcat-openbsd procps python3 cron fd-find ripgrep hostname' \
   "$(cat "$command_log")" 'dotfiles Debian installs required system commands'
 
 : >"$command_log"
 export MATRIX_NAME='CentOS Stream'
 install_dotfiles_bootstrap_prereqs
 assert_contains \
-  'dnf install -y --allowerasing epel-release' \
+  'dnf --setopt=timeout=30 --setopt=retries=3 install -y --allowerasing epel-release' \
   "$(cat "$command_log")" 'dotfiles CentOS enables capability packages'
 assert_contains \
-  'dnf install -y --allowerasing git curl sudo openssh-clients lsof nmap-ncat procps-ng python3 cronie fd-find ripgrep hostname' \
+  'dnf --setopt=timeout=30 --setopt=retries=3 install -y --allowerasing git curl sudo openssh-clients lsof nmap-ncat procps-ng python3 cronie fd-find ripgrep hostname' \
   "$(cat "$command_log")" 'dotfiles dnf installs required system commands'
 
 : >"$command_log"
 export MATRIX_NAME=Alpine
 install_dotfiles_bootstrap_prereqs
 assert_contains \
-  'apk add --no-cache git curl sudo bash coreutils shellcheck lua5.4 openssh-client lsof netcat-openbsd procps python3 dcron fd ripgrep' \
+  'apk --timeout 30 add --no-cache git curl sudo bash coreutils shellcheck lua5.4 openssh-client lsof netcat-openbsd procps python3 dcron fd ripgrep' \
   "$(cat "$command_log")" 'dotfiles Alpine installs required system commands'
 
 printf 'ok - dotfiles setup composes shared system-command profiles\n'
+
+# Checkrun is a named setup mode rather than a profile list, but it executes
+# in the same capped prerequisite step. Keep its package-manager path behind
+# the shared bounded retry and native network controls as well.
+# shellcheck disable=SC2329 # Called indirectly by install_checkrun_prereqs.
+install_yq_v4() {
+  :
+}
+: >"$command_log"
+export MATRIX_NAME=Debian
+install_checkrun_prereqs
+assert_contains \
+  'apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update' \
+  "$(cat "$command_log")" 'checkrun Debian updates with bounded apt controls'
+assert_contains \
+  'apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 install -y bash git curl ca-certificates jq python3 python3-pip python3-venv zsh tar gzip unzip xz-utils' \
+  "$(cat "$command_log")" 'checkrun Debian installs with bounded apt controls'
+unset -f install_yq_v4
+
+printf 'ok - checkrun setup uses bounded package controls\n'
 
 (
   # Re-source the production helper after replacing commands used by the
@@ -219,7 +313,7 @@ MOCK
   }
 
   # Each installer test owns an isolated command path and runner directory.
-  # shellcheck disable=SC2030
+  # shellcheck disable=SC2030,SC2031 # This subshell owns an isolated mock PATH.
   export PATH="$yq_mock_bin:$PATH"
   # shellcheck disable=SC2030
   export RUNNER_TEMP="$yq_tmp/runner"
@@ -231,8 +325,9 @@ MOCK
     'https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_linux_amd64' \
     "$log" 'pinned yq release URL'
   assert_contains \
-    '--retry 3 --retry-all-errors --retry-delay 1' \
+    '--retry 2 --retry-all-errors --retry-delay 1' \
     "$log" 'pinned yq bounded download retry'
+  assert_contains '--max-time 60' "$log" 'pinned yq total download cap'
   assert_contains \
     'fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4' \
     "$log" 'pinned yq checksum'
@@ -356,8 +451,9 @@ MOCK
     'https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz' \
     "$log" 'pinned ShellCheck release URL'
   assert_contains \
-    '--retry 3 --retry-all-errors --retry-delay 1' \
+    '--retry 2 --retry-all-errors --retry-delay 1' \
     "$log" 'pinned ShellCheck bounded download retry'
+  assert_contains '--max-time 60' "$log" 'pinned ShellCheck total download cap'
   assert_contains \
     '8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198' \
     "$log" 'pinned ShellCheck checksum'

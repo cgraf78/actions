@@ -55,7 +55,7 @@ jobs:
         # This action is the shared OS policy used by shell, Rust, and future
         # language-specific CI workflows. Rust owns only the language setup and
         # commands below.
-        uses: cgraf78/actions/.github/actions/platform-matrix@6dbd54f28872490ac3e76ec1f19bea91da74171c
+        uses: cgraf78/actions/.github/actions/platform-matrix@eef6cc1fa7fb9d39dbde5aa24859ba873101af36
         with:
           matrix-set: ${{ inputs.matrix-set }}
 
@@ -70,7 +70,7 @@ jobs:
     name: ${{ matrix.name }}
     steps:
       - name: Install OS prerequisites
-        uses: cgraf78/actions/.github/actions/rust-ci-prereqs@6dbd54f28872490ac3e76ec1f19bea91da74171c
+        uses: cgraf78/actions/.github/actions/rust-ci-prereqs@eef6cc1fa7fb9d39dbde5aa24859ba873101af36
         with:
           matrix-name: ${{ matrix.name }}
 

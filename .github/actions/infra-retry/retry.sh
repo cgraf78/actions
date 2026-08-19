@@ -65,8 +65,8 @@ is_retryable_shellcheck_download() {
   grep -Fq 'setup: none' "$log" || return 1
   ! grep -Fq '=== repository ShellCheck inventory ===' "$log" || return 1
 
-  final_curl=$(grep -E 'curl: \((22|56)\)' "$log" | tail -n 1) || return 1
-  final_exit=$(grep -E 'Process completed with exit code (22|56)\.' "$log" |
+  final_curl=$(grep -E 'curl: \((22|28|56)\)' "$log" | tail -n 1) || return 1
+  final_exit=$(grep -E 'Process completed with exit code (22|28|56)\.' "$log" |
     tail -n 1) || return 1
 
   case "$final_exit" in
@@ -83,8 +83,43 @@ is_retryable_shellcheck_download() {
           ;;
       esac
       ;;
+    *'exit code 28.'*)
+      # Curl uses 28 for both connect and low-speed timeouts. The surrounding
+      # action/profile signature above proves this was the pinned ShellCheck
+      # transport, so retrying cannot mask a caller's arbitrary curl failure.
+      [[ "$final_curl" == *'curl: (28) '* ]] && return 0
+      ;;
   esac
   return 1
+}
+
+is_retryable_bounded_stall() {
+  local log=$1
+
+  # `retry_pkg` prints this exact token when a package command has exhausted
+  # its bounded attempts. It is a marker this repo owns, not runner prose, so
+  # classification does not depend on any package manager's wording.
+  grep -Fq 'infra-stall: package command exhausted bounded retries' "$log"
+}
+
+is_retryable_step_timeout() {
+  local log=$1
+
+  # A `timeout-minutes` kill is the deliberate outcome of a network step that
+  # stalled, so it must be retryable - otherwise adding those caps would just
+  # convert a slow-but-green job into a red one with no automatic recovery.
+  #
+  # Unlike the markers above, the timeout notice is emitted by the runner after
+  # it SIGKILLs the step, so there is no opportunity for our own code to print a
+  # token. Matching runner prose is therefore unavoidable here; keep it narrow
+  # by also requiring the run to be one of the network bootstrap steps that
+  # carries an explicit cap, so a genuinely hung test suite stays red.
+  grep -Eq \
+    "The action has timed out\\.|has timed out after [0-9]+ minutes|exceeded the maximum execution time of [0-9]+ minutes" \
+    "$log" || return 1
+
+  grep -Eq \
+    "Install OS prerequisites|Install ShellCheck prerequisites|Bootstrap dotfiles dependencies" "$log"
 }
 
 validate_inputs() {
@@ -163,6 +198,12 @@ main() {
       retryable_leaf=$((retryable_leaf + 1))
     elif is_retryable_shellcheck_download "$log"; then
       notice "allowlisted ShellCheck prerequisite download failure: $name"
+      retryable_leaf=$((retryable_leaf + 1))
+    elif is_retryable_bounded_stall "$log"; then
+      notice "allowlisted bounded package-command stall: $name"
+      retryable_leaf=$((retryable_leaf + 1))
+    elif is_retryable_step_timeout "$log"; then
+      notice "allowlisted network step timeout: $name"
       retryable_leaf=$((retryable_leaf + 1))
     else
       notice "not an allowlisted infrastructure failure: $name"

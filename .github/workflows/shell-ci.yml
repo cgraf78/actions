@@ -97,9 +97,16 @@ jobs:
     name: ShellCheck
     if: ${{ inputs.shellcheck-inventory-path != '' }}
     runs-on: ubuntu-24.04
+    # This path only installs prerequisites, checks out the caller, and runs
+    # ShellCheck. A cap catches a silent prerequisite download without letting
+    # it hold the required aggregate indefinitely.
+    timeout-minutes: 15
     steps:
       - name: Install ShellCheck prerequisites
-        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@6dbd54f28872490ac3e76ec1f19bea91da74171c
+        # Keep this in step with the platform prerequisite cap. The shared
+        # retry controller recognizes this named network-bootstrap timeout.
+        timeout-minutes: 10
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@eef6cc1fa7fb9d39dbde5aa24859ba873101af36
         with:
           matrix-name: Ubuntu
           profiles: base,shellcheck
@@ -111,7 +118,7 @@ jobs:
           persist-credentials: false
 
       - name: Validate and lint shell inventory
-        uses: cgraf78/actions/.github/actions/shellcheck-inventory@6dbd54f28872490ac3e76ec1f19bea91da74171c
+        uses: cgraf78/actions/.github/actions/shellcheck-inventory@eef6cc1fa7fb9d39dbde5aa24859ba873101af36
         with:
           inventory-path: ${{ inputs.shellcheck-inventory-path }}
           exclude-codes: ${{ inputs.shellcheck-exclude-codes }}

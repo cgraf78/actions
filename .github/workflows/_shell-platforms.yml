@@ -50,6 +50,7 @@ permissions:
 jobs:
   select-platforms:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       matrix: ${{ steps.platforms.outputs.matrix }}
     steps:
@@ -58,7 +59,7 @@ jobs:
         # This neutral action is the OS-matrix source of truth. Future Rust,
         # C++, or other reusable workflows should call the same action, then
         # run language-specific setup/tests against the returned matrix.
-        uses: cgraf78/actions/.github/actions/platform-matrix@6dbd54f28872490ac3e76ec1f19bea91da74171c
+        uses: cgraf78/actions/.github/actions/platform-matrix@eef6cc1fa7fb9d39dbde5aa24859ba873101af36
         with:
           matrix-set: ${{ inputs.matrix-set }}
 
@@ -66,6 +67,13 @@ jobs:
     needs: select-platforms
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container || '' }}
+    # Every step here is network-bound against package mirrors and release
+    # hosts. Without an explicit cap a stalled transfer inherits the 6h default
+    # and holds the required check open instead of failing, which also keeps
+    # retry-infrastructure.yml from ever seeing it: that workflow only reacts to
+    # a failed conclusion. The slowest healthy platform (macOS) finishes in
+    # ~13m, so this leaves generous headroom while still bounding a stall.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.select-platforms.outputs.matrix) }}
@@ -75,7 +83,10 @@ jobs:
       - name: Install OS prerequisites
         # Keep first-party prerequisites pinned so an outer reusable-workflow
         # SHA controls every executable action in the call graph.
-        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@6dbd54f28872490ac3e76ec1f19bea91da74171c
+        # Healthy runs finish in ~90s; a wedged apt mirror has been seen to hang
+        # here for tens of minutes with no output.
+        timeout-minutes: 10
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@eef6cc1fa7fb9d39dbde5aa24859ba873101af36
         with:
           matrix-name: ${{ matrix.name }}
           profiles: ${{ inputs.profiles }}
@@ -213,7 +224,12 @@ jobs:
 
       - name: Bootstrap dotfiles dependencies
         if: inputs.setup == 'dotfiles'
-        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@6dbd54f28872490ac3e76ec1f19bea91da74171c
+        # A healthy full bootstrap is ~2m even when every dependency is
+        # reinstalled; observed stalls sit at 40m+ inside a single unbounded
+        # transfer. Cap the step so the surrounding retry paths get a failure to
+        # act on rather than a job that eventually succeeds after 45m.
+        timeout-minutes: 20
+        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@eef6cc1fa7fb9d39dbde5aa24859ba873101af36
         env:
           # The explicit cross-repository token wins for private dependencies.
           # Full-provider public CI still needs authenticated release metadata:
