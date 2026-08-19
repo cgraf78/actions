@@ -2738,15 +2738,21 @@ compgen -G "$lock_detach_parent/.example-tool.install.lock.claim.*.*/owner/canon
   >/dev/null ||
   fail "killed post-detachment claimant did not preserve its tombstone"
 
+# These two recovery processes each perform a complete managed checkout update
+# after the detached claim has been reclaimed.  The second must wait for the
+# first live generation, and macOS can take longer than the former five-second
+# test ceiling to clone the local fixture.  Keep the race bounded without
+# treating correct serialization as a lock failure.
+lock_detach_timeout=30
 CHECKOUT_TEST_LOG="$tmp/lock-detach-recover-one.log" \
-  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=5 \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS="$lock_detach_timeout" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$lock_detach_managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
   "$active_bash" -s <"$lock_source/install.sh" \
   >"$tmp/lock-detach-recover-one.out" 2>&1 &
 lock_detach_one_pid=$!
 CHECKOUT_TEST_LOG="$tmp/lock-detach-recover-two.log" \
-  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=5 \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS="$lock_detach_timeout" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$lock_detach_managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
   "$active_bash" -s <"$lock_source/install.sh" \
