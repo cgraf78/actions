@@ -6,6 +6,8 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=.github/actions/package-manager/lib.sh
 . "$root/.github/actions/package-manager/lib.sh"
 
+[[ $PKG_COMMAND_TIMEOUT -eq 120 ]]
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 

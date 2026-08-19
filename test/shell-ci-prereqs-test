@@ -59,12 +59,12 @@ assert_contains() {
 
 # Debian-family prerequisite setup can retry both `apt-get update` and
 # `apt-get install`. Account for every bounded attempt, backoff, and forced
-# kill grace so the full path leaves runner overhead inside the 10m step cap.
+# kill grace so the full path leaves runner overhead inside the 20m step cap.
 kill_after=${PKG_COMMAND_KILL_AFTER:-0}
 retry_window=$((2 * ((PKG_COMMAND_TIMEOUT + kill_after) * PKG_RETRIES + \
   5 * PKG_RETRIES * (PKG_RETRIES - 1) / 2)))
-if [ "$retry_window" -gt 450 ]; then
-  printf 'not ok - package retry window (%ss) leaves too little headroom in the 10m step cap\n' \
+if [ "$retry_window" -gt 900 ]; then
+  printf 'not ok - package retry window (%ss) leaves too little headroom in the 20m step cap\n' \
     "$retry_window" >&2
   exit 1
 fi
@@ -74,7 +74,7 @@ printf 'ok - package retries fit beneath the prerequisite step timeout\n'
 # Ubuntu's pinned ShellCheck path performs those two apt loops and then a
 # separate curl retry loop. Curl's `--retry N` means one initial try plus N
 # retries, and `--max-time` caps each try, so include all of them when proving
-# the complete path cannot spend the runner's 10m step cap before emitting a
+# the complete path cannot spend the runner's 20m step cap before emitting a
 # classified failure.
 curl_retries=${CURL_RETRIES:-3}
 curl_max_time=${CURL_MAX_TIME:-60}
@@ -82,8 +82,8 @@ curl_retry_delay=${CURL_RETRY_DELAY:-1}
 curl_window=$(((curl_retries + 1) * curl_max_time + \
   curl_retries * curl_retry_delay))
 shellcheck_window=$((retry_window + curl_window))
-if [ "$shellcheck_window" -gt 550 ]; then
-  printf 'not ok - ShellCheck prerequisite window (%ss) leaves too little headroom in the 10m step cap\n' \
+if [ "$shellcheck_window" -gt 1150 ]; then
+  printf 'not ok - ShellCheck prerequisite window (%ss) leaves too little headroom in the 20m step cap\n' \
     "$shellcheck_window" >&2
   exit 1
 fi
@@ -184,7 +184,7 @@ chmod +x "$mock_bin/timeout"
 
 : >"$command_log"
 bounded true
-assert_eq 'timeout -k 5 50 true' "$(cat "$command_log")" \
+assert_eq 'timeout -k 5 120 true' "$(cat "$command_log")" \
   'bounded package command uses portable forced-kill syntax'
 
 # Hosted macOS has no GNU/BusyBox timeout command. Its fallback must still
@@ -203,7 +203,7 @@ chmod +x "$fallback_bin/python3"
   export PATH
   bounded true
 )
-assert_eq 'python3 - 50 5 true' "$(cat "$command_log")" \
+assert_eq 'python3 - 120 5 true' "$(cat "$command_log")" \
   'bounded package command uses the macOS Python supervisor'
 
 export MATRIX_NAME=Debian

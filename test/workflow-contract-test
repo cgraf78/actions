@@ -21,11 +21,11 @@ check() {
 
 # The live Termux job reserves 20 minutes for caller code. Prove the worst-case
 # bounded APK and three guest apt windows still leave five minutes for emulator
-# boot, checkout transport, and other runner overhead under the 40-minute cap.
-termux_job_window=$((30 * 60))
+# boot, checkout transport, and other runner overhead under the 35-minute cap.
+termux_job_window=$((35 * 60))
 termux_caller_window=1200
 termux_apk_window=$(((1 + 1) * 45 + 1))
-termux_apt_window=$((3 * (60 + 5)))
+termux_apt_window=$((3 * (120 + 5)))
 termux_overhead=$((termux_job_window - termux_caller_window - \
   termux_apk_window - termux_apt_window))
 if [[ "$termux_overhead" -lt 300 ]]; then
@@ -67,8 +67,8 @@ contracts() {
   check '.jobs.shellcheck.name == "ShellCheck"' shell-ci.yml
   check '.jobs.shellcheck.if == "${{ inputs.shellcheck-inventory-path != '"'"''"'"' }}"' shell-ci.yml
   check '.jobs.shellcheck.runs-on == "ubuntu-24.04"' shell-ci.yml
-  check '.jobs.shellcheck.timeout-minutes == 15' shell-ci.yml
-  check '.jobs.shellcheck.steps[] | select(.name == "Install ShellCheck prerequisites")."timeout-minutes" == 10' shell-ci.yml
+  check '.jobs.shellcheck.timeout-minutes == 25' shell-ci.yml
+  check '.jobs.shellcheck.steps[] | select(.name == "Install ShellCheck prerequisites")."timeout-minutes" == 20' shell-ci.yml
   check ".jobs.shellcheck.steps[] | select(.name == \"Install ShellCheck prerequisites\").uses == \"cgraf78/actions/.github/actions/shell-ci-prereqs@$actions_lock\"" shell-ci.yml
   check '.jobs.shellcheck.steps[] | select(.name == "Install ShellCheck prerequisites").with."matrix-name" == "Ubuntu"' shell-ci.yml
   check '.jobs.shellcheck.steps[] | select(.name == "Install ShellCheck prerequisites").with.profiles == "base,shellcheck"' shell-ci.yml
@@ -92,6 +92,8 @@ contracts() {
   check '.on.workflow_call.inputs.dotfiles-provider.default == false' _shell-platforms.yml
   check '.on.workflow_call.inputs.dotfiles-provider.required == false' _shell-platforms.yml
   check '.on.workflow_call.inputs.dotfiles-provider.type == "boolean"' _shell-platforms.yml
+  check '.jobs.platform."timeout-minutes" == 45' _shell-platforms.yml
+  check '.jobs.platform.steps[] | select(.name == "Install OS prerequisites")."timeout-minutes" == 20' _shell-platforms.yml
   check ".jobs.platform.steps[] | select(.name == \"Install OS prerequisites\").uses == \"cgraf78/actions/.github/actions/shell-ci-prereqs@$actions_lock\"" _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Configure lightweight dotfiles bootstrap").if == "inputs.setup == '\''dotfiles'\'' && !inputs.dotfiles-provider"' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Configure lightweight dotfiles bootstrap").run == "echo \"DOT_INIT_SKIP_PROVIDER=1\" >> \"$GITHUB_ENV\""' _shell-platforms.yml
@@ -113,7 +115,7 @@ contracts() {
   check '.jobs.runtime.with.setup == "${{ inputs.setup }}"' termux-ci.yml
   check '.on.workflow_call.inputs.profiles.default == "runtime"' termux-ci.yml
   check '.on.workflow_call.inputs.profiles.default == "runtime"' _termux-ci.yml
-  check '.jobs.termux."timeout-minutes" == 30' _termux-ci.yml
+  check '.jobs.termux."timeout-minutes" == 35' _termux-ci.yml
 
   check '.jobs.termux.steps[] | select(.name == "Stage exact Dot bootstrap payload").if == "inputs.setup == '\''dotfiles'\''"' _termux-ci.yml
   check ".jobs.termux.steps[] | select(.name == \"Stage exact Dot bootstrap payload\").uses == \"cgraf78/actions/.github/actions/dotfiles-bootstrap@$actions_lock\"" _termux-ci.yml
@@ -153,7 +155,7 @@ contracts() {
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("infra-stall: Termux package command exhausted bounded retries")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("if [[ \"$rc\" -eq 124 ]]")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("Acquire::http::Timeout=30")' _termux-ci.yml
-  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("timeout -k 5 60")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("timeout -k 5 120")' _termux-ci.yml
   check '.jobs.platform.steps[] | select(.name == "Set up Checkrun dev tools").run | contains("--connect-timeout 10 --max-time 120")' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Set up Checkrun dev tools").run | contains("rustup-init.sh")' _shell-platforms.yml
 

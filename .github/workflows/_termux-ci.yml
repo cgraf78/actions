@@ -50,7 +50,7 @@ jobs:
   termux:
     name: Android / Termux x86_64
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -58,7 +58,7 @@ jobs:
 
       - name: Stage exact Dot bootstrap payload
         if: inputs.setup == 'dotfiles'
-        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@0a435fb29fd05d5bf2937470d4b700172e198815
+        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@d67086bbaa3a67ed9ea6f8166e9d5c878c9dbd23
         env:
           HOME: ${{ github.workspace }}
         with:
@@ -74,7 +74,7 @@ jobs:
 
       - name: Configure host Android NDK toolchain
         if: inputs.host-command != '' && inputs.rust-toolchain != ''
-        uses: cgraf78/actions/.github/actions/android-rust-toolchain@0a435fb29fd05d5bf2937470d4b700172e198815
+        uses: cgraf78/actions/.github/actions/android-rust-toolchain@d67086bbaa3a67ed9ea6f8166e9d5c878c9dbd23
         with:
           rust-target: x86_64-linux-android
 
@@ -208,7 +208,7 @@ jobs:
           has_profile shellcheck && packages+=(shellcheck libandroid-utimes)
           termux_pkg() {
             local rc
-            if timeout -k 5 60 "$@"; then
+            if timeout -k 5 120 "$@"; then
               return 0
             else
               rc=$?
