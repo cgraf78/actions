@@ -842,6 +842,7 @@ checkout_lock_parse_timeout() {
 acquire_checkout_lock_v1() {
   local timeout_input=${CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS:-$checkout_lock_timeout_default}
   local timeout cleanup_status
+  local recovery_state recovery_target recovery_nonce
   local started=$SECONDS waiting_reported=0 elapsed
 
   checkout_lock_parse_timeout "$timeout_input" || {
@@ -884,12 +885,30 @@ acquire_checkout_lock_v1() {
         fi
         ;;
       owner-dead)
+        recovery_state=$CHECKOUT_LOCK_STATE
+        recovery_target=$CHECKOUT_LOCK_CLASSIFIED_OWNER_TARGET
+        recovery_nonce=$CHECKOUT_LOCK_CLASSIFIED_OWNER_NONCE
         if checkout_lock_recover_dead_owner; then
+          continue
+        fi
+        checkout_lock_classify || return 1
+        if [[ "$CHECKOUT_LOCK_STATE" != "$recovery_state" ||
+          ${CHECKOUT_LOCK_CLASSIFIED_OWNER_TARGET:-} != "$recovery_target" ||
+          ${CHECKOUT_LOCK_CLASSIFIED_OWNER_NONCE:-} != "$recovery_nonce" ]]; then
           continue
         fi
         ;;
       claim-dead)
+        recovery_state=$CHECKOUT_LOCK_STATE
+        recovery_target=$CHECKOUT_LOCK_CLASSIFIED_OWNER_TARGET
+        recovery_nonce=$CHECKOUT_LOCK_CLASSIFIED_OWNER_NONCE
         if checkout_lock_recover_dead_claim; then
+          continue
+        fi
+        checkout_lock_classify || return 1
+        if [[ "$CHECKOUT_LOCK_STATE" != "$recovery_state" ||
+          ${CHECKOUT_LOCK_CLASSIFIED_OWNER_TARGET:-} != "$recovery_target" ||
+          ${CHECKOUT_LOCK_CLASSIFIED_OWNER_NONCE:-} != "$recovery_nonce" ]]; then
           continue
         fi
         ;;
