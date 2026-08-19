@@ -286,6 +286,10 @@ jobs:
         shell: bash
         run: test/dotfiles-bootstrap-test
 
+      - name: Test dotfiles bootstrap command bounds
+        shell: bash
+        run: test/dotfiles-bootstrap-bounds-test
+
       - name: Test infrastructure retry classification
         shell: bash
         run: test/infra-retry-test

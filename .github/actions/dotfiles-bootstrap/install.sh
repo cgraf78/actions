@@ -1,26 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-retry() {
-  # The engine bootstrap and Mise install depend on external package hosts.
-  # Retry each command as a unit so flakes do not mask whether bootstrap works.
-  local attempt rc delay
-  for attempt in 1 2 3; do
-    if "$@"; then
-      return 0
-    else
-      rc=$?
-    fi
-
-    if [ "$attempt" -eq 3 ]; then
-      return "$rc"
-    fi
-
-    delay=$((attempt * 15))
-    echo "$* failed (attempt $attempt/3, exit $rc); retrying in ${delay}s..." >&2
-    sleep "$delay"
-  done
-}
+action_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=SCRIPTDIR/bounded.sh
+source "$action_dir/bounded.sh"
 
 dotfiles_bootstrap_file_has_mode() {
   local path=$1 expected=$2 mode
@@ -85,7 +68,8 @@ dotfiles_bootstrap_prepare_engine_origin() {
   [[ ! -e "$origin" && ! -L "$origin" ]] || return 1
   repo_url=${DOTFILES_BOOTSTRAP_DOT_REPO_URL:-https://github.com/cgraf78/dot.git}
   dotfiles_bootstrap_engine_git init --quiet --bare "$origin"
-  retry dotfiles_bootstrap_engine_git --git-dir="$origin" fetch --quiet \
+  dotfiles_bootstrap_retry Git env GIT_NO_REPLACE_OBJECTS=1 \
+    git --git-dir="$origin" fetch --quiet \
     --force --no-tags --depth=1 "$repo_url" refs/heads/main
   fetched=$(dotfiles_bootstrap_engine_git --git-dir="$origin" \
     rev-parse --verify 'FETCH_HEAD^{commit}')
@@ -172,7 +156,9 @@ dotfiles_bootstrap_stage_payload() {
   dotfiles_bootstrap_prepare_engine_origin "$destination" ||
     return 1
   cp "$0" "$destination/bootstrap.sh" || return 1
+  cp "$action_dir/bounded.sh" "$destination/bounded.sh" || return 1
   chmod 0500 "$destination/bootstrap.sh"
+  chmod 0400 "$destination/bounded.sh"
   marker_tmp=$destination/.payload-v1.tmp
   (
     umask 077
@@ -284,7 +270,7 @@ dotfiles_bootstrap_adopt_client() {
   # documented environment settings as `dot update -v` to show per-dependency
   # and per-hook progress without shell tracing or an environment dump.
   DOT_VERBOSE=1 SHDEPS_LOG_LEVEL=2 \
-    retry "$runtime" init --branch "$branch" "$origin"
+    dotfiles_bootstrap_retry Dot "$runtime" init --branch "$branch" "$origin"
 }
 
 dotfiles_bootstrap_require_stage_directory() {
@@ -367,7 +353,7 @@ elif command -v mise >/dev/null 2>&1 && mise --version >/dev/null 2>&1; then
     # reduces rate-limit failures while keeping the workflow read-only.
     export MISE_GITHUB_TOKEN="$GITHUB_TOKEN"
   fi
-  retry mise install
+  dotfiles_bootstrap_retry Mise mise install
 
   # These commands are required by later dotfiles checks. Verifying them here
   # makes bootstrap failures point to the install step instead of a later test.
