@@ -4,7 +4,7 @@
 # options and retry classification here so Rust, musl, and shell setup fail in
 # the same bounded, retryable way when a runner mirror stops transferring.
 PKG_NETWORK_TIMEOUT=${PKG_NETWORK_TIMEOUT:-30}
-PKG_COMMAND_TIMEOUT=${PKG_COMMAND_TIMEOUT:-50}
+PKG_COMMAND_TIMEOUT=${PKG_COMMAND_TIMEOUT:-120}
 PKG_COMMAND_KILL_AFTER=${PKG_COMMAND_KILL_AFTER:-5}
 PKG_RETRIES=${PKG_RETRIES:-3}
 

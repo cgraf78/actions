@@ -85,7 +85,7 @@ _run "$log" 1 RUNNER_OS=Linux
 out=$(<"$log")
 _assert_contains "linux: refreshes the package index" "Acquire::Retries=3 update" "$out"
 _assert_contains "linux: bounds apt transport" "Acquire::http::Timeout=30" "$out"
-_assert_contains "linux: supervises apt" "timeout -k 5 50" "$out"
+_assert_contains "linux: supervises apt" "timeout -k 5 120" "$out"
 _assert_contains "linux: installs musl-tools" "musl-tools" "$out"
 _assert_contains "linux: installs without recommends" "--no-install-recommends" "$out"
 # The release matrix already installs its target through the toolchain action,

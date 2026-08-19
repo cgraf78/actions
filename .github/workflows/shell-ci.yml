@@ -100,12 +100,12 @@ jobs:
     # This path only installs prerequisites, checks out the caller, and runs
     # ShellCheck. A cap catches a silent prerequisite download without letting
     # it hold the required aggregate indefinitely.
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Install ShellCheck prerequisites
         # Keep this in step with the platform prerequisite cap. The shared
         # retry controller recognizes this named network-bootstrap timeout.
-        timeout-minutes: 10
+        timeout-minutes: 20
         uses: cgraf78/actions/.github/actions/shell-ci-prereqs@0a435fb29fd05d5bf2937470d4b700172e198815
         with:
           matrix-name: Ubuntu
