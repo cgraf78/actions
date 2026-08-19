@@ -87,6 +87,35 @@ is_retryable_shellcheck_download() {
   return 1
 }
 
+is_retryable_bounded_stall() {
+  local log=$1
+
+  # `retry_pkg` prints this exact token when a package command has exhausted
+  # its bounded attempts. It is a marker this repo owns, not runner prose, so
+  # classification does not depend on any package manager's wording.
+  grep -Fq 'infra-stall: package command exhausted bounded retries' "$log"
+}
+
+is_retryable_step_timeout() {
+  local log=$1
+
+  # A `timeout-minutes` kill is the deliberate outcome of a network step that
+  # stalled, so it must be retryable - otherwise adding those caps would just
+  # convert a slow-but-green job into a red one with no automatic recovery.
+  #
+  # Unlike the markers above, the timeout notice is emitted by the runner after
+  # it SIGKILLs the step, so there is no opportunity for our own code to print a
+  # token. Matching runner prose is therefore unavoidable here; keep it narrow
+  # by also requiring the run to be one of the network bootstrap steps that
+  # carries an explicit cap, so a genuinely hung test suite stays red.
+  grep -Eq \
+    "has timed out after [0-9]+ minutes|exceeded the maximum execution time of [0-9]+ minutes" \
+    "$log" || return 1
+
+  grep -Eq \
+    "Install OS prerequisites|Bootstrap dotfiles dependencies" "$log"
+}
+
 validate_inputs() {
   [[ "$TARGET_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || {
     notice "invalid repository: $TARGET_REPOSITORY"
@@ -163,6 +192,12 @@ main() {
       retryable_leaf=$((retryable_leaf + 1))
     elif is_retryable_shellcheck_download "$log"; then
       notice "allowlisted ShellCheck prerequisite download failure: $name"
+      retryable_leaf=$((retryable_leaf + 1))
+    elif is_retryable_bounded_stall "$log"; then
+      notice "allowlisted bounded package-command stall: $name"
+      retryable_leaf=$((retryable_leaf + 1))
+    elif is_retryable_step_timeout "$log"; then
+      notice "allowlisted network step timeout: $name"
       retryable_leaf=$((retryable_leaf + 1))
     else
       notice "not an allowlisted infrastructure failure: $name"
