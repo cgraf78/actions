@@ -218,7 +218,7 @@ jobs:
           persist-credentials: false
 
       - name: Verify internal Actions sync
-        uses: cgraf78/actions/.github/actions/verify-consumer-sync@d67086bbaa3a67ed9ea6f8166e9d5c878c9dbd23
+        uses: cgraf78/actions/.github/actions/verify-consumer-sync@548172b65c9ef30fe5871b6fa685c7680c12848b
 
       - name: Install actionlint
         timeout-minutes: 5
