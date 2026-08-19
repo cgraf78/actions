@@ -272,6 +272,14 @@ contracts() {
   check '[.jobs.quality.steps[] | select(.name == "Lint shell scripts")] | length == 0' ci.yml
   check '.on.schedule[0].cron == "7 7 * * *"' ci.yml
   check '.on | has("workflow_dispatch")' ci.yml
+  check '.on.workflow_dispatch.inputs.retry_canary.default == "none"' ci.yml
+  check '.on.workflow_dispatch.inputs.retry_canary.type == "choice"' ci.yml
+  check '.on.workflow_dispatch.inputs.retry_canary.options | join(",") == "none,infra,application"' ci.yml
+  check '.jobs."retry-canary".if == "github.event_name == '\''workflow_dispatch'\'' && github.ref == format('\''refs/heads/{0}'\'', github.event.repository.default_branch) && inputs.retry_canary != '\''none'\''"' ci.yml
+  check '.jobs."retry-canary".permissions.contents == "read"' ci.yml
+  check '.jobs."retry-canary".steps[0].env.CANARY_MODE == "${{ inputs.retry_canary }}"' ci.yml
+  check '.jobs."retry-canary".steps[0].run | contains("infra-stall: package command exhausted bounded retries")' ci.yml
+  check '.jobs."retry-canary".steps[0].run | contains("deliberate application failure")' ci.yml
   check '.jobs.shell-smoke.with.matrix-set == "full"' ci.yml
   check '.jobs.rust-smoke.with.matrix-set == "auto"' ci.yml
   check '.jobs.rust-smoke.with.android-package-smoke-command != null' ci.yml

@@ -135,6 +135,17 @@ jobs:
 or check out code from the failed branch, and its token is scoped to Actions
 reruns plus read-only repository contents.
 
+The Actions repository keeps a default-branch-only live canary for this
+boundary because pull-request CI cannot make GitHub load a changed
+`workflow_run` controller. After changing the controller or its classifier,
+dispatch `CI` on `main` twice: first with `retry_canary=infra`, then with
+`retry_canary=application`. Both source runs deliberately fail. The infra run
+must gain exactly one failed-job rerun and stop at attempt 2; the application
+run must remain at attempt 1. The canary has read-only contents permission and
+cannot dispatch or rerun anything itself. Ordinary push, pull-request,
+schedule, and `workflow_dispatch` runs default to `retry_canary=none` and skip
+the canary job.
+
 ## ShellCheck Inventory Action
 
 The `shellcheck-inventory` composite action validates a repository-owned list of
