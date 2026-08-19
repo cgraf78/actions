@@ -177,6 +177,30 @@ grep -Fq 'rerun-failed-jobs' "$tmp/termux/gh-calls" ||
 grep -Fq 'allowlisted Termux bootstrap failure' "$tmp/termux/stdout" ||
   fail "Termux bootstrap retry decision was not reported"
 
+write_jobs "$tmp/termux-package-jobs.json" \
+  '19:rust / Termux runtime / Runtime / Android / Termux x86_64:failure' \
+  '20:rust / Termux runtime / Required:failure'
+cat >"$tmp/termux-logs/19.log" <<'EOF'
+infra-stall: Termux package command exhausted bounded retries
+Error: Process completed with exit code 124.
+EOF
+
+run_case termux-package "$tmp/termux-package-jobs.json" "$tmp/termux-logs"
+grep -Fq 'rerun-failed-jobs' "$tmp/termux-package/gh-calls" ||
+  fail "bounded Termux package failure was not rerun"
+
+cat >"$tmp/termux-logs/19.log" <<'EOF'
+E: Unable to correct problems, you have held broken packages.
+package command failed after 2 attempts (exit 100): apt-get install libandroid-utimes
+Error: Process completed with exit code 100.
+EOF
+run_case termux-package-conflict \
+  "$tmp/termux-package-jobs.json" "$tmp/termux-logs"
+if grep -Fq 'rerun-failed-jobs' \
+  "$tmp/termux-package-conflict/gh-calls"; then
+  fail "Termux package conflict was infrastructure-rerun"
+fi
+
 # The pinned ShellCheck archive is downloaded by the shared prerequisite
 # action before repository lint starts. Exhausted GitHub transport retries are
 # safe to rerun, but the signature deliberately includes that action boundary

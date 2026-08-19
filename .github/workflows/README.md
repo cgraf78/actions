@@ -21,6 +21,11 @@ The `infra-retry` composite action is an opt-in companion for caller
 leaf job matches a narrowly allowlisted infrastructure signature. See
 `docs/workflow-api.md` for the caller and security contract.
 
+Pull requests unit-test its classifier and workflow contract. GitHub loads
+`workflow_run` only from the default branch, so `CI` also exposes an explicit
+`retry_canary` dispatch input for live post-merge validation; normal runs leave
+it at `none`.
+
 The public shell, Rust, and Termux CI workflows expose a `Required`
 aggregation job. Shell and Rust always require their Android/Termux work;
 caller branch protection should require `<caller job> / Required`. Internal

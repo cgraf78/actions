@@ -1,15 +1,9 @@
 #!/bin/sh
 set -eu
 
-sudo_if_available() {
-  # Hosted Linux runners have sudo, while container jobs usually run as root
-  # with no sudo binary. The Rust matrix uses both forms.
-  if command -v sudo >/dev/null 2>&1; then
-    sudo "$@"
-  else
-    "$@"
-  fi
-}
+SCRIPT_DIR=${0%/*}
+# shellcheck source=../package-manager/lib.sh
+. "$SCRIPT_DIR/../package-manager/lib.sh"
 
 case "$MATRIX_NAME" in
   macOS)
@@ -18,8 +12,10 @@ case "$MATRIX_NAME" in
     # slowest runner unless a future Rust repo proves it needs more.
     ;;
   Debian | Ubuntu | WSL)
-    sudo_if_available apt-get update
-    sudo_if_available apt-get install -y \
+    # shellcheck disable=SC2086
+    retry_pkg $SUDO apt-get $APT_NET_OPTS update
+    # shellcheck disable=SC2086
+    retry_pkg $SUDO apt-get $APT_NET_OPTS install -y \
       bash \
       build-essential \
       ca-certificates \
@@ -30,7 +26,7 @@ case "$MATRIX_NAME" in
   Arch)
     pacman-key --init
     pacman-key --populate
-    pacman -Syu --noconfirm \
+    retry_pkg pacman -Syu --noconfirm \
       base-devel \
       bash \
       ca-certificates \
@@ -39,7 +35,8 @@ case "$MATRIX_NAME" in
       pkgconf
     ;;
   CentOS* | Fedora)
-    dnf install -y --allowerasing \
+    # shellcheck disable=SC2086
+    retry_pkg dnf $DNF_NET_OPTS install -y --allowerasing \
       bash \
       ca-certificates \
       curl \
@@ -50,7 +47,8 @@ case "$MATRIX_NAME" in
       pkgconf-pkg-config
     ;;
   Alpine)
-    apk add --no-cache \
+    # shellcheck disable=SC2086
+    retry_pkg apk $APK_NET_OPTS add --no-cache \
       bash \
       build-base \
       ca-certificates \

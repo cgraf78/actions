@@ -8,11 +8,50 @@ on:
   schedule:
     - cron: "7 7 * * *"
   workflow_dispatch:
+    inputs:
+      retry_canary:
+        description: Deliberately fail CI to validate the default-branch retry controller.
+        required: false
+        type: choice
+        default: none
+        options:
+          - none
+          - infra
+          - application
 
 permissions:
   contents: read
 
 jobs:
+  retry-canary:
+    name: Retry controller canary
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      inputs.retry_canary != 'none'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Emit deliberate canary failure
+        shell: bash
+        env:
+          CANARY_MODE: ${{ inputs.retry_canary }}
+        run: |
+          case "$CANARY_MODE" in
+            infra)
+              echo 'infra-stall: package command exhausted bounded retries' >&2
+              ;;
+            application)
+              echo 'deliberate application failure' >&2
+              ;;
+            *)
+              echo "unsupported retry canary mode: $CANARY_MODE" >&2
+              exit 2
+              ;;
+          esac
+          exit 1
+
   shell-smoke:
     name: Shell smoke
     uses: ./.github/workflows/shell-ci.yml
@@ -175,7 +214,7 @@ jobs:
           persist-credentials: false
 
       - name: Verify internal Actions sync
-        uses: cgraf78/actions/.github/actions/verify-consumer-sync@eef6cc1fa7fb9d39dbde5aa24859ba873101af36
+        uses: cgraf78/actions/.github/actions/verify-consumer-sync@0a435fb29fd05d5bf2937470d4b700172e198815
 
       - name: Install actionlint
         shell: bash
@@ -267,6 +306,14 @@ jobs:
       - name: Test musl build prerequisites
         shell: bash
         run: test/musl-prereqs-test
+
+      - name: Test bounded package manager policy
+        shell: bash
+        run: test/package-manager-test
+
+      - name: Test Rust prerequisites
+        shell: bash
+        run: test/rust-prereqs-test
 
       - name: Lint shell inventory
         uses: ./.github/actions/shellcheck-inventory

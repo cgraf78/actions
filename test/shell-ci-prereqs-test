@@ -4,6 +4,8 @@ set -eu
 REPO_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 PREREQS_DIR=$REPO_ROOT/.github/actions/shell-ci-prereqs
 
+# shellcheck source=.github/actions/package-manager/lib.sh
+. "$PREREQS_DIR/../package-manager/lib.sh"
 # shellcheck source=.github/actions/shell-ci-prereqs/lib.sh
 . "$PREREQS_DIR/lib.sh"
 # shellcheck source=.github/actions/shell-ci-prereqs/profiles.sh

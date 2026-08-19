@@ -58,7 +58,7 @@ jobs:
 
       - name: Stage exact Dot bootstrap payload
         if: inputs.setup == 'dotfiles'
-        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@eef6cc1fa7fb9d39dbde5aa24859ba873101af36
+        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@0a435fb29fd05d5bf2937470d4b700172e198815
         env:
           HOME: ${{ github.workspace }}
         with:
@@ -74,7 +74,7 @@ jobs:
 
       - name: Configure host Android NDK toolchain
         if: inputs.host-command != '' && inputs.rust-toolchain != ''
-        uses: cgraf78/actions/.github/actions/android-rust-toolchain@eef6cc1fa7fb9d39dbde5aa24859ba873101af36
+        uses: cgraf78/actions/.github/actions/android-rust-toolchain@0a435fb29fd05d5bf2937470d4b700172e198815
         with:
           rust-target: x86_64-linux-android
 
@@ -100,7 +100,9 @@ jobs:
         run: |
           apk="$RUNNER_TEMP/termux.apk"
           curl --fail --location --show-error --silent \
-            --retry 3 --retry-all-errors --retry-delay 1 \
+            --connect-timeout 10 --max-time 45 \
+            --speed-limit 1024 --speed-time 30 \
+            --retry 1 --retry-all-errors --retry-delay 1 \
             "$TERMUX_APK_URL" --output "$apk"
           printf '%s  %s\n' "$TERMUX_APK_SHA256" "$apk" | sha256sum --check --strict
 
@@ -200,16 +202,41 @@ jobs:
           has_profile fd && packages+=(fd)
           has_profile ripgrep && packages+=(ripgrep)
           has_profile hostname && packages+=(inetutils)
-          has_profile shellcheck && packages+=(shellcheck)
-          apt-get update
+          # Termux's rolling shellcheck package has intermittently omitted its
+          # runtime library edge; request it explicitly so a successful install
+          # cannot leave an executable that fails before caller lint begins.
+          has_profile shellcheck && packages+=(shellcheck libandroid-utimes)
+          termux_pkg() {
+            local rc
+            if timeout -k 5 60 "$@"; then
+              return 0
+            else
+              rc=$?
+            fi
+            # Apt owns two transport retries inside this supervised attempt.
+            # Only the supervisor deadline opts the workflow into one failed-
+            # job rerun; dependency/conflict failures remain terminal.
+            if [[ "$rc" -eq 124 ]]; then
+              echo 'infra-stall: Termux package command exhausted bounded retries' >&2
+            fi
+            return "$rc"
+          }
+          apt_net_opts=(
+            -o Acquire::http::Timeout=30
+            -o Acquire::https::Timeout=30
+            -o Acquire::Retries=2
+          )
+          termux_pkg apt-get "${apt_net_opts[@]}" update
           # The pinned APK can predate the live Termux repository. Termux does
           # not support partial upgrades: installing a current executable
           # beside bootstrap-era shared libraries can leave it unable to link.
           # Converge the base image first, then install caller capabilities.
-          DEBIAN_FRONTEND=noninteractive apt-get \
+          DEBIAN_FRONTEND=noninteractive termux_pkg apt-get \
+            "${apt_net_opts[@]}" \
             -o Dpkg::Options::=--force-confold \
             full-upgrade -y
-          DEBIAN_FRONTEND=noninteractive apt-get \
+          DEBIAN_FRONTEND=noninteractive termux_pkg apt-get \
+            "${apt_net_opts[@]}" \
             -o Dpkg::Options::=--force-confold \
             install -y "${packages[@]}"
           termux_exec_lib="$PREFIX/lib/libtermux-exec.so"
