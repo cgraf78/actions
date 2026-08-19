@@ -1,5 +1,6 @@
 # type<TAB>repository-relative path
 # `fixture` rows are discovered but intentionally not linted as programs.
+program	.github/actions/dotfiles-bootstrap/bounded.sh
 program	.github/actions/dotfiles-bootstrap/install.sh
 program	.github/actions/infra-retry/retry.sh
 program	.github/actions/musl-build-prereqs/install.sh
@@ -33,6 +34,7 @@ program	test/consumer-sync-test
 program	test/checkout-installer-bash32-test
 program	test/checkout-installer-development-test
 program	test/checkout-installer-test
+program	test/dotfiles-bootstrap-bounds-test
 program	test/dotfiles-bootstrap-test
 program	test/dotfiles-public-deps-test
 program	test/examples-test
