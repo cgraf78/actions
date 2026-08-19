@@ -202,7 +202,10 @@ jobs:
           has_profile fd && packages+=(fd)
           has_profile ripgrep && packages+=(ripgrep)
           has_profile hostname && packages+=(inetutils)
-          has_profile shellcheck && packages+=(shellcheck)
+          # Termux's rolling shellcheck package has intermittently omitted its
+          # runtime library edge; request it explicitly so a successful install
+          # cannot leave an executable that fails before caller lint begins.
+          has_profile shellcheck && packages+=(shellcheck libandroid-utimes)
           termux_pkg() {
             local rc
             if timeout -k 5 60 "$@"; then
