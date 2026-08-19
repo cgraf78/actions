@@ -9,6 +9,11 @@ set -euo pipefail
 retry_delays=${RELEASE_UPLOAD_RETRY_DELAYS:-1,3}
 IFS=, read -r -a delays <<<"$retry_delays"
 
+run_gh() {
+  python3 "$GITHUB_ACTION_PATH/run-with-timeout.py" \
+    "${RELEASE_GH_TIMEOUT_SECONDS:-120}" 5 -- gh "$@"
+}
+
 # The glob is trusted caller configuration from the reusable workflow. Preserve
 # its historical shell expansion contract while making an empty match fatal.
 shopt -s nullglob
@@ -36,7 +41,7 @@ remote_size() {
   local asset_name=$1
   local response
 
-  if ! response=$(gh release view "$TAG" \
+  if ! response=$(run_gh release view "$TAG" \
     --repo "$GITHUB_REPOSITORY" --json assets); then
     return 2
   fi
@@ -94,7 +99,7 @@ upload_one() {
 
     if [[ "$state" == unknown ]]; then
       upload_status=1
-    elif gh release upload "$TAG" "$asset" \
+    elif run_gh release upload "$TAG" "$asset" \
       --repo "$GITHUB_REPOSITORY" --clobber; then
       upload_status=0
     else
