@@ -50,7 +50,10 @@ jobs:
   termux:
     name: Android / Termux x86_64
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    # Inner limits reserve at most 600s for boot and 2025s for sequential ADB
+    # work, including the 1200s caller command. Keep at least five minutes of
+    # outer headroom for checkout, downloads, host setup, and runner overhead.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -297,30 +300,26 @@ jobs:
             printf "payload_b64='%s'\n" "$payload_b64"
             printf "payload_name_b64='%s'\n" "$payload_name_b64"
             cat <<'SCRIPT'
+          # shellcheck source=.github/scripts/termux-adb.sh
+          source "$GITHUB_WORKSPACE/.github/scripts/termux-adb.sh"
           apk="$RUNNER_TEMP/termux.apk"
           echo "Installing Termux APK"
-          adb install -r "$apk"
+          termux_adb 120 install -r "$apk"
           echo "Launching Termux"
-          timeout 30 adb shell am start -n com.termux/.app.TermuxActivity
+          termux_adb 30 shell am start -n com.termux/.app.TermuxActivity
 
           echo "Waiting for Termux bootstrap"
-          ready=0
-          for _ in $(seq 1 60); do
-            if adb shell run-as com.termux test -x files/usr/bin/bash; then
-              ready=1
-              break
-            fi
-            sleep 1
-          done
-          if [[ "$ready" -ne 1 ]]; then
+          if ! termux_wait_for_runtime 30 3 1; then
             echo "Termux bootstrap did not become ready" >&2
             exit 1
           fi
 
           echo "Copying caller checkout"
-          adb shell run-as com.termux mkdir -p files/home/project files/usr/tmp
+          termux_adb 30 shell run-as com.termux \
+            mkdir -p files/home/project files/usr/tmp
           tar -C "$GITHUB_WORKSPACE" -cf - . |
-            timeout 120 adb shell run-as com.termux tar -C files/home/project -xf -
+            termux_adb 120 shell run-as com.termux \
+              tar -C files/home/project -xf -
 
           setup=$(printf %s "$setup_b64" | base64 -d)
           if [[ "$setup" == dotfiles ]]; then
@@ -352,22 +351,25 @@ jobs:
             # `test -e` is false for a dangling symlink. Reject `-L`
             # separately so extraction preserves the no-clobber boundary for
             # every existing path type.
-            if adb shell run-as com.termux test -e "files/usr/tmp/$payload_name" ||
-              adb shell run-as com.termux test -L "files/usr/tmp/$payload_name"; then
+            if termux_adb 30 shell run-as com.termux \
+              test -e "files/usr/tmp/$payload_name" ||
+              termux_adb 30 shell run-as com.termux \
+                test -L "files/usr/tmp/$payload_name"; then
               echo "Termux Dot bootstrap destination already exists: $payload_name" >&2
               exit 1
             fi
             echo "Copying exact Dot bootstrap payload"
             tar -C "$payload_parent" -cf - "$payload_name" |
-              timeout 120 adb shell run-as com.termux tar -C files/usr/tmp -xf -
+              termux_adb 120 shell run-as com.termux \
+                tar -C files/usr/tmp -xf -
           fi
 
           echo "Copying Termux runner"
           tar -C "$RUNNER_TEMP" -cf - termux-ci-command termux-ci-runner |
-            timeout 30 adb shell run-as com.termux tar -C files/usr/tmp -xf -
+            termux_adb 30 shell run-as com.termux tar -C files/usr/tmp -xf -
 
           echo "Running caller command inside Termux"
-          timeout 1200 adb shell run-as com.termux \
+          termux_adb 1200 shell run-as com.termux \
             files/usr/bin/bash files/usr/tmp/termux-ci-runner
           SCRIPT
           } >"$RUNNER_TEMP/termux-ci-host.sh"
@@ -380,5 +382,6 @@ jobs:
           arch: x86_64
           target: default
           disable-animations: true
+          emulator-boot-timeout: 600
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
           script: bash "$RUNNER_TEMP/termux-ci-host.sh"
