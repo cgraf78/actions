@@ -28,7 +28,12 @@ fi
 # and wrap the whole command in a hard supervisor as the backstop for the ones
 # that do not.
 PKG_NETWORK_TIMEOUT=${PKG_NETWORK_TIMEOUT:-30}
-PKG_COMMAND_TIMEOUT=${PKG_COMMAND_TIMEOUT:-600}
+# Debian-family setup performs two independent retry loops: update and install.
+# Three 60s attempts for each, 5s/10s backoffs, and a 5s forced-kill grace
+# consume at most 7m, leaving three minutes for action and runner overhead
+# inside the platform workflow's 10m prerequisite-step cap.
+PKG_COMMAND_TIMEOUT=${PKG_COMMAND_TIMEOUT:-60}
+PKG_COMMAND_KILL_AFTER=${PKG_COMMAND_KILL_AFTER:-5}
 PKG_RETRIES=${PKG_RETRIES:-3}
 
 # Native per-transfer knobs. Retries stay at the manager level too, so a single
@@ -46,11 +51,12 @@ APK_NET_OPTS="--timeout $PKG_NETWORK_TIMEOUT"
 CURL_NET_OPTS="--connect-timeout 10 --speed-limit 1024 --speed-time 60 --retry 3 --retry-all-errors --retry-delay 1"
 
 bounded() {
-  # `timeout` is coreutils and is absent from a stock macOS runner. Falling
+  # `timeout` is absent from a stock macOS runner. Its short `-k` spelling is
+  # shared by GNU coreutils and BusyBox, unlike a GNU-only long option. Falling
   # back to an unsupervised run keeps brew working rather than failing the
   # action outright on the one platform that cannot supervise.
   if command -v timeout >/dev/null 2>&1; then
-    timeout "$PKG_COMMAND_TIMEOUT" "$@"
+    timeout -k "$PKG_COMMAND_KILL_AFTER" "$PKG_COMMAND_TIMEOUT" "$@"
   else
     "$@"
   fi

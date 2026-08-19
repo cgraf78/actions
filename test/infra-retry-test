@@ -313,6 +313,33 @@ if grep -Fq 'rerun-failed-jobs' "$tmp/termux-partial/gh-calls"; then
   fail "partial Termux signature was rerun"
 fi
 
+# Runner timeouts have no action-owned marker. The bounded allowlist therefore
+# needs both the exact named network bootstrap step and the runner's current
+# timeout text; an application timeout must remain red.
+mkdir -p "$tmp/shellcheck-timeout-logs" "$tmp/app-timeout-logs"
+write_jobs "$tmp/shellcheck-timeout-jobs.json" \
+  '29:shell / ShellCheck:failure' \
+  '30:shell / Required:failure'
+cat >"$tmp/shellcheck-timeout-logs/29.log" <<'EOF'
+Install ShellCheck prerequisites
+The action has timed out.
+EOF
+
+run_case shellcheck-timeout \
+  "$tmp/shellcheck-timeout-jobs.json" "$tmp/shellcheck-timeout-logs"
+grep -Fq 'rerun-failed-jobs' "$tmp/shellcheck-timeout/gh-calls" ||
+  fail "ShellCheck prerequisite timeout was not rerun"
+
+cat >"$tmp/app-timeout-logs/29.log" <<'EOF'
+Run tests
+The action has timed out.
+EOF
+
+run_case app-timeout "$tmp/shellcheck-timeout-jobs.json" "$tmp/app-timeout-logs"
+if grep -Fq 'rerun-failed-jobs' "$tmp/app-timeout/gh-calls"; then
+  fail "application timeout was rerun"
+fi
+
 write_jobs "$tmp/app-jobs.json" \
   '21:shell / Platforms / Arch:failure' \
   '22:shell / Required:failure'

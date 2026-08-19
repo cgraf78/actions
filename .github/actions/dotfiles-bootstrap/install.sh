@@ -279,8 +279,12 @@ dotfiles_bootstrap_adopt_client() {
   fi
   # Invoke the runtime just installed rather than the tracked client front door:
   # on a clean checkout that front door cannot dispatch until this adoption
-  # step publishes the standalone checkout and public library.
-  retry "$runtime" init --branch "$branch" "$origin"
+  # step publishes the standalone checkout and public library. `init` forwards
+  # through Dot's update convergence but does not accept `-v`; use the same two
+  # documented environment settings as `dot update -v` to show per-dependency
+  # and per-hook progress without shell tracing or an environment dump.
+  DOT_VERBOSE=1 SHDEPS_LOG_LEVEL=2 \
+    retry "$runtime" init --branch "$branch" "$origin"
 }
 
 dotfiles_bootstrap_require_stage_directory() {

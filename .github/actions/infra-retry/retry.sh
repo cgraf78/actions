@@ -109,11 +109,11 @@ is_retryable_step_timeout() {
   # by also requiring the run to be one of the network bootstrap steps that
   # carries an explicit cap, so a genuinely hung test suite stays red.
   grep -Eq \
-    "has timed out after [0-9]+ minutes|exceeded the maximum execution time of [0-9]+ minutes" \
+    "The action has timed out\\.|has timed out after [0-9]+ minutes|exceeded the maximum execution time of [0-9]+ minutes" \
     "$log" || return 1
 
   grep -Eq \
-    "Install OS prerequisites|Bootstrap dotfiles dependencies" "$log"
+    "Install OS prerequisites|Install ShellCheck prerequisites|Bootstrap dotfiles dependencies" "$log"
 }
 
 validate_inputs() {

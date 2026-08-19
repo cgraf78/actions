@@ -60,7 +60,7 @@ assert_checkout_xdg_environment() {
   local environment_log=$1 label=$2
   local expected
 
-  expected=$'XDG_CONFIG_HOME=<unset>\nXDG_DATA_HOME=<unset>\nXDG_STATE_HOME=<unset>\nXDG_CACHE_HOME=<unset>\nXDG_RUNTIME_DIR=<unset>\nDOTFILES_BOOTSTRAP_PRESERVE=preserved'
+  expected=$'XDG_CONFIG_HOME=<unset>\nXDG_DATA_HOME=<unset>\nXDG_STATE_HOME=<unset>\nXDG_CACHE_HOME=<unset>\nXDG_RUNTIME_DIR=<unset>\nDOTFILES_BOOTSTRAP_PRESERVE=preserved\nDOT_VERBOSE=1\nSHDEPS_LOG_LEVEL=2'
   [[ $(cat "$environment_log") == "$expected" ]] ||
     fail "$label did not isolate checkout-owned XDG roots"
 }
@@ -180,6 +180,8 @@ if [[ -n ${DOTFILES_BOOTSTRAP_TEST_ENV_LOG:-} ]]; then
     printf 'XDG_RUNTIME_DIR=%s\n' "${XDG_RUNTIME_DIR-<unset>}"
     printf 'DOTFILES_BOOTSTRAP_PRESERVE=%s\n' \
       "${DOTFILES_BOOTSTRAP_PRESERVE-<unset>}"
+    printf 'DOT_VERBOSE=%s\n' "${DOT_VERBOSE-<unset>}"
+    printf 'SHDEPS_LOG_LEVEL=%s\n' "${SHDEPS_LOG_LEVEL-<unset>}"
   } >>"$DOTFILES_BOOTSTRAP_TEST_ENV_LOG"
 fi
 DOT

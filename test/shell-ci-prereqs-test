@@ -53,6 +53,20 @@ assert_contains() {
   esac
 }
 
+# Debian-family prerequisite setup can retry both `apt-get update` and
+# `apt-get install`. Account for every bounded attempt, backoff, and forced
+# kill grace so the full path leaves runner overhead inside the 10m step cap.
+kill_after=${PKG_COMMAND_KILL_AFTER:-0}
+retry_window=$((2 * ((PKG_COMMAND_TIMEOUT + kill_after) * PKG_RETRIES + \
+  5 * PKG_RETRIES * (PKG_RETRIES - 1) / 2)))
+if [ "$retry_window" -gt 450 ]; then
+  printf 'not ok - package retry window (%ss) leaves too little headroom in the 10m step cap\n' \
+    "$retry_window" >&2
+  exit 1
+fi
+
+printf 'ok - package retries fit beneath the prerequisite step timeout\n'
+
 export PROFILES=procps
 brew_pkgs=
 apt_pkgs=
@@ -127,30 +141,50 @@ MOCK
   chmod +x "$mock_bin/$command"
 done
 
+# lib.sh chooses the sudo command prefix when it is sourced. Keep the fixture
+# portable between a passwordless CI sudo and a local sudo that prompts, while
+# still exercising the production prefix form used by retry_pkg.
+cat >"$mock_bin/sudo" <<'MOCK'
+#!/bin/sh
+exec "$@"
+MOCK
+chmod +x "$mock_bin/sudo"
+
 PATH="$mock_bin:$PATH"
 export PATH
+
+cat >"$mock_bin/timeout" <<'MOCK'
+#!/bin/sh
+printf 'timeout %s\n' "$*" >>"$command_log"
+MOCK
+chmod +x "$mock_bin/timeout"
+
+: >"$command_log"
+bounded true
+assert_eq 'timeout -k 5 60 true' "$(cat "$command_log")" \
+  'bounded package command uses portable forced-kill syntax'
 
 export MATRIX_NAME=Debian
 install_dotfiles_bootstrap_prereqs
 assert_contains \
-  'apt-get install -y git curl sudo openssh-client lsof netcat-openbsd procps python3 cron fd-find ripgrep hostname' \
+  'apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 install -y git curl sudo openssh-client lsof netcat-openbsd procps python3 cron fd-find ripgrep hostname' \
   "$(cat "$command_log")" 'dotfiles Debian installs required system commands'
 
 : >"$command_log"
 export MATRIX_NAME='CentOS Stream'
 install_dotfiles_bootstrap_prereqs
 assert_contains \
-  'dnf install -y --allowerasing epel-release' \
+  'dnf --setopt=timeout=30 --setopt=retries=3 install -y --allowerasing epel-release' \
   "$(cat "$command_log")" 'dotfiles CentOS enables capability packages'
 assert_contains \
-  'dnf install -y --allowerasing git curl sudo openssh-clients lsof nmap-ncat procps-ng python3 cronie fd-find ripgrep hostname' \
+  'dnf --setopt=timeout=30 --setopt=retries=3 install -y --allowerasing git curl sudo openssh-clients lsof nmap-ncat procps-ng python3 cronie fd-find ripgrep hostname' \
   "$(cat "$command_log")" 'dotfiles dnf installs required system commands'
 
 : >"$command_log"
 export MATRIX_NAME=Alpine
 install_dotfiles_bootstrap_prereqs
 assert_contains \
-  'apk add --no-cache git curl sudo bash coreutils shellcheck lua5.4 openssh-client lsof netcat-openbsd procps python3 dcron fd ripgrep' \
+  'apk --timeout 30 add --no-cache git curl sudo bash coreutils shellcheck lua5.4 openssh-client lsof netcat-openbsd procps python3 dcron fd ripgrep' \
   "$(cat "$command_log")" 'dotfiles Alpine installs required system commands'
 
 printf 'ok - dotfiles setup composes shared system-command profiles\n'
