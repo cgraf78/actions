@@ -21,7 +21,7 @@ check() {
 
 # The live Termux job reserves 20 minutes for caller code. Prove the worst-case
 # bounded APK and three guest apt windows still leave five minutes for emulator
-# boot, checkout transport, and other runner overhead under the 40-minute cap.
+# boot, checkout transport, and other runner overhead under the 35-minute cap.
 termux_job_window=$((35 * 60))
 termux_caller_window=1200
 termux_apk_window=$(((1 + 1) * 45 + 1))
