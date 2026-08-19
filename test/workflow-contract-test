@@ -106,7 +106,7 @@ contracts() {
   check '.jobs.termux.steps[] | select(.name == "Stage exact Dot bootstrap payload").with."stage-directory" == "${{ runner.temp }}/dotfiles-bootstrap-payload"' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").env.DOTFILES_BOOTSTRAP_PAYLOAD == "${{ runner.temp }}/dotfiles-bootstrap-payload"' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("unsupported Termux setup mode")' _termux-ci.yml
-  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("apt-get update")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("termux_retry_pkg apt-get \"${apt_net_opts[@]}\" update")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("full-upgrade -y")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("DEBIAN_FRONTEND=noninteractive")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("--force-confold")' _termux-ci.yml
@@ -131,6 +131,14 @@ contracts() {
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("bash -euo pipefail \"$TMPDIR/termux-ci-command\"")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("[[ \"$setup\" == none ]]") | not' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Download official Termux APK").run | contains("--retry 3 --retry-all-errors --retry-delay 1")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Download official Termux APK").run | contains("--connect-timeout 10 --max-time 120")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Download official Termux APK").run | contains("--speed-limit 1024 --speed-time 30")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("infra-stall: Termux package command exhausted bounded retries")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("if [[ \"$rc\" -eq 124 ]]")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("Acquire::http::Timeout=30")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("timeout -k 5 120")' _termux-ci.yml
+  check '.jobs.platform.steps[] | select(.name == "Set up Checkrun dev tools").run | contains("--connect-timeout 10 --max-time 120")' _shell-platforms.yml
+  check '.jobs.platform.steps[] | select(.name == "Set up Checkrun dev tools").run | contains("rustup-init.sh")' _shell-platforms.yml
 
   check '.jobs.required.name == "Required"' rust-ci.yml
   check '.jobs.required.if == "${{ always() }}"' rust-ci.yml

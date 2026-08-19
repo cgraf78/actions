@@ -3,6 +3,7 @@
 program	.github/actions/dotfiles-bootstrap/install.sh
 program	.github/actions/infra-retry/retry.sh
 program	.github/actions/musl-build-prereqs/install.sh
+program	.github/actions/package-manager/lib.sh
 program	.github/actions/rust-ci-prereqs/install.sh
 program	.github/actions/shell-ci-prereqs/checkrun.sh
 program	.github/actions/shell-ci-prereqs/dotfiles.sh
@@ -37,6 +38,7 @@ program	test/dotfiles-public-deps-test
 program	test/examples-test
 program	test/infra-retry-test
 program	test/musl-prereqs-test
+program	test/rust-prereqs-test
 program	test/release-installer-test
 program	test/release-asset-upload-test
 program	test/release-scripts-test

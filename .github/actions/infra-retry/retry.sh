@@ -96,10 +96,10 @@ is_retryable_shellcheck_download() {
 is_retryable_bounded_stall() {
   local log=$1
 
-  # `retry_pkg` prints this exact token when a package command has exhausted
-  # its bounded attempts. It is a marker this repo owns, not runner prose, so
-  # classification does not depend on any package manager's wording.
-  grep -Fq 'infra-stall: package command exhausted bounded retries' "$log"
+  # The shared and Termux retry helpers print these owned tokens only for
+  # bounded package stalls. Classification therefore does not depend on any
+  # package manager's human-readable wording.
+  grep -Eq 'infra-stall: (Termux )?package command exhausted bounded retries' "$log"
 }
 
 is_retryable_step_timeout() {

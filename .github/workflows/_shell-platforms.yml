@@ -189,8 +189,14 @@ jobs:
           "$HOME/.venv/bin/python" -m pip install --upgrade pip
           "$HOME/.venv/bin/python" -m pip install clang-format jsonschema PyYAML tomli
 
-          curl https://sh.rustup.rs -sSf | sh -s -- \
-            -y --profile minimal --component rustfmt
+          rustup_init="$RUNNER_TEMP/rustup-init.sh"
+          rm -f "$rustup_init"
+          curl --fail --location --show-error --silent \
+            --connect-timeout 10 --max-time 120 \
+            --speed-limit 1024 --speed-time 30 \
+            --retry 2 --retry-all-errors --retry-delay 1 \
+            https://sh.rustup.rs --output "$rustup_init"
+          sh "$rustup_init" -y --profile minimal --component rustfmt
 
           {
             echo "$HOME/.local/bin"

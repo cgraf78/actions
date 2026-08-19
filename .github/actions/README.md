@@ -30,6 +30,10 @@ Keep composite actions narrow and reusable. If behavior is only needed by a
 single reusable workflow, prefer keeping it in that workflow until a second
 consumer appears.
 
+`package-manager/lib.sh` is an internal source library, not a standalone
+action. The Rust, musl, and shell prerequisite actions source it so mirror
+timeouts and retry classification have one owner.
+
 `dotfiles-bootstrap` defaults to `mode: full`. `mode: stage` publishes a
 private, self-contained payload at `stage-directory`; `mode: install-staged`
 validates and installs that payload. Staging resolves current Dot `main` once;

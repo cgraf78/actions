@@ -3,6 +3,8 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 
+# shellcheck source=../package-manager/lib.sh
+. "$SCRIPT_DIR/../package-manager/lib.sh"
 # shellcheck source=./lib.sh
 . "$SCRIPT_DIR/lib.sh"
 # shellcheck source=./profiles.sh

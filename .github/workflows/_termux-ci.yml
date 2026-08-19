@@ -100,6 +100,8 @@ jobs:
         run: |
           apk="$RUNNER_TEMP/termux.apk"
           curl --fail --location --show-error --silent \
+            --connect-timeout 10 --max-time 120 \
+            --speed-limit 1024 --speed-time 30 \
             --retry 3 --retry-all-errors --retry-delay 1 \
             "$TERMUX_APK_URL" --output "$apk"
           printf '%s  %s\n' "$TERMUX_APK_SHA256" "$apk" | sha256sum --check --strict
@@ -201,15 +203,44 @@ jobs:
           has_profile ripgrep && packages+=(ripgrep)
           has_profile hostname && packages+=(inetutils)
           has_profile shellcheck && packages+=(shellcheck)
-          apt-get update
+          termux_retry_pkg() {
+            local attempt rc delay
+            for attempt in 1 2; do
+              if timeout -k 5 120 "$@"; then
+                return 0
+              else
+                rc=$?
+              fi
+              if [[ "$attempt" -eq 2 ]]; then
+                # Only the supervisor's timeout is infrastructure-classified.
+                # Apt dependency/conflict failures (including libandroid-utimes
+                # skew) keep their real status and remain terminal failures.
+                if [[ "$rc" -eq 124 ]]; then
+                  echo 'infra-stall: Termux package command exhausted bounded retries' >&2
+                fi
+                return "$rc"
+              fi
+              delay=$((attempt * 5))
+              echo "Termux package command failed (attempt $attempt/2, exit $rc); retrying in ${delay}s..." >&2
+              sleep "$delay"
+            done
+          }
+          apt_net_opts=(
+            -o Acquire::http::Timeout=30
+            -o Acquire::https::Timeout=30
+            -o Acquire::Retries=2
+          )
+          termux_retry_pkg apt-get "${apt_net_opts[@]}" update
           # The pinned APK can predate the live Termux repository. Termux does
           # not support partial upgrades: installing a current executable
           # beside bootstrap-era shared libraries can leave it unable to link.
           # Converge the base image first, then install caller capabilities.
-          DEBIAN_FRONTEND=noninteractive apt-get \
+          DEBIAN_FRONTEND=noninteractive termux_retry_pkg apt-get \
+            "${apt_net_opts[@]}" \
             -o Dpkg::Options::=--force-confold \
             full-upgrade -y
-          DEBIAN_FRONTEND=noninteractive apt-get \
+          DEBIAN_FRONTEND=noninteractive termux_retry_pkg apt-get \
+            "${apt_net_opts[@]}" \
             -o Dpkg::Options::=--force-confold \
             install -y "${packages[@]}"
           termux_exec_lib="$PREFIX/lib/libtermux-exec.so"

@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+install_sh="$root/.github/actions/rust-ci-prereqs/install.sh"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+log=$tmp/commands
+mkdir "$tmp/bin"
+for cmd in apt-get sudo timeout sleep; do
+  cat >"$tmp/bin/$cmd" <<'STUB'
+#!/bin/sh
+printf '%s %s\n' "${0##*/}" "$*" >>"$STUB_LOG"
+STUB
+  chmod +x "$tmp/bin/$cmd"
+done
+ln -s "$(command -v sh)" "$tmp/bin/sh"
+
+env -i PATH="$tmp/bin" STUB_LOG="$log" MATRIX_NAME=Ubuntu \
+  sh "$install_sh"
+out=$(<"$log")
+[[ $out == *'timeout -k 5 50 sudo apt-get -o Acquire::http::Timeout=30'* ]]
+[[ $out == *'Acquire::Retries=3 update'* ]]
+[[ $out == *'Acquire::Retries=3 install -y bash build-essential'* ]]
+
+printf 'rust-prereqs-test: ok\n'

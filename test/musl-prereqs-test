@@ -56,7 +56,7 @@ _stub_bin() {
   # The stub dir is the entire PATH, so the no-sudo case really has no sudo
   # rather than falling through to the host's. Only `sh` has to be real.
   ln -sf "$(command -v sh)" "$dir/sh"
-  for cmd in apt-get rustup sudo; do
+  for cmd in apt-get rustup sudo timeout sleep; do
     [[ "$cmd" == sudo && "$with_sudo" == 0 ]] && continue
     # Absolute shebang: the stub PATH deliberately has no `env`.
     cat >"$dir/$cmd" <<STUB
@@ -83,7 +83,9 @@ _run() {
 log="$tmp/linux.log"
 _run "$log" 1 RUNNER_OS=Linux
 out=$(<"$log")
-_assert_contains "linux: refreshes the package index" "apt-get update" "$out"
+_assert_contains "linux: refreshes the package index" "Acquire::Retries=3 update" "$out"
+_assert_contains "linux: bounds apt transport" "Acquire::http::Timeout=30" "$out"
+_assert_contains "linux: supervises apt" "timeout -k 5 50" "$out"
 _assert_contains "linux: installs musl-tools" "musl-tools" "$out"
 _assert_contains "linux: installs without recommends" "--no-install-recommends" "$out"
 # The release matrix already installs its target through the toolchain action,
@@ -105,7 +107,7 @@ _assert_contains "target: still installs musl-tools" "musl-tools" "$out"
 log="$tmp/nosudo.log"
 _run "$log" 0 RUNNER_OS=Linux
 out=$(<"$log")
-_assert_contains "no sudo: still installs musl-tools" "apt-get install" "$out"
+_assert_contains "no sudo: still installs musl-tools" "apt-get -o" "$out"
 _assert_missing "no sudo: does not invoke sudo" "sudo " "$out"
 
 # --- Non-Linux is a no-op ---------------------------------------------------
