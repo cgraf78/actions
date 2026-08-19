@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+
+fail() {
+  printf 'checkout-installer-network-test: %s\n' "$*" >&2
+  exit 1
+}
+
+assert_process_gone() {
+  local pid=$1 description=$2
+
+  if kill -0 "$pid" 2>/dev/null; then
+    fail "$description"
+  fi
+}
+
+consumer=$tmp/consumer
+remote=$tmp/remote.git
+source_work=$tmp/source
+mkdir -p "$consumer/scripts" "$consumer/support" "$source_work"
+cat >"$consumer/scripts/checkout-installer.conf" <<'EOF'
+# shellcheck shell=bash
+# shellcheck disable=SC2034
+CHECKOUT_INSTALLER_ENABLED=true
+CHECKOUT_INSTALLER_REPO=example/example-tool
+EOF
+cat >"$consumer/support/install-checkout.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'installed\n' >"${CHECKOUT_NETWORK_TEST_LOG:?}"
+EOF
+chmod 0755 "$consumer/support/install-checkout.sh"
+"$root/checkout-installer/render.sh" "$consumer" >/dev/null
+cp -R "$consumer/." "$source_work/"
+git -C "$source_work" init --quiet --initial-branch=main --template=''
+git -C "$source_work" config core.hooksPath /dev/null
+git -C "$source_work" config commit.gpgsign false
+git -C "$source_work" config user.name 'Checkout Network Test'
+git -C "$source_work" config user.email checkout-network@example.invalid
+git -C "$source_work" add .
+git -C "$source_work" commit --quiet -m fixture
+git clone --quiet --bare "$source_work" "$remote"
+
+platform_path=/usr/bin:/bin
+case ${PREFIX:-} in
+  /data/data/com.termux/files/usr) platform_path=$PREFIX/bin ;;
+esac
+real_git=$(PATH="$platform_path" command -v git)
+
+retry_bin=$tmp/retry-bin
+retry_attempts=$tmp/retry-attempts
+retry_child_pid=$tmp/retry-child.pid
+retry_managed=$tmp/retry-managed/example-tool
+mkdir -p "$retry_bin"
+cat >"$retry_bin/git" <<'EOF'
+#!/usr/bin/env bash
+
+for argument in "$@"; do
+  [[ $argument == clone ]] || continue
+  attempt=1
+  [[ ! -f $CHECKOUT_NETWORK_TEST_ATTEMPTS ]] ||
+    attempt=$(( $(wc -l <"$CHECKOUT_NETWORK_TEST_ATTEMPTS") + 1 ))
+  printf '%s\n' "$attempt" >>"$CHECKOUT_NETWORK_TEST_ATTEMPTS"
+  if [[ $attempt -eq 1 ]]; then
+    destination=${!#}
+    mkdir -p "$destination"
+    printf 'partial\n' >"$destination/partial"
+    (
+      trap '' TERM
+      printf '%s\n' "$BASHPID" >"$CHECKOUT_NETWORK_TEST_CHILD_PID"
+      while :; do sleep 1; done
+    ) &
+    trap '' TERM
+    wait
+  fi
+  break
+done
+exec "$CHECKOUT_NETWORK_TEST_REAL_GIT" "$@"
+EOF
+chmod 0755 "$retry_bin/git"
+cat >"$retry_bin/ps" <<'EOF'
+#!/usr/bin/env bash
+exit 91
+EOF
+chmod 0755 "$retry_bin/ps"
+PATH="$retry_bin:$platform_path" \
+  CHECKOUT_NETWORK_TEST_REAL_GIT="$real_git" \
+  CHECKOUT_NETWORK_TEST_ATTEMPTS="$retry_attempts" \
+  CHECKOUT_NETWORK_TEST_CHILD_PID="$retry_child_pid" \
+  CHECKOUT_NETWORK_TEST_LOG="$tmp/retry.log" \
+  CGRAF78_CHECKOUT_INSTALL_GIT_TIMEOUT_SECS=1 \
+  CGRAF78_CHECKOUT_INSTALL_GIT_KILL_AFTER_SECS=1 \
+  CGRAF78_CHECKOUT_INSTALL_GIT_RETRIES=2 \
+  CGRAF78_CHECKOUT_INSTALL_GIT_RETRY_DELAY_SECS=0 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$retry_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$remote" \
+  bash -s <"$source_work/install.sh" >/dev/null ||
+  fail 'checkout did not retry after a bounded Git hang'
+[[ $(wc -l <"$retry_attempts") -eq 2 ]] ||
+  fail 'checkout did not make exactly two Git attempts'
+[[ -f $tmp/retry.log && -d $retry_managed/.git ]] ||
+  fail 'checkout did not publish the successful retry'
+retry_child=$(sed -n '1p' "$retry_child_pid")
+assert_process_gone "$retry_child" \
+  'checkout left a timed-out Git descendant running before retry'
+
+exhaust_bin=$tmp/exhaust-bin
+exhaust_attempts=$tmp/exhaust-attempts
+exhaust_children=$tmp/exhaust-children
+exhaust_managed=$tmp/exhaust-managed/example-tool
+mkdir -p "$exhaust_bin"
+cat >"$exhaust_bin/git" <<'EOF'
+#!/usr/bin/env bash
+
+for argument in "$@"; do
+  [[ $argument == clone ]] || continue
+  printf 'attempt\n' >>"$CHECKOUT_NETWORK_TEST_ATTEMPTS"
+  destination=${!#}
+  mkdir -p "$destination"
+  printf 'partial\n' >"$destination/partial"
+  (
+    trap '' TERM
+    printf '%s\n' "$BASHPID" >>"$CHECKOUT_NETWORK_TEST_CHILDREN"
+    while :; do sleep 1; done
+  ) &
+  trap '' TERM
+  wait
+done
+exec "$CHECKOUT_NETWORK_TEST_REAL_GIT" "$@"
+EOF
+chmod 0755 "$exhaust_bin/git"
+set +e
+exhaust_output=$(PATH="$exhaust_bin:$platform_path" \
+  CHECKOUT_NETWORK_TEST_REAL_GIT="$real_git" \
+  CHECKOUT_NETWORK_TEST_ATTEMPTS="$exhaust_attempts" \
+  CHECKOUT_NETWORK_TEST_CHILDREN="$exhaust_children" \
+  CHECKOUT_NETWORK_TEST_LOG="$tmp/exhaust.log" \
+  CGRAF78_CHECKOUT_INSTALL_GIT_TIMEOUT_SECS=1 \
+  CGRAF78_CHECKOUT_INSTALL_GIT_KILL_AFTER_SECS=1 \
+  CGRAF78_CHECKOUT_INSTALL_GIT_RETRIES=2 \
+  CGRAF78_CHECKOUT_INSTALL_GIT_RETRY_DELAY_SECS=0 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$exhaust_managed" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$remote" \
+  bash -s <"$source_work/install.sh" 2>&1)
+exhaust_status=$?
+set -e
+[[ $exhaust_status -ne 0 && $exhaust_output == *'timed out after 1s'* ]] ||
+  fail 'exhausted Git hangs did not fail with the owned timeout diagnostic'
+[[ $(wc -l <"$exhaust_attempts") -eq 2 ]] ||
+  fail 'checkout did not exhaust the configured Git attempts'
+while IFS= read -r child; do
+  assert_process_gone "$child" 'checkout left an exhausted Git descendant running'
+done <"$exhaust_children"
+[[ ! -e $exhaust_managed && ! -L $exhaust_managed ]] ||
+  fail 'exhausted Git hangs published a managed checkout'
+[[ ! -e $tmp/exhaust-managed/.example-tool.install.lock ]] ||
+  fail 'exhausted Git hangs left the checkout lock'
+if compgen -G "$tmp/exhaust-managed/.example-tool.clone.*" >/dev/null; then
+  fail 'exhausted Git hangs left a staging checkout'
+fi
+
+printf 'checkout-installer-network-test: ok\n'
