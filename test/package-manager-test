@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# shellcheck source=.github/actions/package-manager/lib.sh
+. "$root/.github/actions/package-manager/lib.sh"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+sleep() { :; }
+
+bounded() { return "$BOUNDED_STATUS"; }
+
+# Sourced retry_pkg consumes this public library setting.
+# shellcheck disable=SC2034
+PKG_RETRIES=2
+BOUNDED_STATUS=100
+if retry_pkg apt-get install >"$tmp/semantic.out" 2>"$tmp/semantic.err"; then
+  echo 'package-manager-test: semantic failure unexpectedly passed' >&2
+  exit 1
+else
+  status=$?
+fi
+[[ $status -eq 100 ]]
+if grep -Fq 'infra-stall:' "$tmp/semantic.err"; then
+  echo 'package-manager-test: semantic failure was infrastructure-classified' >&2
+  exit 1
+fi
+
+BOUNDED_STATUS=124
+if retry_pkg apt-get update >"$tmp/timeout.out" 2>"$tmp/timeout.err"; then
+  echo 'package-manager-test: timeout unexpectedly passed' >&2
+  exit 1
+else
+  status=$?
+fi
+[[ $status -eq 124 ]]
+grep -Fq 'infra-stall: package command exhausted bounded retries' \
+  "$tmp/timeout.err"
+
+printf 'package-manager-test: ok\n'

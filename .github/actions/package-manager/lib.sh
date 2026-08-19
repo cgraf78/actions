@@ -64,7 +64,12 @@ retry_pkg() {
       _rc=$?
     fi
     if [ "$_attempt" -ge "$PKG_RETRIES" ]; then
-      echo "infra-stall: package command exhausted bounded retries" >&2
+      # Exit 124 is the owned supervisor deadline. Package-manager semantic
+      # failures keep their native status and must not opt a workflow into an
+      # infrastructure rerun.
+      if [ "$_rc" -eq 124 ]; then
+        echo "infra-stall: package command exhausted bounded retries" >&2
+      fi
       echo "package command failed after $PKG_RETRIES attempts (exit $_rc): $*" >&2
       return "$_rc"
     fi

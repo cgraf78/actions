@@ -307,6 +307,10 @@ jobs:
         shell: bash
         run: test/musl-prereqs-test
 
+      - name: Test bounded package manager policy
+        shell: bash
+        run: test/package-manager-test
+
       - name: Test Rust prerequisites
         shell: bash
         run: test/rust-prereqs-test

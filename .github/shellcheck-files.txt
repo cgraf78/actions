@@ -38,6 +38,7 @@ program	test/dotfiles-public-deps-test
 program	test/examples-test
 program	test/infra-retry-test
 program	test/musl-prereqs-test
+program	test/package-manager-test
 program	test/rust-prereqs-test
 program	test/release-installer-test
 program	test/release-asset-upload-test
