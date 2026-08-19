@@ -80,6 +80,81 @@ _assert_contains() {
   fi
 }
 
+# Successful commands must not inherit the watchdog's sleep through a command
+# substitution, and timed-out commands must not leave transport descendants.
+cat >"$tmp/hanging-network-command" <<'EOF'
+#!/usr/bin/env bash
+spawn_child() {
+  (
+    trap '' TERM
+    printf '%s\n' "$BASHPID" >>"$RELEASE_TEST_NETWORK_CHILD_PID"
+    while :; do sleep 1; done
+  ) &
+}
+trap 'spawn_child; wait' TERM
+(
+  trap '' TERM
+  printf '%s\n' "$BASHPID" >>"$RELEASE_TEST_NETWORK_CHILD_PID"
+  while :; do sleep 1; done
+) &
+wait
+EOF
+chmod 0755 "$tmp/hanging-network-command"
+# shellcheck disable=SC2016 # Positional parameters belong to the child Bash.
+if env RELEASE_TEST_NETWORK_CHILD_PID="$tmp/network-child.pid" \
+  RELEASE_NETWORK_TIMEOUT_SECONDS=1 RELEASE_NETWORK_KILL_AFTER_SECONDS=1 \
+  bash -c '
+    set -uo pipefail
+    source "$1"
+    trap true TERM
+    expected_term_trap=$(trap -p TERM)
+    SECONDS=0
+    output=$(release_bounded_command printf ok) || exit 1
+    [[ $output == ok && $SECONDS -lt 3 && $- != *e* && $- != *m* ]] || exit 1
+    [[ $(trap -p TERM) == "$expected_term_trap" ]] || exit 1
+    release_bounded_command "$2" 2>/dev/null
+    [[ $? -eq 124 ]] || exit 1
+    [[ $(wc -l <"$RELEASE_TEST_NETWORK_CHILD_PID") -eq 2 ]] || exit 1
+    while IFS= read -r child; do
+      for _ in {1..100}; do
+        kill -0 "$child" 2>/dev/null || break
+        sleep 0.01
+      done
+      kill -0 "$child" 2>/dev/null && exit 1
+    done <"$RELEASE_TEST_NETWORK_CHILD_PID"
+    exit 0
+  ' _ "$shared/release-lib.sh" "$tmp/hanging-network-command"; then
+  _pass "cut: network watchdog returns promptly and reaps descendants"
+else
+  _fail "cut: network watchdog returns promptly and reaps descendants"
+fi
+
+: >"$tmp/network-child.pid"
+SECONDS=0
+# shellcheck disable=SC2016 # Positional parameters belong to the child Bash.
+env RELEASE_TEST_NETWORK_CHILD_PID="$tmp/network-child.pid" \
+  RELEASE_NETWORK_TIMEOUT_SECONDS=30 RELEASE_NETWORK_KILL_AFTER_SECONDS=1 \
+  bash -c 'source "$1"; release_bounded_command "$2"' \
+  _ "$shared/release-lib.sh" "$tmp/hanging-network-command" \
+  >/dev/null 2>&1 &
+bounded_shell=$!
+for _ in {1..100}; do
+  [[ -s "$tmp/network-child.pid" ]] && break
+  sleep 0.01
+done
+kill -s TERM "$bounded_shell"
+bounded_status=0
+wait "$bounded_shell" || bounded_status=$?
+bounded_children_gone=1
+while IFS= read -r child; do
+  kill -0 "$child" 2>/dev/null && bounded_children_gone=0
+done <"$tmp/network-child.pid"
+if [[ "$bounded_status" -eq 143 && "$bounded_children_gone" -eq 1 && $SECONDS -lt 5 ]]; then
+  _pass "cut: caller termination cleans up the bounded command tree"
+else
+  _fail "cut: caller termination cleans up the bounded command tree"
+fi
+
 # Build a consumer-shaped fixture repo: vendored scripts, a release.conf, the
 # declared payload, and a git history so commit-derived versions resolve.
 _fixture() {
@@ -572,6 +647,16 @@ _release_repo() {
   printf '%s' "$dir"
 }
 
+mkdir -p "$tmp/release-github-bin"
+cat >"$tmp/release-github-bin/gh" <<'EOF'
+#!/usr/bin/env bash
+printf 'release not found\n' >&2
+exit 1
+EOF
+chmod 0755 "$tmp/release-github-bin/gh"
+PATH="$tmp/release-github-bin:$PATH"
+export PATH
+
 fx=$(_release_repo cut)
 commit=$(git -C "$fx" rev-parse HEAD)
 want_tag="20990205-060708-${commit:0:8}"
@@ -588,6 +673,18 @@ out=$(
 _assert_contains "cut: dry-run ignores ambient build env" "release: tag $want_tag" "$out"
 _assert_contains "cut: dry-run prints the push plan" \
   "would push main and refs/tags/$want_tag to origin" "$out"
+
+mkdir -p "$tmp/unauthenticated-gh-bin"
+cat >"$tmp/unauthenticated-gh-bin/gh" <<'EOF'
+#!/usr/bin/env bash
+printf 'gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable.\n' >&2
+exit 4
+EOF
+chmod 0755 "$tmp/unauthenticated-gh-bin/gh"
+rc=0
+(cd "$fx" && env PATH="$tmp/unauthenticated-gh-bin:$PATH" \
+  scripts/release.sh --dry-run) >/dev/null 2>&1 || rc=$?
+_assert_exit "cut: unavailable optional GitHub CLI does not block a release" 0 "$rc"
 
 if git -C "$fx" rev-parse -q --verify refs/remotes/origin/main >/dev/null; then
   _pass "cut: dry-run recreates the missing remote-tracking branch"
@@ -737,6 +834,46 @@ if git -C "$fx" rev-parse -q --verify "refs/tags/$want_tag" >/dev/null; then
 else
   _pass "cut: cleans up the tag after a failed push"
 fi
+
+# A transport timeout can be ambiguous: the remote may accept a ref before the
+# client loses its response. Reconcile both writes before failing or retrying.
+fx=$(_release_repo cut-ambiguous-push)
+commit=$(git -C "$fx" rev-parse HEAD)
+want_tag="20990205-060708-${commit:0:8}"
+mkdir -p "$tmp/ambiguous-git-bin"
+real_git=$(PATH=/usr/bin:/bin command -v git)
+cat >"$tmp/ambiguous-git-bin/git" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$RELEASE_TEST_GIT_CALLS"
+if [[ " $* " == *' push '* ]]; then
+  "$RELEASE_TEST_REAL_GIT" "$@"
+  exit 124
+fi
+exec "$RELEASE_TEST_REAL_GIT" "$@"
+EOF
+cat >"$tmp/ambiguous-git-bin/gh" <<'EOF'
+#!/usr/bin/env bash
+printf 'release not found\n' >&2
+exit 1
+EOF
+chmod 0755 "$tmp/ambiguous-git-bin/git" "$tmp/ambiguous-git-bin/gh"
+: >"$tmp/ambiguous-git-calls"
+out=$(cd "$fx" && env PATH="$tmp/ambiguous-git-bin:$PATH" \
+  RELEASE_TEST_REAL_GIT="$real_git" \
+  RELEASE_TEST_GIT_CALLS="$tmp/ambiguous-git-calls" \
+  scripts/release.sh --push) ||
+  _fail "cut: ambiguous successful pushes reconcile"
+_assert_contains "cut: ambiguous push still publishes" \
+  "release: pushed tag $want_tag" "$out"
+if git ls-remote --exit-code --tags "$tmp/cut-ambiguous-push-origin.git" \
+  "refs/tags/$want_tag" >/dev/null 2>&1; then
+  _pass "cut: ambiguous tag push reaches the remote"
+else
+  _fail "cut: ambiguous tag push reaches the remote"
+fi
+grep -Fq 'http.lowSpeedLimit=1024' "$tmp/ambiguous-git-calls" ||
+  _fail "cut: network Git lacks a low-speed bound"
 
 # --- Vendored-copy verification ---------------------------------------------
 
