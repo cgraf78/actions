@@ -58,7 +58,7 @@ jobs:
 
       - name: Stage exact Dot bootstrap payload
         if: inputs.setup == 'dotfiles'
-        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@6dbd54f28872490ac3e76ec1f19bea91da74171c
+        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@8c71b9af9800cd075b147a45864958cf29299f63
         env:
           HOME: ${{ github.workspace }}
         with:
@@ -74,7 +74,7 @@ jobs:
 
       - name: Configure host Android NDK toolchain
         if: inputs.host-command != '' && inputs.rust-toolchain != ''
-        uses: cgraf78/actions/.github/actions/android-rust-toolchain@6dbd54f28872490ac3e76ec1f19bea91da74171c
+        uses: cgraf78/actions/.github/actions/android-rust-toolchain@8c71b9af9800cd075b147a45864958cf29299f63
         with:
           rust-target: x86_64-linux-android
 
