@@ -67,8 +67,10 @@ install.sh --archive PATH [--checksum PATH]
 
 Without `--version`, online installation follows the repository's GitHub
 `releases/latest` redirect, validates the resulting release tag, and downloads
-the matching archive and `.sha256` sidecar. `--archive` is the first-class
-offline/test path; its checksum defaults to `PATH.sha256`.
+the matching archive and `.sha256` sidecar. Every request has bounded
+connection, total-transfer, low-speed, and retry windows; the three-request
+online path has a worst-case network budget below ten minutes. `--archive` is
+the first-class offline/test path; its checksum defaults to `PATH.sha256`.
 
 Linux and macOS default to:
 
