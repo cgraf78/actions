@@ -295,7 +295,10 @@ contracts() {
   check '.jobs."retry-canary".if == "github.event_name == '\''workflow_dispatch'\'' && github.ref == format('\''refs/heads/{0}'\'', github.event.repository.default_branch) && inputs.retry_canary != '\''none'\''"' ci.yml
   check '.jobs."retry-canary".permissions.contents == "read"' ci.yml
   check '.jobs."retry-canary".steps[0].env.CANARY_MODE == "${{ inputs.retry_canary }}"' ci.yml
-  check '.jobs."retry-canary".steps[0].run | contains("infra-stall: package command exhausted bounded retries")' ci.yml
+  # GitHub logs the full inline script before executing it. The application
+  # canary must not expose the infra marker through an unexecuted case branch.
+  check '.jobs."retry-canary".steps[0].run | contains("infra-stall: package command exhausted bounded retries") | not' ci.yml
+  check '.jobs."retry-canary".steps[0].run | contains("printf '\''infra-stall: package command exhausted bounded %s\\n'\'' retries")' ci.yml
   check '.jobs."retry-canary".steps[0].run | contains("deliberate application failure")' ci.yml
   check '.jobs.shell-smoke.with.matrix-set == "full"' ci.yml
   check '.jobs.rust-smoke.with.matrix-set == "auto"' ci.yml
