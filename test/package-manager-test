@@ -11,9 +11,29 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
+APT_MIRROR_LIST="$tmp/apt-mirrors.txt"
+cat >"$APT_MIRROR_LIST" <<'EOF'
+http://azure.archive.ubuntu.com/ubuntu
+https://archive.ubuntu.com/ubuntu
+EOF
+configure_ubuntu_archive_mirror
+[[ $(<"$APT_MIRROR_LIST") == https://archive.ubuntu.com/ubuntu ]]
+
+printf '%s\n' 'https://deb.debian.org/debian' >"$APT_MIRROR_LIST"
+configure_ubuntu_archive_mirror
+[[ $(<"$APT_MIRROR_LIST") == https://deb.debian.org/debian ]]
+
 sleep() { :; }
 
 bounded() { return "$BOUNDED_STATUS"; }
+
+cat >"$APT_MIRROR_LIST" <<'EOF'
+http://azure.archive.ubuntu.com/ubuntu
+https://archive.ubuntu.com/ubuntu
+EOF
+BOUNDED_STATUS=0
+retry_pkg sudo apt-get update
+[[ $(<"$APT_MIRROR_LIST") == https://archive.ubuntu.com/ubuntu ]]
 
 # Sourced retry_pkg consumes this public library setting.
 # shellcheck disable=SC2034

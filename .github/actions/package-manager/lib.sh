@@ -23,6 +23,32 @@ else
   SUDO=
 fi
 
+configure_ubuntu_archive_mirror() {
+  _mirror_list=${APT_MIRROR_LIST:-/etc/apt/apt-mirrors.txt}
+  _archive_mirror=https://archive.ubuntu.com/ubuntu
+
+  # GitHub's Ubuntu runner mirrorlist currently prefers the Azure mirror. When
+  # that endpoint accepts connections but stops serving indexes, apt's fallback
+  # still leaves package requests assigned to Azure. Use Ubuntu's official
+  # archive directly; non-Azure and non-mirrorlist configurations stay intact.
+  if [ ! -f "$_mirror_list" ] || [ -L "$_mirror_list" ] ||
+    ! grep -Fq 'azure.archive.ubuntu.com/ubuntu' "$_mirror_list"; then
+    return 0
+  fi
+
+  if [ -w "$_mirror_list" ]; then
+    printf '%s\n' "$_archive_mirror" >"$_mirror_list"
+  elif [ -n "$SUDO" ]; then
+    printf '%s\n' "$_archive_mirror" | "$SUDO" tee "$_mirror_list" >/dev/null
+  else
+    printf 'cannot replace unreliable Ubuntu mirrorlist: %s\n' \
+      "$_mirror_list" >&2
+    return 1
+  fi
+  printf 'package manager: using %s instead of Azure mirrorlist\n' \
+    "$_archive_mirror" >&2
+}
+
 bounded() {
   if command -v timeout >/dev/null 2>&1; then
     timeout -k "$PKG_COMMAND_KILL_AFTER" "$PKG_COMMAND_TIMEOUT" "$@"
@@ -56,6 +82,9 @@ PY
 }
 
 retry_pkg() {
+  case "$*" in
+    *apt-get*' update') configure_ubuntu_archive_mirror ;;
+  esac
   _attempt=1
   while :; do
     if bounded "$@"; then
