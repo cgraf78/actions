@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# shellcheck source=.github/scripts/termux-adb.sh
+source "$root/.github/scripts/termux-adb.sh"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+cat >"$tmp/adb" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$ADB_CALLS"
+case ${ADB_BEHAVIOR:-success} in
+  success) exit 0 ;;
+  fail) exit 23 ;;
+  hang) exec sleep 30 ;;
+esac
+EOF
+chmod +x "$tmp/adb"
+export PATH="$tmp:$PATH"
+export ADB_CALLS="$tmp/adb-calls"
+
+termux_adb 2 shell getprop ro.build.version.sdk
+grep -Fxq 'shell getprop ro.build.version.sdk' "$ADB_CALLS" || {
+  printf 'termux adb test failed: wrapper did not preserve adb arguments\n' >&2
+  exit 1
+}
+
+export ADB_BEHAVIOR=fail
+if termux_adb 2 devices; then
+  printf 'termux adb test failed: wrapper hid adb failure\n' >&2
+  exit 1
+else
+  rc=$?
+fi
+[[ "$rc" -eq 23 ]] || {
+  printf 'termux adb test failed: expected adb status 23, got %s\n' "$rc" >&2
+  exit 1
+}
+
+export ADB_BEHAVIOR=hang
+started=$SECONDS
+if termux_adb 1 devices; then
+  printf 'termux adb test failed: hung adb command succeeded\n' >&2
+  exit 1
+else
+  rc=$?
+fi
+elapsed=$((SECONDS - started))
+[[ "$rc" -eq 124 ]] || {
+  printf 'termux adb test failed: expected timeout status 124, got %s\n' "$rc" >&2
+  exit 1
+}
+[[ "$elapsed" -lt 10 ]] || {
+  printf 'termux adb test failed: hung adb command ran for %ss\n' "$elapsed" >&2
+  exit 1
+}
+
+: >"$ADB_CALLS"
+export ADB_BEHAVIOR=fail
+if termux_wait_for_runtime 3 1 0; then
+  printf 'termux adb test failed: unavailable runtime became ready\n' >&2
+  exit 1
+fi
+[[ "$(wc -l <"$ADB_CALLS")" -eq 3 ]] || {
+  printf 'termux adb test failed: readiness probe did not stop after three attempts\n' >&2
+  exit 1
+}
+
+printf 'termux adb tests passed\n'

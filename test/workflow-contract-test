@@ -19,17 +19,41 @@ check() {
   fi
 }
 
-# The live Termux job reserves 20 minutes for caller code. Prove the worst-case
-# bounded APK and three guest apt windows still leave five minutes for emulator
-# boot, checkout transport, and other runner overhead under the 35-minute cap.
-termux_job_window=$((35 * 60))
+check_no_unsupervised_adb() {
+  local workflow=$1
+  local run
+
+  run=$(yq -r \
+    '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run' \
+    "$root/.github/workflows/$workflow")
+  if grep -Eq '(^|[[:space:]])adb[[:space:]]' <<<"$run"; then
+    printf 'workflow contract failed: %s: unsupervised adb command\n' \
+      "$workflow" >&2
+    return 1
+  fi
+}
+
+# The live Termux job reserves 20 minutes for caller code. Prove the explicit
+# emulator boot and every sequential ADB window still leave five minutes for
+# checkout, APK download, host preparation, and runner overhead under the cap.
+termux_job_window=$((50 * 60))
 termux_caller_window=1200
-termux_apk_window=$(((1 + 1) * 45 + 1))
-termux_apt_window=$((3 * (120 + 5)))
-termux_overhead=$((termux_job_window - termux_caller_window - \
-  termux_apk_window - termux_apt_window))
+termux_emulator_boot_window=600
+termux_adb_kill_window=5
+termux_adb_window=$((\
+  120 + termux_adb_kill_window + \
+  30 + termux_adb_kill_window + \
+  30 * (3 + termux_adb_kill_window + 1) + \
+  30 + termux_adb_kill_window + \
+  120 + termux_adb_kill_window + \
+  2 * (30 + termux_adb_kill_window) + \
+  120 + termux_adb_kill_window + \
+  30 + termux_adb_kill_window + \
+  termux_caller_window + termux_adb_kill_window))
+termux_overhead=$((termux_job_window - termux_emulator_boot_window - \
+  termux_adb_window))
 if [[ "$termux_overhead" -lt 300 ]]; then
-  printf 'workflow contract failed: Termux network windows leave only %ss overhead\n' \
+  printf 'workflow contract failed: Termux inner windows leave only %ss overhead\n' \
     "$termux_overhead" >&2
   exit 1
 fi
@@ -116,7 +140,11 @@ contracts() {
   check '.jobs.runtime.with.setup == "${{ inputs.setup }}"' termux-ci.yml
   check '.on.workflow_call.inputs.profiles.default == "runtime"' termux-ci.yml
   check '.on.workflow_call.inputs.profiles.default == "runtime"' _termux-ci.yml
-  check '.jobs.termux."timeout-minutes" == 35' _termux-ci.yml
+  check '.jobs.termux."timeout-minutes" == 50' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Run caller tests in Termux").with."emulator-boot-timeout" == 600' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("source \"$GITHUB_WORKSPACE/.github/scripts/termux-adb.sh\"")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("termux_wait_for_runtime 30 3 1")' _termux-ci.yml
+  check_no_unsupervised_adb _termux-ci.yml
 
   check '.jobs.termux.steps[] | select(.name == "Stage exact Dot bootstrap payload").if == "inputs.setup == '\''dotfiles'\''"' _termux-ci.yml
   check ".jobs.termux.steps[] | select(.name == \"Stage exact Dot bootstrap payload\").uses == \"cgraf78/actions/.github/actions/dotfiles-bootstrap@$actions_lock\"" _termux-ci.yml
@@ -146,7 +174,8 @@ contracts() {
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("export SHDEPS_DOT_REPO=\"file://$dotfiles_payload/dot-origin.git\"")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("[[ -x \"$project_root/.local/share/cgraf78/dot/bin/dot\" ]]")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("Copying exact Dot bootstrap payload")' _termux-ci.yml
-  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("adb shell run-as com.termux test -L \"files/usr/tmp/$payload_name\"")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("termux_adb 30 shell run-as com.termux")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("test -L \"files/usr/tmp/$payload_name\"")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | split("DOTFILES_BOOTSTRAP_MODE=install-staged") | select(length == 2) | .[1] | contains("bash -euo pipefail \"$TMPDIR/termux-ci-command\"")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("bash -euo pipefail \"$TMPDIR/termux-ci-command\"")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("[[ \"$setup\" == none ]]") | not' _termux-ci.yml
@@ -274,6 +303,7 @@ contracts() {
   check '.jobs.quality.steps[] | select(.name == "Test consumer synchronization").run == "test/consumer-sync-test"' ci.yml
   check '.jobs.quality.steps[] | select(.name == "Test generated release installer").run == "test/release-installer-test"' ci.yml
   check '.jobs.quality.steps[] | select(.name == "Test generated checkout installer").run == "test/checkout-installer-test"' ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Test bounded Termux ADB commands").run == "test/termux-adb-test"' ci.yml
   check ".jobs.quality.steps[] | select(.name == \"Verify internal Actions sync\").uses == \"cgraf78/actions/.github/actions/verify-consumer-sync@$actions_lock\"" ci.yml
   check '.jobs.release-installer-bash32.name == "Release installer / Bash 3.2"' ci.yml
   check '.jobs.release-installer-bash32.uses == "./.github/workflows/bash32-ci.yml"' ci.yml

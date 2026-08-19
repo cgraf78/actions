@@ -14,6 +14,7 @@ program	.github/actions/shellcheck-inventory/run.sh
 program	.github/actions/upload-release-assets/upload.sh
 program	.github/actions/verify-consumer-sync/verify.sh
 program	.github/actions/verify-release-scripts/verify.sh
+program	.github/scripts/termux-adb.sh
 program	consumer-ci/sync.sh
 program	checkout-installer/bash-resolver-v1.sh.in
 program	checkout-installer/install.sh.in
@@ -45,4 +46,5 @@ program	test/release-asset-upload-test
 program	test/release-scripts-test
 program	test/shell-ci-prereqs-test
 program	test/shellcheck-action-test
+program	test/termux-adb-test
 program	test/workflow-contract-test
