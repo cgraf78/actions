@@ -651,6 +651,7 @@ set -euo pipefail
 output=
 write_out=
 url=
+printf '%s\n' "$*" >>"$FAKE_CURL_ARGS_LOG"
 while [[ $# -gt 0 ]]; do
   case $1 in
     -o)
@@ -699,9 +700,11 @@ chmod 0755 "$fake_bin/curl"
 
 online_root="$tmp/online"
 online_log="$tmp/online-curl.log"
+online_args_log="$tmp/online-curl-args.log"
 mkdir -p "$online_root/home"
 FAKE_CURL_ARCHIVE="$archive1" FAKE_CURL_CHECKSUM="$archive1.sha256" \
   FAKE_CURL_VERSION="$version1" FAKE_CURL_LOG="$online_log" \
+  FAKE_CURL_ARGS_LOG="$online_args_log" \
   FAKE_UNAME_S=Linux FAKE_UNAME_M=x86_64 FAKE_UNAME_O=GNU/Linux \
   HOME="$online_root/home" PATH="$fake_bin:$PATH" \
   /bin/bash "$consumer/install.sh" \
@@ -717,6 +720,33 @@ grep -Fxq "$online_base/$(basename "$archive1").sha256" "$online_log" ||
   fail "online install requested the wrong checksum URL"
 [[ $("$online_root/bin/example-tool") == first ]] ||
   fail "online install did not activate the downloaded archive"
+
+curl_invocations=$(wc -l <"$online_args_log")
+[[ "$curl_invocations" -eq 3 ]] ||
+  fail "online install did not make exactly three curl invocations"
+while IFS= read -r curl_args; do
+  for expected_curl_arg in '--connect-timeout 10' '--max-time 60' \
+    '--speed-limit 1024' '--speed-time 30' '--retry 2' \
+    '--retry-all-errors' '--retry-delay 1'; do
+    case " $curl_args " in
+      *" $expected_curl_arg "*) ;;
+      *) fail "online curl invocation is missing $expected_curl_arg: $curl_args" ;;
+    esac
+  done
+done <"$online_args_log"
+
+# Curl's retry count excludes the initial attempt. Each invocation is bounded
+# by three 60-second attempts plus two one-second retry delays. Resolving the
+# latest tag and downloading its checksum and archive must fit within the
+# installer's ten-minute network budget even when every attempt exhausts.
+curl_max_time=60
+curl_retry_delay=1
+curl_retries=2
+curl_invocation_budget=$(((curl_retries + 1) * curl_max_time + \
+  curl_retries * curl_retry_delay))
+online_network_budget=$((curl_invocations * curl_invocation_budget))
+[[ "$online_network_budget" -le 600 ]] ||
+  fail "online curl retry policy exceeds the ten-minute network budget"
 
 parent_symlink_root="$tmp/parent-symlink"
 mkdir -p "$parent_symlink_root/home"
