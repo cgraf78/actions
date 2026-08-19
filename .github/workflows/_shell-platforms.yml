@@ -246,6 +246,7 @@ jobs:
           GITHUB_TOKEN: ${{ inputs.dotfiles-provider && github.token || '' }}
           MISE_GITHUB_TOKEN: ${{ github.token }}
           MATRIX_NAME: ${{ matrix.name }}
+          DOT_VERBOSE: "1"
           SHDEPS_FORCE: ${{ inputs.force-dotfiles-update && '1' || '0' }}
 
       - name: Run tests
