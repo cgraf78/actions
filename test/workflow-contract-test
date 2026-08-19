@@ -34,6 +34,46 @@ if [[ "$termux_overhead" -lt 300 ]]; then
   exit 1
 fi
 
+# Setup commands need their own deadlines so a stalled network operation yields
+# a useful failing step, while the job deadline remains the final backstop. Keep
+# deliberate room outside setup for checkout, the actual checks, and teardown.
+rust_quality_job_window=$((180 * 60))
+rust_quality_setup_window=$(((10 + 15 + 5 + 10 + 15 + 10) * 60))
+rust_quality_check_window=$(((10 + 15 + 20 + 20 + 10 + 15) * 60))
+rust_quality_overhead=$((rust_quality_job_window - rust_quality_setup_window - \
+  rust_quality_check_window))
+[[ "$rust_quality_overhead" -ge $((15 * 60)) ]] || {
+  echo 'workflow contract failed: Rust quality inner bounds leave under 15m overhead' >&2
+  exit 1
+}
+
+rustsec_job_window=$((60 * 60))
+rustsec_setup_window=$(((10 + 5 + 20 + 2 + 5) * 60))
+rustsec_audit_window=$((10 * 60))
+rustsec_overhead=$((rustsec_job_window - rustsec_setup_window - \
+  rustsec_audit_window))
+[[ "$rustsec_overhead" -ge $((5 * 60)) ]] || {
+  echo 'workflow contract failed: RustSec inner bounds leave under 5m overhead' >&2
+  exit 1
+}
+
+repo_quality_job_window=$((35 * 60))
+repo_quality_setup_window=$(((5 + 10 + 10) * 60))
+repo_quality_check_window=$((repo_quality_job_window - repo_quality_setup_window))
+[[ "$repo_quality_check_window" -ge $((10 * 60)) ]] || {
+  echo 'workflow contract failed: repo quality setup leaves under 10m for checks' >&2
+  exit 1
+}
+
+bash32_job_window=$((45 * 60))
+bash32_setup_window=$(((5 + 10) * 60))
+bash32_caller_window=$((20 * 60))
+bash32_overhead=$((bash32_job_window - bash32_setup_window - bash32_caller_window))
+[[ "$bash32_overhead" -ge $((10 * 60)) ]] || {
+  echo 'workflow contract failed: Bash 3.2 bounds leave under 10m overhead' >&2
+  exit 1
+}
+
 # The yq programs intentionally compare literal GitHub and shell expressions;
 # neither language should be expanded by this test process.
 # shellcheck disable=SC2016
@@ -174,6 +214,22 @@ contracts() {
   check '.jobs.required.steps[0].run | contains("if [[ \"$RUSTSEC_ENABLED\" == true ]]; then\n  test \"$RUSTSEC_RESULT\" = success\nelse\n  test \"$RUSTSEC_RESULT\" = skipped\nfi")' rust-ci.yml
   check '.jobs.required.steps[0].run | contains("test \"$ANDROID_PACKAGE_RESULT\" = success")' rust-ci.yml
   check '.jobs.required.steps[0].run | contains("test \"$TERMUX_RESULT\" = success")' rust-ci.yml
+  check '.jobs.quality."timeout-minutes" == 180' rust-ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Install Rust")."timeout-minutes" == 10' rust-ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Run repo setup")."timeout-minutes" == 15' rust-ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Add package smoke Rust target")."timeout-minutes" == 5' rust-ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Install package smoke musl linker")."timeout-minutes" == 10' rust-ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Prepare package smoke")."timeout-minutes" == 15' rust-ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Install minimum supported Rust")."timeout-minutes" == 10' rust-ci.yml
+  check '.jobs.rustsec."timeout-minutes" == 60' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Install Rust")."timeout-minutes" == 10' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Restore pinned cargo-audit")."timeout-minutes" == 5' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Install cargo-audit")."timeout-minutes" == 20' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Install cargo-audit").env.CARGO_HTTP_TIMEOUT == "60"' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Install cargo-audit").env.CARGO_NET_RETRY == "3"' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Verify cargo-audit")."timeout-minutes" == 2' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Save pinned cargo-audit")."timeout-minutes" == 5' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Audit the committed dependency graph")."timeout-minutes" == 10' rust-ci.yml
   check '.on.workflow_call.inputs.android-package-smoke-command.required == true' rust-ci.yml
   check '.on.workflow_call.inputs.termux-command.required == true' rust-ci.yml
   check '.jobs.android-package.if == null' rust-ci.yml
@@ -285,6 +341,18 @@ contracts() {
   check '.jobs.release-asset-upload-bash32.name == "Release asset upload / Bash 3.2"' ci.yml
   check '.jobs.release-asset-upload-bash32.uses == "./.github/workflows/bash32-ci.yml"' ci.yml
   check '.jobs.release-asset-upload-bash32.with.command == "/bin/bash test/release-asset-upload-test"' ci.yml
+  check '.jobs.smoke."timeout-minutes" == 45' bash32-ci.yml
+  check '.jobs.smoke.steps[] | select(.name == "Verify stock Bash resolver failure")."timeout-minutes" == 5' bash32-ci.yml
+  check '.jobs.smoke.steps[] | select(.name == "Provision modern Bash candidate")."timeout-minutes" == 10' bash32-ci.yml
+  check '.jobs.smoke.steps[] | select(.name == "Run Bash 3.2 smoke")."timeout-minutes" == 20' bash32-ci.yml
+  check '.jobs.quality."timeout-minutes" == 35' ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Install actionlint")."timeout-minutes" == 5' ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Install actionlint").run | contains("--connect-timeout 10 --max-time 60")' ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Install actionlint").run | contains("--speed-limit 1024 --speed-time 30")' ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Install zizmor")."timeout-minutes" == 10' ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Install zizmor").env.PIP_DEFAULT_TIMEOUT == "60"' ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Install zizmor").env.PIP_RETRIES == "3"' ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Install ShellCheck")."timeout-minutes" == 10' ci.yml
   check '.jobs.quality.steps[] | select(.name == "Install actionlint").run | contains("--retry 3 --retry-all-errors --retry-delay 1")' ci.yml
   check '.jobs.quality.steps[] | select(.name == "Install zizmor").env.ZIZMOR_VERSION == "1.29.0"' ci.yml
   check '.jobs.quality.steps[] | select(.name == "Lint shell inventory").uses == "./.github/actions/shellcheck-inventory"' ci.yml
