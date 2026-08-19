@@ -174,6 +174,19 @@ xdg:    ${XDG_DATA_HOME:-$HOME/.local/share}/cgraf78/checkouts/<repository>
 shdeps: ${SHDEPS_INSTALL_DIR:-$HOME/.local/share}/<owner>/<repository>
 ```
 
+Network Git operations are bounded independently of Git's transport-specific
+stall behavior. Each clone receives 300 seconds, then its dedicated process
+group receives `TERM` followed by `KILL` after a five-second grace period.
+The installer makes at most three attempts with a linear five-second retry
+delay and removes the private staging checkout between failed runs. Tests may
+override these integer limits with
+`CGRAF78_CHECKOUT_INSTALL_GIT_TIMEOUT_SECS`,
+`CGRAF78_CHECKOUT_INSTALL_GIT_KILL_AFTER_SECS`,
+`CGRAF78_CHECKOUT_INSTALL_GIT_RETRIES`, and
+`CGRAF78_CHECKOUT_INSTALL_GIT_RETRY_DELAY_SECS`; retries are limited to one
+through nine, timeout and kill grace must be positive, and retry delay may be
+zero; the latter three accept at most nine decimal digits.
+
 The versioned symbolic cases in
 `fixtures/shdeps-root-v1.tsv` are the shared conformance vectors for consumers
 and Shdeps; neither implementation should maintain an independent precedence

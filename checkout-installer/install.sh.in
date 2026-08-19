@@ -20,6 +20,10 @@
   checkout_ref='@CHECKOUT_REF@'
   checkout_delegate='@CHECKOUT_DELEGATE@'
   checkout_default_destination='@CHECKOUT_DEFAULT_DESTINATION@'
+  checkout_git_timeout_default=300
+  checkout_git_kill_after_default=5
+  checkout_git_retries_default=3
+  checkout_git_retry_delay_default=5
   # @CHECKOUT_DEVELOPMENT_BEGIN@
   checkout_force_managed=false
   if [[ ${1:-} == --managed ]]; then
@@ -308,12 +312,80 @@
   }
 
   network_git() {
-    local status
+    local attempt=1 status delay
+
+    while :; do
+      if network_git_attempt "$@"; then
+        return 0
+      else
+        status=$?
+      fi
+      reset_network_git_attempt ||
+        die 'cannot remove failed Git network attempt'
+      if [[ "$attempt" -ge "$checkout_git_retries" ]]; then
+        return "$status"
+      fi
+      delay=$((checkout_git_retry_delay * attempt))
+      printf 'install.sh: Git network operation failed (attempt %s/%s, exit %s); retrying in %ss\n' \
+        "$attempt" "$checkout_git_retries" "$status" "$delay" >&2
+      command sleep "$delay"
+      attempt=$((attempt + 1))
+    done
+  }
+
+  network_git_process_running() {
+    local pid=$1 state
+
+    kill -0 "$pid" 2>/dev/null || return 1
+    # `kill -0` already proved the process exists. Treat an unavailable or
+    # incompatible `ps` conservatively: reporting it stopped would enter a
+    # bare wait and discard the supervisor deadline on that platform.
+    if ! state=$(command ps -o stat= -p "$pid" 2>/dev/null); then
+      return 0
+    fi
+    state=${state//[[:space:]]/}
+    [[ -z "$state" || "$state" != Z* ]]
+  }
+
+  network_git_stop_group() {
+    local pid=$1 pgid=$2 started=$SECONDS reaped=false
+
+    kill -s TERM -- "-$pgid" 2>/dev/null || true
+    while ((SECONDS - started < checkout_git_kill_after)); do
+      if [[ "$reaped" == false ]] && ! network_git_process_running "$pid"; then
+        wait "$pid" 2>/dev/null || true
+        reaped=true
+      fi
+      if [[ "$reaped" == true ]] && ! kill -0 -- "-$pgid" 2>/dev/null; then
+        return 0
+      fi
+      command sleep 0.05
+    done
+    kill -s KILL -- "-$pgid" 2>/dev/null || true
+    [[ "$reaped" == true ]] || wait "$pid" 2>/dev/null || true
+  }
+
+  reset_network_git_attempt() {
+    local candidate
+
+    for candidate in "${staging:-}" "${update_next:-}"; do
+      [[ -n "$candidate" && -d "$candidate" && ! -L "$candidate" ]] ||
+        continue
+      rm -rf -- "$candidate" || return 1
+    done
+  }
+
+  network_git_attempt() {
+    local status started pgid
 
     active_git_home=$(mktemp -d \
       "${TMPDIR:-/tmp}/cgraf78-checkout-installer.git.XXXXXX") ||
       die 'cannot create isolated Git configuration home'
 
+    # Bash job control gives the asynchronous Git leader a dedicated process
+    # group without relying on GNU timeout, setsid, Python, or Perl. The same
+    # mechanism is available in Bash 4 on Linux, macOS, and Termux.
+    set -m
     (
       GIT_ASKPASS=/bin/false
       SSH_ASKPASS=/bin/false
@@ -324,11 +396,49 @@
       exec_bootstrap_git -c credential.helper= "$@"
     ) </dev/null &
     active_child_pid=$!
+    set +m
+    pgid=$(command ps -o pgid= -p "$active_child_pid" 2>/dev/null || true)
+    pgid=${pgid//[[:space:]]/}
+    if [[ "$pgid" != "$active_child_pid" ]]; then
+      if ! network_git_process_running "$active_child_pid"; then
+        set +e
+        wait "$active_child_pid"
+        status=$?
+        set -e
+        active_child_pid=
+        rm -rf -- "$active_git_home"
+        active_git_home=
+        return "$status"
+      fi
+      signal_process_tree "$active_child_pid" TERM || true
+      wait "$active_child_pid" 2>/dev/null || true
+      active_child_pid=
+      rm -rf -- "$active_git_home"
+      active_git_home=
+      printf 'install.sh: cannot isolate Git network process group\n' >&2
+      return 125
+    fi
+    active_child_pgid=$pgid
+    started=$SECONDS
+    while network_git_process_running "$active_child_pid"; do
+      if ((SECONDS - started >= checkout_git_timeout)); then
+        printf 'install.sh: Git network operation timed out after %ss\n' \
+          "$checkout_git_timeout" >&2
+        network_git_stop_group "$active_child_pid" "$active_child_pgid"
+        active_child_pid=
+        active_child_pgid=
+        rm -rf -- "$active_git_home"
+        active_git_home=
+        return 124
+      fi
+      command sleep 0.05
+    done
     set +e
     wait "$active_child_pid"
     status=$?
-    active_child_pid=
     set -e
+    active_child_pid=
+    active_child_pgid=
     rm -rf -- "$active_git_home"
     active_git_home=
     return "$status"
@@ -467,6 +577,26 @@
     exec_delegate "$script_dir" "$@"
   fi
 
+  checkout_git_timeout=${CGRAF78_CHECKOUT_INSTALL_GIT_TIMEOUT_SECS:-$checkout_git_timeout_default}
+  checkout_git_kill_after=${CGRAF78_CHECKOUT_INSTALL_GIT_KILL_AFTER_SECS:-$checkout_git_kill_after_default}
+  checkout_git_retries=${CGRAF78_CHECKOUT_INSTALL_GIT_RETRIES:-$checkout_git_retries_default}
+  checkout_git_retry_delay=${CGRAF78_CHECKOUT_INSTALL_GIT_RETRY_DELAY_SECS:-$checkout_git_retry_delay_default}
+  for checkout_git_number in \
+    "$checkout_git_timeout" "$checkout_git_kill_after" \
+    "$checkout_git_retry_delay"; do
+    case $checkout_git_number in
+      '' | *[!0-9]* | ??????????*)
+        die 'Git timeout, kill grace, and retry delay must be nonnegative decimal integers of at most nine digits'
+        ;;
+    esac
+  done
+  [[ $checkout_git_timeout -gt 0 && $checkout_git_kill_after -gt 0 ]] ||
+    die 'Git timeout and kill grace must be greater than zero'
+  case $checkout_git_retries in
+    [1-9]) ;;
+    *) die 'Git retries must be a decimal integer from 1 through 9' ;;
+  esac
+
   repo_url=${CGRAF78_CHECKOUT_INSTALL_REPO_URL:-$default_repo_url}
   checkout_dir=${CGRAF78_CHECKOUT_INSTALL_DIR:-}
   if [[ -z "$checkout_dir" ]]; then
@@ -502,6 +632,7 @@
   staging=
   publish_identity=
   active_child_pid=
+  active_child_pgid=
   active_git_home=
   lock_dir="$checkout_parent/.${checkout_name}.install.lock"
   update_transaction="$checkout_parent/.${checkout_name}.install.transaction"
@@ -1517,7 +1648,10 @@
       # Use a catchable termination signal for those owned children while the
       # bootstrap still reports the conventional interrupt status to callers.
       [[ "$signal" == INT ]] && child_signal=TERM
-      if ! signal_process_tree "$active_child_pid" "$child_signal"; then
+      if [[ -n ${active_child_pgid:-} ]]; then
+        network_git_stop_group "$active_child_pid" "$active_child_pgid"
+        active_child_pgid=
+      elif ! signal_process_tree "$active_child_pid" "$child_signal"; then
         printf 'install.sh: process-tree cleanup was incomplete after %s\n' \
           "$signal" >&2
       fi
