@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+supervisor=$root/.github/actions/dotfiles-bootstrap/bounded.sh
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() {
+  printf 'not ok - %s\n' "$*" >&2
+  exit 1
+}
+
+[[ -f "$supervisor" ]] || fail 'dotfiles bootstrap bounded supervisor is missing'
+# shellcheck source=/dev/null
+source "$supervisor"
+
+cat >"$tmp/hang" <<'SCRIPT'
+#!/usr/bin/env bash
+trap '' TERM
+printf '%s\n' "$$" >>"${ATTEMPT_LOG:?}"
+while :; do sleep 1; done
+SCRIPT
+chmod 0755 "$tmp/hang"
+
+attempt_log=$tmp/attempts
+stderr=$tmp/stderr
+started=$(date +%s)
+if ATTEMPT_LOG=$attempt_log \
+  DOTFILES_BOOTSTRAP_COMMAND_TIMEOUT=1 \
+  DOTFILES_BOOTSTRAP_COMMAND_KILL_AFTER=1 \
+  DOTFILES_BOOTSTRAP_RETRY_DELAYS=0,0 \
+  dotfiles_bootstrap_retry network "$tmp/hang" 2>"$stderr"; then
+  fail 'hung command unexpectedly succeeded'
+fi
+elapsed=$(($(date +%s) - started))
+[[ $(wc -l <"$attempt_log") -eq 3 ]] ||
+  fail 'hung command did not consume exactly three bounded attempts'
+[[ "$elapsed" -lt 12 ]] || fail "hung retries exceeded their budget (${elapsed}s)"
+grep -Fq 'infra-stall: dotfiles bootstrap network command exhausted bounded retries' \
+  "$stderr" || fail 'hung retries omitted their owned infrastructure marker'
+while IFS= read -r pid; do
+  kill -0 "$pid" 2>/dev/null &&
+    fail "bounded supervisor left attempt process running: $pid"
+done <"$attempt_log"
+
+cat >"$tmp/descendant" <<'SCRIPT'
+#!/usr/bin/env bash
+trap 'exit 0' TERM
+(trap '' TERM; printf '%s\n' "$$" >"${DESCENDANT_PID_LOG:?}"; while :; do sleep 1; done) &
+wait
+SCRIPT
+chmod 0755 "$tmp/descendant"
+descendant_pid_log=$tmp/descendant.pid
+# shellcheck disable=SC2016 # Positional parameters expand in the nested shell.
+DESCENDANT_PID_LOG=$descendant_pid_log setsid bash -c \
+  'source "$1"; DOTFILES_BOOTSTRAP_COMMAND_TIMEOUT=20 DOTFILES_BOOTSTRAP_COMMAND_KILL_AFTER=1 dotfiles_bootstrap_bounded "$2"' \
+  bash "$supervisor" "$tmp/descendant" &
+supervisor_pid=$!
+for _ in {1..50}; do
+  [[ -s "$descendant_pid_log" ]] && break
+  sleep 0.05
+done
+[[ -s "$descendant_pid_log" ]] || fail 'cancellation fixture did not start its descendant'
+descendant_pid=$(<"$descendant_pid_log")
+kill -TERM -- "-$supervisor_pid"
+set +e
+wait "$supervisor_pid"
+cancel_status=$?
+set -e
+[[ "$cancel_status" -eq 143 ]] ||
+  fail "bounded cancellation returned $cancel_status instead of 143"
+for _ in {1..20}; do
+  kill -0 "$descendant_pid" 2>/dev/null || break
+  sleep 0.05
+done
+if kill -0 "$descendant_pid" 2>/dev/null &&
+  [[ $(ps -o stat= -p "$descendant_pid" 2>/dev/null) != Z* ]]; then
+  kill -KILL "$descendant_pid" 2>/dev/null || true
+  fail 'bounded cancellation left a TERM-ignoring descendant running'
+fi
+
+timeout=${DOTFILES_BOOTSTRAP_COMMAND_TIMEOUT:-90}
+grace=${DOTFILES_BOOTSTRAP_COMMAND_KILL_AFTER:-5}
+delays=${DOTFILES_BOOTSTRAP_RETRY_DELAYS:-15,30}
+IFS=, read -r delay_one delay_two <<<"$delays"
+phase_window=$((3 * (timeout + grace) + delay_one + delay_two))
+total_window=$((3 * phase_window))
+[[ "$total_window" -lt 1200 ]] ||
+  fail "dotfiles bootstrap retry budget exceeds the 20-minute outer step (${total_window}s)"
+
+printf 'ok - dotfiles bootstrap network retries are bounded\n'
