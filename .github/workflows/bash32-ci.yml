@@ -29,6 +29,7 @@ jobs:
   smoke:
     name: macOS
     runs-on: macos-15-intel
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -36,6 +37,7 @@ jobs:
 
       - name: Verify stock Bash resolver failure
         if: inputs.provision_modern_bash && inputs.pre_provision_command != ''
+        timeout-minutes: 5
         shell: /bin/bash {0}
         env:
           PRE_PROVISION_COMMAND: ${{ inputs.pre_provision_command }}
@@ -43,6 +45,7 @@ jobs:
 
       - name: Provision modern Bash candidate
         if: inputs.provision_modern_bash
+        timeout-minutes: 10
         shell: /bin/bash {0}
         run: |-
           modern_prefix=$(brew --prefix bash 2>/dev/null || true)
@@ -58,6 +61,7 @@ jobs:
             >> "$GITHUB_ENV"
 
       - name: Run Bash 3.2 smoke
+        timeout-minutes: 20
         shell: /bin/bash {0}
         env:
           BASH32_COMMAND: ${{ inputs.command }}
