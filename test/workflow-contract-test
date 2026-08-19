@@ -98,6 +98,7 @@ contracts() {
   check '.jobs.platform.steps[] | select(.name == "Configure lightweight dotfiles bootstrap").if == "inputs.setup == '\''dotfiles'\'' && !inputs.dotfiles-provider"' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Configure lightweight dotfiles bootstrap").run == "echo \"DOT_INIT_SKIP_PROVIDER=1\" >> \"$GITHUB_ENV\""' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env.SHDEPS_FORCE == "${{ inputs.force-dotfiles-update && '"'"'1'"'"' || '"'"'0'"'"' }}"' _shell-platforms.yml
+  check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env.DOT_VERBOSE == "1"' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env.GH_TOKEN == "${{ secrets.DEPENDENCY_GH_TOKEN }}"' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env.GITHUB_TOKEN == "${{ inputs.dotfiles-provider && github.token || '"'"''"'"' }}"' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env.MISE_GITHUB_TOKEN == "${{ github.token }}"' _shell-platforms.yml
