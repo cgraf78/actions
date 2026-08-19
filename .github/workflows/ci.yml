@@ -220,6 +220,10 @@ jobs:
       - name: Verify internal Actions sync
         uses: cgraf78/actions/.github/actions/verify-consumer-sync@548172b65c9ef30fe5871b6fa685c7680c12848b
 
+      - name: Verify internal action implementations
+        shell: bash
+        run: bash consumer-ci/verify-self-pin.sh
+
       - name: Install actionlint
         timeout-minutes: 5
         shell: bash

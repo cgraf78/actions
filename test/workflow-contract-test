@@ -361,6 +361,7 @@ contracts() {
   check '.jobs.quality.steps[] | select(.name == "Test generated checkout installer").run == "test/checkout-installer-test"' ci.yml
   check '.jobs.quality.steps[] | select(.name == "Test bounded Termux ADB commands").run == "test/termux-adb-test"' ci.yml
   check ".jobs.quality.steps[] | select(.name == \"Verify internal Actions sync\").uses == \"cgraf78/actions/.github/actions/verify-consumer-sync@$actions_lock\"" ci.yml
+  check '.jobs.quality.steps[] | select(.name == "Verify internal action implementations").run == "bash consumer-ci/verify-self-pin.sh"' ci.yml
   check '.jobs.release-installer-bash32.name == "Release installer / Bash 3.2"' ci.yml
   check '.jobs.release-installer-bash32.uses == "./.github/workflows/bash32-ci.yml"' ci.yml
   check '.jobs.release-installer-bash32.with.command == "/bin/bash test/release-installer-test"' ci.yml

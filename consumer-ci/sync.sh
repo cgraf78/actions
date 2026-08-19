@@ -11,11 +11,15 @@ set -euo pipefail
 usage() {
   cat >&2 <<'EOF'
 usage: consumer-ci/sync.sh <consumer-repository>
+       consumer-ci/sync.sh --self
 
 Run this command from the cgraf78/actions checkout at the commit the consumer
 should pin. It writes the consumer lock, updates every tracked workflow/action
 reference, refreshes vendored release scripts, and regenerates any opted-in
 release or checkout installer.
+
+Use --self after committing provider changes to generate cgraf78/actions' own
+internal lock and literal action references from that implementation commit.
 EOF
 }
 
@@ -28,7 +32,11 @@ source_root=$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)
 # The checkout itself selects the dependency version. This prevents a caller
 # from supplying a SHA that does not describe the scripts copied below.
 actions_sha=$(git -C "$source_root" rev-parse HEAD)
-consumer=$1
+if [[ $1 == --self ]]; then
+  consumer=$source_root
+else
+  consumer=$1
+fi
 # Parse quoted scalars through their matching quote, while an unquoted scalar
 # ends at whitespace or a closing flow delimiter. The loop below consumes one
 # match at a time so two step mappings on one line cannot hide a second ref.
