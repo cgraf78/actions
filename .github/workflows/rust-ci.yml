@@ -139,6 +139,7 @@ jobs:
   quality:
     name: Quality / Ubuntu
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -148,6 +149,7 @@ jobs:
         run: git config --global --add safe.directory "$(pwd)"
 
       - name: Install Rust
+        timeout-minutes: 10
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: ${{ inputs.rust-toolchain }}
@@ -155,6 +157,7 @@ jobs:
 
       - name: Run repo setup
         if: inputs.setup-command != ''
+        timeout-minutes: 15
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
@@ -170,6 +173,7 @@ jobs:
 
       - name: Check formatting
         if: inputs.fmt-command != ''
+        timeout-minutes: 10
         shell: bash
         env:
           FMT_COMMAND: ${{ inputs.fmt-command }}
@@ -182,6 +186,7 @@ jobs:
 
       - name: Lint
         if: inputs.clippy-command != ''
+        timeout-minutes: 15
         shell: bash
         env:
           CLIPPY_COMMAND: ${{ inputs.clippy-command }}
@@ -194,6 +199,7 @@ jobs:
 
       - name: Build release binary
         if: inputs.build-command != ''
+        timeout-minutes: 20
         shell: bash
         env:
           BUILD_COMMAND: ${{ inputs.build-command }}
@@ -212,6 +218,7 @@ jobs:
       # concerns separate so only native-code consumers pay for an apt install.
       - name: Add package smoke Rust target
         if: inputs.package-smoke-command != '' && inputs.package-smoke-musl-target != ''
+        timeout-minutes: 5
         shell: bash
         env:
           PACKAGE_SMOKE_MUSL_TARGET: ${{ inputs.package-smoke-musl-target }}
@@ -219,10 +226,12 @@ jobs:
 
       - name: Install package smoke musl linker
         if: inputs.package-smoke-command != '' && inputs.package-smoke-musl-target != '' && inputs.package-smoke-install-musl-tools
+        timeout-minutes: 10
         uses: cgraf78/actions/.github/actions/musl-build-prereqs@d67086bbaa3a67ed9ea6f8166e9d5c878c9dbd23
 
       - name: Prepare package smoke
         if: inputs.package-smoke-command != '' && inputs.package-smoke-setup-command != ''
+        timeout-minutes: 15
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
@@ -238,6 +247,7 @@ jobs:
 
       - name: Smoke release package
         if: inputs.package-smoke-command != ''
+        timeout-minutes: 20
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
@@ -254,6 +264,7 @@ jobs:
 
       - name: Check public docs
         if: inputs.doc-command != ''
+        timeout-minutes: 10
         shell: bash
         env:
           DOC_COMMAND: ${{ inputs.doc-command }}
@@ -270,12 +281,14 @@ jobs:
       # the entire quality job or weakening the existing required check.
       - name: Install minimum supported Rust
         if: inputs.msrv-toolchain != '' && inputs.msrv-command != ''
+        timeout-minutes: 10
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: ${{ inputs.msrv-toolchain }}
 
       - name: Check minimum supported Rust
         if: inputs.msrv-toolchain != '' && inputs.msrv-command != ''
+        timeout-minutes: 15
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
@@ -294,6 +307,7 @@ jobs:
     # Callers with an exceptional policy can still disable this explicitly.
     if: inputs.audit-command != ''
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     env:
       CARGO_AUDIT_VERSION: 0.22.2
     steps:
@@ -302,6 +316,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust
+        timeout-minutes: 10
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: ${{ inputs.rust-toolchain }}
@@ -318,6 +333,7 @@ jobs:
       # save misses below, avoiding a duplicate cache scoped to a short-lived PR.
       - name: Restore pinned cargo-audit
         id: cargo-audit-cache
+        timeout-minutes: 5
         # Cache availability is an optimization, not an audit prerequisite.
         # Fall through to the source build on service or extraction failures.
         continue-on-error: true
@@ -333,7 +349,11 @@ jobs:
       # cache service trouble costs time rather than weakening the audit.
       - name: Install cargo-audit
         if: steps.cargo-audit-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 20
         shell: bash
+        env:
+          CARGO_HTTP_TIMEOUT: "60"
+          CARGO_NET_RETRY: "3"
         run: |
           rm -f "$HOME/.cargo/bin/cargo-audit"
           cd "$RUNNER_TEMP"
@@ -343,6 +363,7 @@ jobs:
       # the bytes. This check catches a missing, unusable, or wrong-version
       # executable on both paths; increment the cache epoch to retire one.
       - name: Verify cargo-audit
+        timeout-minutes: 2
         shell: bash
         run: |
           expected="cargo-audit $CARGO_AUDIT_VERSION"
@@ -357,6 +378,7 @@ jobs:
       # newly discovered advisory should fail the audit below without throwing
       # away the verified tool and forcing another three-minute build tomorrow.
       - name: Save pinned cargo-audit
+        timeout-minutes: 5
         if: >-
           steps.cargo-audit-cache.outputs.cache-hit != 'true' &&
           (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
@@ -372,6 +394,7 @@ jobs:
           key: cargo-audit-bin-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.CARGO_AUDIT_VERSION }}
 
       - name: Audit the committed dependency graph
+        timeout-minutes: 10
         shell: bash
         env:
           AUDIT_COMMAND: ${{ inputs.audit-command }}
