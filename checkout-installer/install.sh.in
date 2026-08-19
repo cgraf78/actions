@@ -334,7 +334,15 @@
   }
 
   network_git_process_running() {
-    local pid=$1 state
+    local pid=$1 completion=${2:-} state
+
+    # The supervised group leader publishes this marker only after the Git
+    # command has returned and immediately before it exits. That gives shells
+    # with an incompatible `ps -o stat=` a positive, portable completion
+    # signal instead of mistaking an unreaped zombie for a live child until the
+    # network deadline.
+    [[ -n "$completion" && -f "$completion" && ! -L "$completion" ]] &&
+      return 1
 
     kill -0 "$pid" 2>/dev/null || return 1
     # `kill -0` already proved the process exists. Treat an unavailable or
@@ -348,11 +356,12 @@
   }
 
   network_git_stop_group() {
-    local pid=$1 pgid=$2 started=$SECONDS reaped=false
+    local pid=$1 pgid=$2 completion=${3:-} started=$SECONDS reaped=false
 
     kill -s TERM -- "-$pgid" 2>/dev/null || true
     while ((SECONDS - started < checkout_git_kill_after)); do
-      if [[ "$reaped" == false ]] && ! network_git_process_running "$pid"; then
+      if [[ "$reaped" == false ]] &&
+        ! network_git_process_running "$pid" "$completion"; then
         wait "$pid" 2>/dev/null || true
         reaped=true
       fi
@@ -376,11 +385,13 @@
   }
 
   network_git_attempt() {
-    local status started pgid
+    local status started pgid completion completion_tmp
 
     active_git_home=$(mktemp -d \
       "${TMPDIR:-/tmp}/cgraf78-checkout-installer.git.XXXXXX") ||
       die 'cannot create isolated Git configuration home'
+    completion=$active_git_home/network-complete
+    completion_tmp=$active_git_home/network-complete.tmp
 
     # Bash job control gives the asynchronous Git leader a dedicated process
     # group without relying on GNU timeout, setsid, Python, or Perl. The same
@@ -393,14 +404,21 @@
       CHECKOUT_INSTALLER_GIT_HOME=$active_git_home
       export CHECKOUT_INSTALLER_GIT_HOME
       export GIT_ASKPASS SSH_ASKPASS GIT_SSH_COMMAND
-      exec_bootstrap_git -c credential.helper= "$@"
+      if exec_bootstrap_git -c credential.helper= "$@"; then
+        status=0
+      else
+        status=$?
+      fi
+      printf 'complete\n' >"$completion_tmp" || exit 125
+      mv "$completion_tmp" "$completion" || exit 125
+      exit "$status"
     ) </dev/null &
     active_child_pid=$!
     set +m
     pgid=$(command ps -o pgid= -p "$active_child_pid" 2>/dev/null || true)
     pgid=${pgid//[[:space:]]/}
     if [[ "$pgid" != "$active_child_pid" ]]; then
-      if ! network_git_process_running "$active_child_pid"; then
+      if ! network_git_process_running "$active_child_pid" "$completion"; then
         set +e
         wait "$active_child_pid"
         status=$?
@@ -420,11 +438,12 @@
     fi
     active_child_pgid=$pgid
     started=$SECONDS
-    while network_git_process_running "$active_child_pid"; do
+    while network_git_process_running "$active_child_pid" "$completion"; do
       if ((SECONDS - started >= checkout_git_timeout)); then
         printf 'install.sh: Git network operation timed out after %ss\n' \
           "$checkout_git_timeout" >&2
-        network_git_stop_group "$active_child_pid" "$active_child_pgid"
+        network_git_stop_group \
+          "$active_child_pid" "$active_child_pgid" "$completion"
         active_child_pid=
         active_child_pgid=
         rm -rf -- "$active_git_home"

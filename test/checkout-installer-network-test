@@ -51,6 +51,75 @@ case ${PREFIX:-} in
   /data/data/com.termux/files/usr) platform_path=$PREFIX/bin ;;
 esac
 real_git=$(PATH="$platform_path" command -v git)
+real_ps=$(PATH="$platform_path" command -v ps)
+
+completion_bin=$tmp/completion-bin
+mkdir -p "$completion_bin"
+cat >"$completion_bin/ps" <<'EOF'
+#!/usr/bin/env bash
+
+case " $* " in
+  *' -o pgid= '*) exec "$CHECKOUT_NETWORK_TEST_REAL_PS" "$@" ;;
+  *' -o stat= '*)
+    [[ ${CHECKOUT_NETWORK_TEST_PS_STAT_MODE:?} == empty ]] && exit 0
+    exit 91
+    ;;
+esac
+exec "$CHECKOUT_NETWORK_TEST_REAL_PS" "$@"
+EOF
+chmod 0755 "$completion_bin/ps"
+cat >"$completion_bin/git" <<'EOF'
+#!/usr/bin/env bash
+
+if [[ ${CHECKOUT_NETWORK_TEST_GIT_MODE:-success} == failure ]]; then
+  for argument in "$@"; do
+    [[ $argument == clone ]] || continue
+    exit 42
+  done
+fi
+exec "$CHECKOUT_NETWORK_TEST_REAL_GIT" "$@"
+EOF
+chmod 0755 "$completion_bin/git"
+for ps_stat_mode in failed empty; do
+  completion_managed=$tmp/completion-$ps_stat_mode-managed/example-tool
+  SECONDS=0
+  PATH="$completion_bin:$platform_path" \
+    CHECKOUT_NETWORK_TEST_REAL_PS="$real_ps" \
+    CHECKOUT_NETWORK_TEST_REAL_GIT="$real_git" \
+    CHECKOUT_NETWORK_TEST_PS_STAT_MODE="$ps_stat_mode" \
+    CHECKOUT_NETWORK_TEST_LOG="$tmp/completion-$ps_stat_mode.log" \
+    CGRAF78_CHECKOUT_INSTALL_GIT_TIMEOUT_SECS=3 \
+    CGRAF78_CHECKOUT_INSTALL_GIT_RETRIES=1 \
+    CGRAF78_CHECKOUT_INSTALL_DIR="$completion_managed" \
+    CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$remote" \
+    bash -s <"$source_work/install.sh" \
+    >"$tmp/completion-$ps_stat_mode.out" 2>&1 ||
+    fail "checkout did not recognize completed Git when ps stat was $ps_stat_mode"
+  [[ $SECONDS -lt 3 && -f $tmp/completion-$ps_stat_mode.log &&
+    -d $completion_managed/.git ]] ||
+    fail "checkout waited for the Git deadline when ps stat was $ps_stat_mode"
+done
+
+SECONDS=0
+set +e
+PATH="$completion_bin:$platform_path" \
+  CHECKOUT_NETWORK_TEST_REAL_PS="$real_ps" \
+  CHECKOUT_NETWORK_TEST_REAL_GIT="$real_git" \
+  CHECKOUT_NETWORK_TEST_PS_STAT_MODE=failed \
+  CHECKOUT_NETWORK_TEST_GIT_MODE=failure \
+  CHECKOUT_NETWORK_TEST_LOG="$tmp/completion-failure.log" \
+  CGRAF78_CHECKOUT_INSTALL_GIT_TIMEOUT_SECS=3 \
+  CGRAF78_CHECKOUT_INSTALL_GIT_RETRIES=1 \
+  CGRAF78_CHECKOUT_INSTALL_DIR="$tmp/completion-failure-managed/example-tool" \
+  CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$remote" \
+  bash -s <"$source_work/install.sh" >"$tmp/completion-failure.out" 2>&1
+completion_failure_status=$?
+set -e
+[[ $completion_failure_status -ne 0 && $SECONDS -lt 3 ]] ||
+  fail 'checkout did not promptly preserve a completed Git failure'
+if grep -Fq 'timed out after' "$tmp/completion-failure.out"; then
+  fail 'checkout misclassified a completed Git failure as a timeout'
+fi
 
 retry_bin=$tmp/retry-bin
 retry_attempts=$tmp/retry-attempts
@@ -85,11 +154,18 @@ EOF
 chmod 0755 "$retry_bin/git"
 cat >"$retry_bin/ps" <<'EOF'
 #!/usr/bin/env bash
-exit 91
+
+case " $* " in
+  *' -o pgid= '*) exec "$CHECKOUT_NETWORK_TEST_REAL_PS" "$@" ;;
+  *' -o stat= '*) exit 91 ;;
+esac
+exec "$CHECKOUT_NETWORK_TEST_REAL_PS" "$@"
 EOF
 chmod 0755 "$retry_bin/ps"
 PATH="$retry_bin:$platform_path" \
   CHECKOUT_NETWORK_TEST_REAL_GIT="$real_git" \
+  CHECKOUT_NETWORK_TEST_REAL_PS="$real_ps" \
+  CHECKOUT_NETWORK_TEST_PS_STAT_MODE=failed \
   CHECKOUT_NETWORK_TEST_ATTEMPTS="$retry_attempts" \
   CHECKOUT_NETWORK_TEST_CHILD_PID="$retry_child_pid" \
   CHECKOUT_NETWORK_TEST_LOG="$tmp/retry.log" \
@@ -137,6 +213,7 @@ chmod 0755 "$exhaust_bin/git"
 set +e
 exhaust_output=$(PATH="$exhaust_bin:$platform_path" \
   CHECKOUT_NETWORK_TEST_REAL_GIT="$real_git" \
+  CHECKOUT_NETWORK_TEST_REAL_PS="$real_ps" \
   CHECKOUT_NETWORK_TEST_ATTEMPTS="$exhaust_attempts" \
   CHECKOUT_NETWORK_TEST_CHILDREN="$exhaust_children" \
   CHECKOUT_NETWORK_TEST_LOG="$tmp/exhaust.log" \
