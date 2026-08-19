@@ -40,7 +40,10 @@ jobs:
         run: |
           case "$CANARY_MODE" in
             infra)
-              echo 'infra-stall: package command exhausted bounded retries' >&2
+              # GitHub echoes this whole script into the log. Assemble the
+              # final word at runtime so the unexecuted infra branch cannot
+              # make the application canary look retryable.
+              printf 'infra-stall: package command exhausted bounded %s\n' retries >&2
               ;;
             application)
               echo 'deliberate application failure' >&2
