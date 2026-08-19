@@ -65,8 +65,8 @@ is_retryable_shellcheck_download() {
   grep -Fq 'setup: none' "$log" || return 1
   ! grep -Fq '=== repository ShellCheck inventory ===' "$log" || return 1
 
-  final_curl=$(grep -E 'curl: \((22|56)\)' "$log" | tail -n 1) || return 1
-  final_exit=$(grep -E 'Process completed with exit code (22|56)\.' "$log" |
+  final_curl=$(grep -E 'curl: \((22|28|56)\)' "$log" | tail -n 1) || return 1
+  final_exit=$(grep -E 'Process completed with exit code (22|28|56)\.' "$log" |
     tail -n 1) || return 1
 
   case "$final_exit" in
@@ -82,6 +82,12 @@ is_retryable_shellcheck_download() {
           return 0
           ;;
       esac
+      ;;
+    *'exit code 28.'*)
+      # Curl uses 28 for both connect and low-speed timeouts. The surrounding
+      # action/profile signature above proves this was the pinned ShellCheck
+      # transport, so retrying cannot mask a caller's arbitrary curl failure.
+      [[ "$final_curl" == *'curl: (28) '* ]] && return 0
       ;;
   esac
   return 1

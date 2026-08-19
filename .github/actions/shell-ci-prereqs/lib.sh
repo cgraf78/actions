@@ -29,10 +29,11 @@ fi
 # that do not.
 PKG_NETWORK_TIMEOUT=${PKG_NETWORK_TIMEOUT:-30}
 # Debian-family setup performs two independent retry loops: update and install.
-# Three 60s attempts for each, 5s/10s backoffs, and a 5s forced-kill grace
-# consume at most 7m, leaving three minutes for action and runner overhead
-# inside the platform workflow's 10m prerequisite-step cap.
-PKG_COMMAND_TIMEOUT=${PKG_COMMAND_TIMEOUT:-60}
+# Three 50s attempts for each, 5s/10s backoffs, and a 5s forced-kill grace
+# consume at most 6m. That leaves room for the capped pinned downloads below
+# and runner overhead inside the platform workflow's 10m prerequisite-step
+# cap.
+PKG_COMMAND_TIMEOUT=${PKG_COMMAND_TIMEOUT:-50}
 PKG_COMMAND_KILL_AFTER=${PKG_COMMAND_KILL_AFTER:-5}
 PKG_RETRIES=${PKG_RETRIES:-3}
 
@@ -46,19 +47,50 @@ APK_NET_OPTS="--timeout $PKG_NETWORK_TIMEOUT"
 #
 # `--retry` alone does not help a transfer that connects and then goes quiet:
 # curl waits indefinitely for bytes that never arrive. `--speed-limit` with
-# `--speed-time` is the stall guard that `--max-time` cannot be here, because a
-# fixed deadline would also kill a slow-but-healthy large download.
-CURL_NET_OPTS="--connect-timeout 10 --speed-limit 1024 --speed-time 60 --retry 3 --retry-all-errors --retry-delay 1"
+# `--speed-time` detects a stalled body, while `--max-time` makes the bound
+# absolute even when a transfer keeps trickling. Keep the retry window short
+# enough that the ShellCheck path (two apt loops, then this download) still
+# finishes or emits its failure before the workflow's 10m prerequisite-step
+# cap.
+CURL_SPEED_TIME=${CURL_SPEED_TIME:-30}
+CURL_RETRIES=${CURL_RETRIES:-2}
+CURL_RETRY_DELAY=${CURL_RETRY_DELAY:-1}
+CURL_MAX_TIME=${CURL_MAX_TIME:-60}
+CURL_NET_OPTS="--connect-timeout 10 --max-time $CURL_MAX_TIME --speed-limit 1024 --speed-time $CURL_SPEED_TIME --retry $CURL_RETRIES --retry-all-errors --retry-delay $CURL_RETRY_DELAY"
 
 bounded() {
-  # `timeout` is absent from a stock macOS runner. Its short `-k` spelling is
-  # shared by GNU coreutils and BusyBox, unlike a GNU-only long option. Falling
-  # back to an unsupervised run keeps brew working rather than failing the
-  # action outright on the one platform that cannot supervise.
+  # Its short `-k` spelling is shared by GNU coreutils and BusyBox, unlike a
+  # GNU-only long option. Stock macOS lacks `timeout`, so use its preinstalled
+  # Python to supervise a separate process group there; silently running brew
+  # unsupervised would defeat the prerequisite-step bound.
   if command -v timeout >/dev/null 2>&1; then
     timeout -k "$PKG_COMMAND_KILL_AFTER" "$PKG_COMMAND_TIMEOUT" "$@"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 - "$PKG_COMMAND_TIMEOUT" "$PKG_COMMAND_KILL_AFTER" "$@" <<'PY'
+import os
+import signal
+import subprocess
+import sys
+
+timeout = float(sys.argv[1])
+grace = float(sys.argv[2])
+process = subprocess.Popen(sys.argv[3:], start_new_session=True)
+try:
+    status = process.wait(timeout=timeout)
+except subprocess.TimeoutExpired:
+    os.killpg(process.pid, signal.SIGTERM)
+    try:
+        status = process.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+        status = 124
+
+sys.exit(status if status >= 0 else 128 - status)
+PY
   else
-    "$@"
+    echo 'bounded package command requires timeout or python3' >&2
+    return 127
   fi
 }
 
