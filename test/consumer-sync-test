@@ -25,6 +25,14 @@ cp -R "$root/.github/actions/verify-consumer-sync" \
   "$actions_source/.github/actions/verify-consumer-sync"
 cp -R "$root/.github/actions/verify-release-scripts" \
   "$actions_source/.github/actions/verify-release-scripts"
+mkdir -p "$actions_source/.github/workflows"
+cat >"$actions_source/.github/workflows/self.yml" <<'YAML'
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: cgraf78/actions/.github/actions/verify-consumer-sync@1111111111111111111111111111111111111111
+YAML
 git -C "$actions_source" init --quiet --template=''
 git -C "$actions_source" config core.hooksPath /dev/null
 git -C "$actions_source" add .
@@ -33,6 +41,46 @@ git -C "$actions_source" -c user.email=t@example.com -c user.name=Test \
 
 sync="$actions_source/consumer-ci/sync.sh"
 verify="$actions_source/.github/actions/verify-consumer-sync/verify.sh"
+
+self_source="$tmp/actions-self"
+git clone --quiet "$actions_source" "$self_source"
+git -C "$self_source" config core.hooksPath /dev/null
+"$self_source/consumer-ci/sync.sh" --self >/dev/null ||
+  fail "provider self-sync command failed"
+self_want=$(git -C "$self_source" rev-parse HEAD)
+self_got=$(tr -d '\n' <"$self_source/.github/cgraf78-actions.lock")
+[[ "$self_got" == "$self_want" ]] ||
+  fail "self-sync lock contains $self_got, want $self_want"
+grep -Fq "verify-consumer-sync@$self_want" \
+  "$self_source/.github/workflows/self.yml" ||
+  fail "self-sync did not rewrite the internal actions reference"
+git -C "$self_source" add .github/cgraf78-actions.lock \
+  .github/workflows/self.yml
+GITHUB_ACTION_PATH="$self_source/.github/actions/verify-consumer-sync" \
+  GITHUB_WORKSPACE="$self_source" ACTION_REF="$self_want" \
+  "$self_source/.github/actions/verify-consumer-sync/verify.sh" >/dev/null ||
+  fail "self-synchronized provider did not verify"
+"$self_source/consumer-ci/verify-self-pin.sh" >/dev/null ||
+  fail "self-synchronized provider implementation did not verify"
+
+git -C "$self_source" -c user.email=t@example.com -c user.name=Test \
+  -c commit.gpgsign=false commit --quiet -m pin
+self_shallow="$tmp/actions-self-shallow"
+git clone --quiet --depth=1 "file://$self_source" "$self_shallow"
+git -C "$self_shallow" config core.hooksPath /dev/null
+"$self_shallow/consumer-ci/verify-self-pin.sh" >/dev/null ||
+  fail "shallow provider checkout did not fetch and verify its lock commit"
+
+printf '\n# provider drift\n' >> \
+  "$self_source/.github/actions/verify-consumer-sync/action.yml"
+git -C "$self_source" add .github/actions/verify-consumer-sync/action.yml
+git -C "$self_source" -c user.email=t@example.com -c user.name=Test \
+  -c commit.gpgsign=false commit --quiet -m drift
+out=$("$self_source/consumer-ci/verify-self-pin.sh" 2>&1) &&
+  fail "provider implementation drift unexpectedly verified"
+if [[ "$out" != *"consumer-ci/sync.sh --self"* ]]; then
+  fail "provider implementation drift omitted the self-sync recovery command"
+fi
 
 consumer="$tmp/consumer"
 mkdir -p "$consumer/.github/workflows" "$consumer/scripts" \

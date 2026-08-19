@@ -81,6 +81,12 @@ not a bot failure to ignore.
 
 The actions repository also uses this command on itself. A commit cannot
 contain its own hash, so first commit the provider changes, then run
-`consumer-ci/sync.sh .` from that clean commit and commit the resulting lock
+`consumer-ci/sync.sh --self` from that clean commit and commit the resulting lock
 and internal refs as a small follow-up. Consumer repositories do not have that
 cycle and pin the final reviewed commit directly.
+
+Provider CI compares `.github/actions/` at HEAD with the locked commit. If an
+internal action changes without that follow-up, the quality job fails and
+prints the same `consumer-ci/sync.sh --self` remediation command. The existing
+consumer verifier independently rejects a lock or literal reference that
+drifts from the generated set.
