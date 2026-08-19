@@ -208,6 +208,18 @@ jobs:
     with:
       command: /bin/bash test/release-asset-upload-test
 
+  release-gh-commands:
+    name: Release GitHub commands / Ubuntu
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test bounded release mutations
+        shell: bash
+        run: test/release-gh-commands-test
+
   quality:
     name: Quality / Ubuntu
     runs-on: ubuntu-24.04

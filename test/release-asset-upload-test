@@ -12,6 +12,14 @@ fail() {
   exit 1
 }
 
+set +e
+python3 "$root/.github/actions/upload-release-assets/run-with-timeout.py" \
+  0 1 -- bash -c 'sleep 30' >/dev/null 2>&1
+timeout_status=$?
+set -e
+[[ "$timeout_status" -eq 124 ]] ||
+  fail "portable timeout exited $timeout_status instead of 124"
+
 run_case() {
   local name=$1
   local scenario=$2
@@ -74,7 +82,15 @@ case "$1:$2" in
     ;;
 esac
 EOF
-  chmod +x "$case_dir/bin/gh"
+  cat >"$case_dir/bin/python3" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'python3 %s\n' "$*" >>"$FAKE_CALLS"
+[[ "$2" == 120 && "$3" == 5 && "$4" == -- ]] || exit 98
+shift 4
+"$@"
+EOF
+  chmod +x "$case_dir/bin/gh" "$case_dir/bin/python3"
 
   case "$scenario" in
     existing)
@@ -102,6 +118,7 @@ EOF
     FAKE_DIR="$case_dir" \
     FAKE_REMOTE="$case_dir/remote" \
     FAKE_SCENARIO="$scenario" \
+    GITHUB_ACTION_PATH="$root/.github/actions/upload-release-assets" \
     GITHUB_REPOSITORY=cgraf78/example \
     PATH="$case_dir/bin:$PATH" \
     RELEASE_UPLOAD_RETRY_DELAYS=0,0 \
@@ -131,6 +148,9 @@ run_case partial partial 0
 run_case ambiguous ambiguous 0
 [[ $(grep -c '^release upload ' "$CASE_DIR/calls") -eq 1 ]] ||
   fail "ambiguous successful upload was retried"
+
+grep -q '^python3 .*run-with-timeout.py 120 5 -- gh release upload ' "$CASE_DIR/calls" ||
+  fail "release upload was not bounded"
 
 run_case ambiguous-view-failure ambiguous-view-failure 0
 [[ $(grep -c '^release upload ' "$CASE_DIR/calls") -eq 1 ]] ||
@@ -166,6 +186,7 @@ ASSET_GLOB="$duplicate_dir/*/tool.tar.gz" \
   FAKE_DIR="$duplicate_dir" \
   FAKE_REMOTE="$duplicate_dir/remote" \
   FAKE_SCENARIO=duplicate \
+  GITHUB_ACTION_PATH="$root/.github/actions/upload-release-assets" \
   GITHUB_REPOSITORY=cgraf78/example \
   PATH="$duplicate_dir/bin:$PATH" \
   RELEASE_UPLOAD_RETRY_DELAYS=0,0 \

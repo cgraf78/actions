@@ -46,6 +46,7 @@ program	test/package-manager-test
 program	test/rust-prereqs-test
 program	test/release-installer-test
 program	test/release-asset-upload-test
+program	test/release-gh-commands-test
 program	test/release-scripts-test
 program	test/shell-ci-prereqs-test
 program	test/shellcheck-action-test

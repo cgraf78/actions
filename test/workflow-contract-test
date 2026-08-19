@@ -321,6 +321,12 @@ contracts() {
   check '.on.workflow_call.inputs.install-musl-tools.default == false' rust-release.yml
   check '.on.workflow_call.inputs.install-musl-tools.required == false' rust-release.yml
   check '.on.workflow_call.inputs.install-musl-tools.type == "boolean"' rust-release.yml
+  check '.jobs.create-release.steps[] | select(.name == "Create draft release").run | contains("timeout -k 5 \"${RELEASE_GH_TIMEOUT_SECONDS:-120}\"")' rust-release.yml
+  check '.jobs.create-release.steps[] | select(.name == "Create draft release").run | contains("state=$(release_state)")' rust-release.yml
+  check '.jobs.create-release.steps[] | select(.name == "Create draft release").run | contains("state is unknown; deferring creation")' rust-release.yml
+  check '.jobs.publish-release.steps[] | select(.name == "Publish draft release").run | contains("timeout -k 5 \"${RELEASE_GH_TIMEOUT_SECONDS:-120}\"")' rust-release.yml
+  check '.jobs.publish-release.steps[] | select(.name == "Publish draft release").run | contains("state=$(release_state)")' rust-release.yml
+  check '.jobs.publish-release.steps[] | select(.name == "Publish draft release").run | contains("state is unknown; deferring publication")' rust-release.yml
   check ".jobs.build.steps[] | select(.name == \"Upload release assets\").uses == \"cgraf78/actions/.github/actions/upload-release-assets@$actions_lock\"" rust-release.yml
   check '.jobs.build.steps[] | select(.name == "Upload release assets").with."asset-glob" == "${{ inputs.asset-glob }}"' rust-release.yml
   check '.jobs.build.steps[] | select(.name == "Upload release assets").with."github-token" == "${{ github.token }}"' rust-release.yml

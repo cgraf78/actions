@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+workflow="$root/.github/workflows/rust-release.yml"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() {
+  printf 'release-gh-commands-test: %s\n' "$*" >&2
+  exit 1
+}
+
+run_step() {
+  local name=$1
+  local scenario=$2
+  local step_name=$3
+  local case_dir="$tmp/$name"
+  mkdir -p "$case_dir/bin"
+  : >"$case_dir/calls"
+  : >"$case_dir/state"
+  printf '%s\n' "$scenario" >"$case_dir/scenario"
+
+  cat >"$case_dir/bin/timeout" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'timeout %s\n' "$*" >>"$FAKE_CALLS"
+[[ "$1" == -k && "$2" == 5 && "$3" == 120 ]] || exit 98
+shift 3
+"$@"
+EOF
+
+  cat >"$case_dir/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'gh %s\n' "$*" >>"$FAKE_CALLS"
+scenario=$(<"$FAKE_DIR/scenario")
+state=missing
+[[ ! -s "$FAKE_DIR/state" ]] || state=$(<"$FAKE_DIR/state")
+case "$1:$2" in
+  release:view)
+    view_count_file="$FAKE_DIR/view-count"
+    view_count=0
+    [[ ! -s "$view_count_file" ]] || view_count=$(<"$view_count_file")
+    view_count=$((view_count + 1))
+    printf '%s\n' "$view_count" >"$view_count_file"
+    if [[ "$scenario:$view_count" == *-view-timeout:1 ]]; then
+      exit 124
+    fi
+    if [[ "$state" == missing ]]; then
+      printf 'release not found\n' >&2
+      exit 1
+    fi
+    [[ "$state" == draft ]] && printf 'true\n' || printf 'false\n'
+    ;;
+  release:create)
+    printf 'draft\n' >"$FAKE_DIR/state"
+    [[ "$scenario" != create-ambiguous ]] || exit 124
+    ;;
+  release:edit)
+    printf 'published\n' >"$FAKE_DIR/state"
+    [[ "$scenario" != publish-ambiguous ]] || exit 124
+    ;;
+  *) exit 97 ;;
+esac
+EOF
+  chmod +x "$case_dir/bin/gh" "$case_dir/bin/timeout"
+
+  [[ "$scenario" != publish-* ]] || printf 'draft\n' >"$case_dir/state"
+  STEP_NAME=$step_name yq -r \
+    '.jobs[].steps[] | select(.name == strenv(STEP_NAME)).run' \
+    "$workflow" >"$case_dir/step.sh"
+
+  FAKE_CALLS="$case_dir/calls" \
+    FAKE_DIR="$case_dir" \
+    GENERATE_NOTES=true \
+    GH_TOKEN=fake \
+    GITHUB_REPOSITORY=cgraf78/example \
+    LATEST=true \
+    PATH="$case_dir/bin:$PATH" \
+    PRERELEASE=false \
+    RELEASE_GH_RETRY_DELAYS=0,0 \
+    RELEASE_TITLE='' \
+    TAG=v1 \
+    bash "$case_dir/step.sh" >"$case_dir/stdout" 2>"$case_dir/stderr" ||
+    fail "$name failed: $(<"$case_dir/stderr")"
+  CASE_DIR=$case_dir
+}
+
+run_step create-ambiguous create-ambiguous 'Create draft release'
+[[ $(grep -c '^gh release create ' "$CASE_DIR/calls") -eq 1 ]] ||
+  fail 'ambiguous create was repeated'
+[[ $(grep -c '^gh release view ' "$CASE_DIR/calls") -ge 2 ]] ||
+  fail 'ambiguous create was not reconciled'
+
+run_step create-view-timeout create-view-timeout 'Create draft release'
+[[ $(grep -c '^gh release create ' "$CASE_DIR/calls") -eq 1 ]] ||
+  fail 'create ran before timed-out state was reconciled'
+grep -q '^timeout -k 5 120 gh release view ' "$CASE_DIR/calls" ||
+  fail 'release view was not bounded'
+
+run_step publish-ambiguous publish-ambiguous 'Publish draft release'
+[[ $(grep -c '^gh release edit ' "$CASE_DIR/calls") -eq 1 ]] ||
+  fail 'ambiguous publish was repeated'
+[[ $(grep -c '^gh release view ' "$CASE_DIR/calls") -ge 2 ]] ||
+  fail 'ambiguous publish was not reconciled'
+grep -q '^timeout -k 5 120 gh release edit ' "$CASE_DIR/calls" ||
+  fail 'release edit was not bounded'
+
+printf 'release gh command tests passed\n'
