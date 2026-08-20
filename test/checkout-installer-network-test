@@ -52,6 +52,7 @@ case ${PREFIX:-} in
 esac
 real_git=$(PATH="$platform_path" command -v git)
 real_ps=$(PATH="$platform_path" command -v ps)
+real_mv=$(PATH="$platform_path" command -v mv)
 
 completion_bin=$tmp/completion-bin
 mkdir -p "$completion_bin"
@@ -80,12 +81,27 @@ fi
 exec "$CHECKOUT_NETWORK_TEST_REAL_GIT" "$@"
 EOF
 chmod 0755 "$completion_bin/git"
+cat >"$completion_bin/mv" <<'EOF'
+#!/usr/bin/env bash
+
+case ${1:-}:${2:-} in
+  */network-complete.tmp:*/network-complete)
+    printf 'completion\n' >>"$CHECKOUT_NETWORK_TEST_COMPLETION_RENAMES"
+    ;;
+esac
+exec "$CHECKOUT_NETWORK_TEST_REAL_MV" "$@"
+EOF
+chmod 0755 "$completion_bin/mv"
 for ps_stat_mode in failed empty; do
   completion_managed=$tmp/completion-$ps_stat_mode-managed/example-tool
+  completion_renames=$tmp/completion-$ps_stat_mode-renames
+  : >"$completion_renames"
   SECONDS=0
   PATH="$completion_bin:$platform_path" \
     CHECKOUT_NETWORK_TEST_REAL_PS="$real_ps" \
     CHECKOUT_NETWORK_TEST_REAL_GIT="$real_git" \
+    CHECKOUT_NETWORK_TEST_REAL_MV="$real_mv" \
+    CHECKOUT_NETWORK_TEST_COMPLETION_RENAMES="$completion_renames" \
     CHECKOUT_NETWORK_TEST_PS_STAT_MODE="$ps_stat_mode" \
     CHECKOUT_NETWORK_TEST_LOG="$tmp/completion-$ps_stat_mode.log" \
     CGRAF78_CHECKOUT_INSTALL_GIT_TIMEOUT_SECS=3 \
@@ -93,18 +109,26 @@ for ps_stat_mode in failed empty; do
     CGRAF78_CHECKOUT_INSTALL_DIR="$completion_managed" \
     CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$remote" \
     bash -s <"$source_work/install.sh" \
-    >"$tmp/completion-$ps_stat_mode.out" 2>&1 ||
+    >"$tmp/completion-$ps_stat_mode.out" 2>&1 || {
+    sed -n '1,120p' "$tmp/completion-$ps_stat_mode.out" >&2
     fail "checkout did not recognize completed Git when ps stat was $ps_stat_mode"
+  }
   [[ $SECONDS -lt 3 && -f $tmp/completion-$ps_stat_mode.log &&
     -d $completion_managed/.git ]] ||
     fail "checkout waited for the Git deadline when ps stat was $ps_stat_mode"
+  [[ $(wc -l <"$completion_renames") -eq 1 ]] ||
+    fail "checkout did not publish exactly one Git completion marker when ps stat was $ps_stat_mode"
 done
 
+completion_failure_renames=$tmp/completion-failure-renames
+: >"$completion_failure_renames"
 SECONDS=0
 set +e
 PATH="$completion_bin:$platform_path" \
   CHECKOUT_NETWORK_TEST_REAL_PS="$real_ps" \
   CHECKOUT_NETWORK_TEST_REAL_GIT="$real_git" \
+  CHECKOUT_NETWORK_TEST_REAL_MV="$real_mv" \
+  CHECKOUT_NETWORK_TEST_COMPLETION_RENAMES="$completion_failure_renames" \
   CHECKOUT_NETWORK_TEST_PS_STAT_MODE=failed \
   CHECKOUT_NETWORK_TEST_GIT_MODE=failure \
   CHECKOUT_NETWORK_TEST_LOG="$tmp/completion-failure.log" \
@@ -117,6 +141,8 @@ completion_failure_status=$?
 set -e
 [[ $completion_failure_status -ne 0 && $SECONDS -lt 3 ]] ||
   fail 'checkout did not promptly preserve a completed Git failure'
+[[ $(wc -l <"$completion_failure_renames") -eq 1 ]] ||
+  fail 'checkout failure did not publish exactly one Git completion marker'
 if grep -Fq 'timed out after' "$tmp/completion-failure.out"; then
   fail 'checkout misclassified a completed Git failure as a timeout'
 fi
