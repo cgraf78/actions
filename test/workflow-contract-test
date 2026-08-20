@@ -19,6 +19,16 @@ check() {
   fi
 }
 
+check_file() {
+  local expression=$1
+  local file=$2
+
+  if ! yq -e "$expression" "$root/$file" >/dev/null; then
+    printf 'workflow contract failed: %s: %s\n' "$file" "$expression" >&2
+    return 1
+  fi
+}
+
 check_no_unsupervised_adb() {
   local workflow=$1
   local run
@@ -182,9 +192,14 @@ contracts() {
   check '.on.workflow_call.inputs.profiles.default == "runtime"' _termux-ci.yml
   check '.jobs.termux."timeout-minutes" == 50' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Run caller tests in Termux").with."emulator-boot-timeout" == 600' _termux-ci.yml
-  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("source \"$GITHUB_WORKSPACE/.github/scripts/termux-adb.sh\"")' _termux-ci.yml
+  check ".jobs.termux.steps[] | select(.name == \"Stage bounded Termux ADB helper\").uses == \"cgraf78/actions/.github/actions/termux-adb@$actions_lock\"" _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("source \"$TERMUX_ADB_HELPER\"")' _termux-ci.yml
+  check '[.jobs.termux.steps[] | select((.run? // "") | contains("$GITHUB_WORKSPACE/.github/scripts/termux-adb.sh"))] | length == 0' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("termux_wait_for_runtime 30 3 1")' _termux-ci.yml
   check_no_unsupervised_adb _termux-ci.yml
+  check_file '.runs.using == "composite"' .github/actions/termux-adb/action.yml
+  check_file '.runs.steps[0].run | contains("$GITHUB_ACTION_PATH/termux-adb.sh")' .github/actions/termux-adb/action.yml
+  check_file '.runs.steps[0].run | contains("TERMUX_ADB_HELPER=%s")' .github/actions/termux-adb/action.yml
 
   check '.jobs.termux.steps[] | select(.name == "Stage exact Dot bootstrap payload").if == "inputs.setup == '\''dotfiles'\''"' _termux-ci.yml
   check ".jobs.termux.steps[] | select(.name == \"Stage exact Dot bootstrap payload\").uses == \"cgraf78/actions/.github/actions/dotfiles-bootstrap@$actions_lock\"" _termux-ci.yml

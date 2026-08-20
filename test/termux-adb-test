@@ -3,11 +3,21 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-# shellcheck source=.github/scripts/termux-adb.sh
-source "$root/.github/scripts/termux-adb.sh"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+
+consumer_workspace=$tmp/consumer
+mkdir -p "$consumer_workspace"
+GITHUB_WORKSPACE=$consumer_workspace
+GITHUB_ACTION_PATH=$root/.github/actions/termux-adb
+export GITHUB_WORKSPACE GITHUB_ACTION_PATH
+[[ ! -e "$GITHUB_WORKSPACE/.github/scripts/termux-adb.sh" ]] || {
+  printf 'termux adb test failed: consumer fixture unexpectedly has provider helper\n' >&2
+  exit 1
+}
+# shellcheck source=.github/actions/termux-adb/termux-adb.sh
+source "$GITHUB_ACTION_PATH/termux-adb.sh"
 
 cat >"$tmp/adb" <<'EOF'
 #!/usr/bin/env bash
