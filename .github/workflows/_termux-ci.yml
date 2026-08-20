@@ -61,7 +61,7 @@ jobs:
 
       - name: Stage exact Dot bootstrap payload
         if: inputs.setup == 'dotfiles'
-        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@5e49306f11b3f6111f3fc039cc708c9281ea9a1b
+        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@c85e9ce537ffdf1e4a45977dc12be8e63b862c57
         env:
           HOME: ${{ github.workspace }}
         with:
@@ -77,7 +77,7 @@ jobs:
 
       - name: Configure host Android NDK toolchain
         if: inputs.host-command != '' && inputs.rust-toolchain != ''
-        uses: cgraf78/actions/.github/actions/android-rust-toolchain@5e49306f11b3f6111f3fc039cc708c9281ea9a1b
+        uses: cgraf78/actions/.github/actions/android-rust-toolchain@c85e9ce537ffdf1e4a45977dc12be8e63b862c57
         with:
           rust-target: x86_64-linux-android
 
@@ -118,7 +118,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Stage bounded Termux ADB helper
-        uses: cgraf78/actions/.github/actions/termux-adb@5e49306f11b3f6111f3fc039cc708c9281ea9a1b
+        uses: cgraf78/actions/.github/actions/termux-adb@c85e9ce537ffdf1e4a45977dc12be8e63b862c57
 
       - name: Prepare Termux host runner
         shell: bash
