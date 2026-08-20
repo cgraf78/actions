@@ -93,6 +93,9 @@ push/PR runs on `core` and scheduled/manual runs on `full`.
 Dotfiles callers can set `force-dotfiles-update: true` to refresh the shdeps
 bootstrap before dependency resolution when validating forced-update behavior.
 The default is false, so normal CI consumers retain the cache-first path.
+`dotfiles-shdeps-update-policy` can override the client's Dot policy with
+`pinned` or `latest` across both conventional platforms and Termux. Its default
+`config` value leaves the committed client policy authoritative.
 `dotfiles-provider: true` separately opts the owning repository into its full
 configured Dot dependency provider. The default is false so repositories that
 reuse dotfiles setup install only their declared CI profiles. Full-provider

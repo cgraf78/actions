@@ -13,6 +13,11 @@ on:
         description: Bash command to execute inside the Termux app sandbox.
         required: true
         type: string
+      dotfiles-shdeps-update-policy:
+        description: Dotfiles Shdeps policy override. Supported values are config, pinned, and latest.
+        required: false
+        type: string
+        default: config
       host-command:
         description: Optional command that prepares checkout artifacts on the Ubuntu host.
         required: false
@@ -52,6 +57,7 @@ jobs:
     uses: ./.github/workflows/_termux-ci.yml
     with:
       command: ${{ inputs.command }}
+      dotfiles-shdeps-update-policy: ${{ inputs.dotfiles-shdeps-update-policy }}
       host-command: ${{ inputs.host-command }}
       profiles: ${{ inputs.profiles }}
       rust-toolchain: ${{ inputs.rust-toolchain }}

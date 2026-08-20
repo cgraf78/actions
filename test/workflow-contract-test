@@ -183,6 +183,10 @@ contracts() {
   check '.on.workflow_call.inputs.force-dotfiles-update.required == false' shell-ci.yml
   check '.on.workflow_call.inputs.force-dotfiles-update.type == "boolean"' shell-ci.yml
   check '.jobs.platforms.with.force-dotfiles-update == "${{ inputs.force-dotfiles-update }}"' shell-ci.yml
+  check '.on.workflow_call.inputs."dotfiles-shdeps-update-policy".default == "config"' shell-ci.yml
+  check '.on.workflow_call.inputs."dotfiles-shdeps-update-policy".required == false' shell-ci.yml
+  check '.on.workflow_call.inputs."dotfiles-shdeps-update-policy".type == "string"' shell-ci.yml
+  check '.jobs.platforms.with."dotfiles-shdeps-update-policy" == "${{ inputs.dotfiles-shdeps-update-policy }}"' shell-ci.yml
   check '.on.workflow_call.inputs.dotfiles-provider.default == false' shell-ci.yml
   check '.on.workflow_call.inputs.dotfiles-provider.required == false' shell-ci.yml
   check '.on.workflow_call.inputs.dotfiles-provider.type == "boolean"' shell-ci.yml
@@ -205,6 +209,7 @@ contracts() {
   check '.jobs.termux.with.command == "${{ inputs.termux-command != '"'"''"'"' && inputs.termux-command || inputs.test-command }}"' shell-ci.yml
   check '.jobs.termux.with.profiles == "${{ inputs.termux-profiles != '"'"''"'"' && inputs.termux-profiles || (inputs.profiles != '"'"''"'"' && inputs.profiles || '"'"'runtime'"'"') }}"' shell-ci.yml
   check '.jobs.termux.with.setup == "${{ inputs.setup }}"' shell-ci.yml
+  check '.jobs.termux.with."dotfiles-shdeps-update-policy" == "${{ inputs.dotfiles-shdeps-update-policy }}"' shell-ci.yml
   check '.on.workflow_call.inputs.concurrency-scope.default == "default"' shell-ci.yml
   check '.concurrency.group == "shell-ci-${{ github.repository }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.concurrency-scope }}"' shell-ci.yml
   check '.concurrency["cancel-in-progress"] == true' shell-ci.yml
@@ -212,6 +217,9 @@ contracts() {
   check '.on.workflow_call.inputs.force-dotfiles-update.default == false' _shell-platforms.yml
   check '.on.workflow_call.inputs.force-dotfiles-update.required == false' _shell-platforms.yml
   check '.on.workflow_call.inputs.force-dotfiles-update.type == "boolean"' _shell-platforms.yml
+  check '.on.workflow_call.inputs."dotfiles-shdeps-update-policy".default == "config"' _shell-platforms.yml
+  check '.on.workflow_call.inputs."dotfiles-shdeps-update-policy".required == false' _shell-platforms.yml
+  check '.on.workflow_call.inputs."dotfiles-shdeps-update-policy".type == "string"' _shell-platforms.yml
   check '.on.workflow_call.inputs.dotfiles-provider.default == false' _shell-platforms.yml
   check '.on.workflow_call.inputs.dotfiles-provider.required == false' _shell-platforms.yml
   check '.on.workflow_call.inputs.dotfiles-provider.type == "boolean"' _shell-platforms.yml
@@ -220,6 +228,10 @@ contracts() {
   check ".jobs.platform.steps[] | select(.name == \"Install OS prerequisites\").uses == \"cgraf78/actions/.github/actions/shell-ci-prereqs@$actions_lock\"" _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Configure lightweight dotfiles bootstrap").if == "inputs.setup == '\''dotfiles'\'' && !inputs.dotfiles-provider"' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Configure lightweight dotfiles bootstrap").run == "echo \"DOT_INIT_SKIP_PROVIDER=1\" >> \"$GITHUB_ENV\""' _shell-platforms.yml
+  check '.jobs.platform.steps[] | select(.name == "Configure Dotfiles Shdeps update policy").if == "inputs.setup == '\''dotfiles'\''"' _shell-platforms.yml
+  check '.jobs.platform.steps[] | select(.name == "Configure Dotfiles Shdeps update policy").env.DOTFILES_SHDEPS_UPDATE_POLICY == "${{ inputs.dotfiles-shdeps-update-policy }}"' _shell-platforms.yml
+  check '.jobs.platform.steps[] | select(.name == "Configure Dotfiles Shdeps update policy").run | contains("config | pinned | latest")' _shell-platforms.yml
+  check '.jobs.platform.steps[] | select(.name == "Configure Dotfiles Shdeps update policy").run | contains("DOT_SHDEPS_UPDATE_POLICY=%s")' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env.SHDEPS_FORCE == "${{ inputs.force-dotfiles-update && '"'"'1'"'"' || '"'"'0'"'"' }}"' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env.DOT_VERBOSE == "1"' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env.GH_TOKEN == "${{ secrets.DEPENDENCY_GH_TOKEN }}"' _shell-platforms.yml
@@ -238,7 +250,14 @@ contracts() {
   check '.jobs.runtime.with.profiles == "${{ inputs.profiles }}"' termux-ci.yml
   check '.jobs.runtime.with.setup == "${{ inputs.setup }}"' termux-ci.yml
   check '.on.workflow_call.inputs.profiles.default == "runtime"' termux-ci.yml
+  check '.on.workflow_call.inputs."dotfiles-shdeps-update-policy".default == "config"' termux-ci.yml
+  check '.on.workflow_call.inputs."dotfiles-shdeps-update-policy".required == false' termux-ci.yml
+  check '.on.workflow_call.inputs."dotfiles-shdeps-update-policy".type == "string"' termux-ci.yml
+  check '.jobs.runtime.with."dotfiles-shdeps-update-policy" == "${{ inputs.dotfiles-shdeps-update-policy }}"' termux-ci.yml
   check '.on.workflow_call.inputs.profiles.default == "runtime"' _termux-ci.yml
+  check '.on.workflow_call.inputs."dotfiles-shdeps-update-policy".default == "config"' _termux-ci.yml
+  check '.on.workflow_call.inputs."dotfiles-shdeps-update-policy".required == false' _termux-ci.yml
+  check '.on.workflow_call.inputs."dotfiles-shdeps-update-policy".type == "string"' _termux-ci.yml
   check '.jobs.termux."timeout-minutes" == 50' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Run caller tests in Termux").with."emulator-boot-timeout" == 600' _termux-ci.yml
   check ".jobs.termux.steps[] | select(.name == \"Stage bounded Termux ADB helper\").uses == \"cgraf78/actions/.github/actions/termux-adb@$actions_lock\"" _termux-ci.yml
@@ -256,6 +275,10 @@ contracts() {
   check '.jobs.termux.steps[] | select(.name == "Stage exact Dot bootstrap payload").with.mode == "stage"' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Stage exact Dot bootstrap payload").with."stage-directory" == "${{ runner.temp }}/dotfiles-bootstrap-payload"' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").env.DOTFILES_BOOTSTRAP_PAYLOAD == "${{ runner.temp }}/dotfiles-bootstrap-payload"' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").env.DOTFILES_SHDEPS_UPDATE_POLICY == "${{ inputs.dotfiles-shdeps-update-policy }}"' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("config | pinned | latest")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("policy_b64=")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("if [[ \"$setup\" == dotfiles && \"$dotfiles_shdeps_update_policy\" != config ]]; then\n  export DOT_SHDEPS_UPDATE_POLICY=$dotfiles_shdeps_update_policy\nfi")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("unsupported Termux setup mode")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("termux_pkg apt-get \"${apt_net_opts[@]}\" update")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("full-upgrade -y")' _termux-ci.yml

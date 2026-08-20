@@ -13,6 +13,11 @@ on:
         required: false
         type: boolean
         default: false
+      dotfiles-shdeps-update-policy:
+        description: Dotfiles Shdeps policy override. Supported values are config, pinned, and latest.
+        required: false
+        type: string
+        default: config
       dotfiles-provider:
         description: Run the configured Dot dependency provider during dotfiles setup.
         required: false
@@ -87,6 +92,7 @@ jobs:
       DEPENDENCY_GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
     with:
       dotfiles-provider: ${{ inputs.dotfiles-provider }}
+      dotfiles-shdeps-update-policy: ${{ inputs.dotfiles-shdeps-update-policy }}
       force-dotfiles-update: ${{ inputs.force-dotfiles-update }}
       matrix-set: ${{ inputs.matrix-set != 'auto' && inputs.matrix-set || ((github.event_name == 'push' || github.event_name == 'pull_request') && 'core' || 'full') }}
       profiles: ${{ inputs.profiles }}
@@ -130,6 +136,7 @@ jobs:
       DEPENDENCY_GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
     with:
       command: ${{ inputs.termux-command != '' && inputs.termux-command || inputs.test-command }}
+      dotfiles-shdeps-update-policy: ${{ inputs.dotfiles-shdeps-update-policy }}
       host-command: ${{ inputs.termux-host-command }}
       profiles: ${{ inputs.termux-profiles != '' && inputs.termux-profiles || (inputs.profiles != '' && inputs.profiles || 'runtime') }}
       setup: ${{ inputs.setup }}
