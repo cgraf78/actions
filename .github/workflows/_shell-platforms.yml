@@ -230,11 +230,11 @@ jobs:
 
       - name: Bootstrap dotfiles dependencies
         if: inputs.setup == 'dotfiles'
-        # A healthy full bootstrap is ~2m even when every dependency is
-        # reinstalled; observed stalls sit at 40m+ inside a single unbounded
-        # transfer. Cap the step so the surrounding retry paths get a failure to
-        # act on rather than a job that eventually succeeds after 45m.
-        timeout-minutes: 20
+        # A healthy clean macOS provider bootstrap has taken 8.7m inside Dot.
+        # The inner policy gives that phase a single 15m absolute attempt while
+        # keeping Git and Mise retries short; 25m honestly contains the full
+        # 21m55s inner budget plus local setup and teardown.
+        timeout-minutes: 25
         uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@c85e9ce537ffdf1e4a45977dc12be8e63b862c57
         env:
           # The explicit cross-repository token wins for private dependencies.

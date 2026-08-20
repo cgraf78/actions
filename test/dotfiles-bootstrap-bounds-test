@@ -29,6 +29,8 @@ started=$(date +%s)
 if ATTEMPT_LOG=$attempt_log \
   DOTFILES_BOOTSTRAP_COMMAND_TIMEOUT=1 \
   DOTFILES_BOOTSTRAP_COMMAND_KILL_AFTER=1 \
+  DOTFILES_BOOTSTRAP_SHORT_ATTEMPTS=3 \
+  DOTFILES_BOOTSTRAP_SHORT_TIMEOUT=1 \
   DOTFILES_BOOTSTRAP_RETRY_DELAYS=0,0 \
   dotfiles_bootstrap_retry network "$tmp/hang" 2>"$stderr"; then
   fail 'hung command unexpectedly succeeded'
@@ -39,12 +41,29 @@ elapsed=$(($(date +%s) - started))
 [[ "$elapsed" -lt 12 ]] || fail "hung retries exceeded their budget (${elapsed}s)"
 grep -Fq 'infra-stall: dotfiles bootstrap network command exhausted bounded retries' \
   "$stderr" || fail 'hung retries omitted their owned infrastructure marker'
-grep -Fq "infra-stall: dotfiles bootstrap command timed out after 1s: $tmp/hang" \
+grep -Fq 'infra-stall: dotfiles bootstrap network command timed out after 1s' \
   "$stderr" || fail 'hung retries omitted the active command and timeout'
 while IFS= read -r pid; do
   kill -0 "$pid" 2>/dev/null &&
     fail "bounded supervisor left attempt process running: $pid"
 done <"$attempt_log"
+
+dot_attempt_log=$tmp/dot-attempts
+dot_stderr=$tmp/dot-stderr
+set +e
+ATTEMPT_LOG=$dot_attempt_log \
+  DOTFILES_BOOTSTRAP_DOT_TIMEOUT=0.1 \
+  DOTFILES_BOOTSTRAP_COMMAND_KILL_AFTER=0.1 \
+  DOTFILES_BOOTSTRAP_RETRY_DELAYS=0,0 \
+  dotfiles_bootstrap_retry Dot "$tmp/hang" 2>"$dot_stderr"
+dot_status=$?
+set -e
+[[ "$dot_status" -eq 124 ]] ||
+  fail "bounded Dot command returned $dot_status instead of 124"
+[[ $(wc -l <"$dot_attempt_log") -eq 1 ]] ||
+  fail 'bounded Dot command repeated its long convergence attempt'
+grep -Fq 'dotfiles bootstrap Dot command exhausted bounded retries' \
+  "$dot_stderr" || fail 'bounded Dot command omitted its phase label'
 
 mkdir "$tmp/python-fixture"
 cat >"$tmp/python-fixture/sitecustomize.py" <<'PY'
@@ -77,6 +96,9 @@ set -e
   fail "permission-denied liveness probe returned $permission_status instead of 124"
 ! grep -Fq 'Traceback' "$permission_stderr" ||
   fail 'permission-denied liveness probe leaked a Python traceback'
+grep -Fq 'dotfiles bootstrap cleanup: process group still contains protected descendants' \
+  "$permission_stderr" ||
+  fail 'permission-denied liveness probe omitted the protected-descendant warning'
 permission_pid=$(<"$permission_pid_log")
 kill -0 "$permission_pid" 2>/dev/null &&
   fail 'permission-denied liveness probe left the command running'
@@ -135,6 +157,40 @@ if kill -0 "$permission_forward_pid" 2>/dev/null &&
   fail 'permission-denied signal forwarding left the command running'
 fi
 
+secret_stderr=$tmp/secret.stderr
+secret_url='https://private-token@example.invalid/private/repository'
+set +e
+DOTFILES_BOOTSTRAP_COMMAND_LABEL=Git \
+  ATTEMPT_LOG=$tmp/secret.pid \
+  DOTFILES_BOOTSTRAP_COMMAND_TIMEOUT=0.1 \
+  DOTFILES_BOOTSTRAP_COMMAND_KILL_AFTER=0.1 \
+  dotfiles_bootstrap_bounded "$tmp/hang" "$secret_url" 2>"$secret_stderr"
+secret_status=$?
+set -e
+[[ "$secret_status" -eq 124 ]] ||
+  fail "secret-bearing timeout returned $secret_status instead of 124"
+grep -Fq 'infra-stall: dotfiles bootstrap Git command timed out after 0.1s' \
+  "$secret_stderr" || fail 'secret-bearing timeout omitted its safe label'
+! grep -Fq "$secret_url" "$secret_stderr" ||
+  fail 'timeout diagnostic leaked a credential-bearing command argument'
+
+heartbeat_stderr=$tmp/heartbeat.stderr
+set +e
+DOTFILES_BOOTSTRAP_COMMAND_LABEL=Dot \
+  DOTFILES_BOOTSTRAP_HEARTBEAT=0.05 \
+  ATTEMPT_LOG=$tmp/heartbeat.pid \
+  DOTFILES_BOOTSTRAP_COMMAND_TIMEOUT=0.16 \
+  DOTFILES_BOOTSTRAP_COMMAND_KILL_AFTER=0.1 \
+  dotfiles_bootstrap_bounded "$tmp/hang" "$secret_url" 2>"$heartbeat_stderr"
+heartbeat_status=$?
+set -e
+[[ "$heartbeat_status" -eq 124 ]] ||
+  fail "heartbeat timeout returned $heartbeat_status instead of 124"
+grep -Fq 'dotfiles bootstrap Dot command still running (' "$heartbeat_stderr" ||
+  fail 'long-running command emitted no safe phase heartbeat'
+! grep -Fq "$secret_url" "$heartbeat_stderr" ||
+  fail 'phase heartbeat leaked a credential-bearing command argument'
+
 cat >"$tmp/descendant" <<'SCRIPT'
 #!/usr/bin/env bash
 trap 'exit 0' TERM
@@ -171,13 +227,17 @@ if kill -0 "$descendant_pid" 2>/dev/null &&
   fail 'bounded cancellation left a TERM-ignoring descendant running'
 fi
 
-timeout=${DOTFILES_BOOTSTRAP_COMMAND_TIMEOUT:-90}
 grace=${DOTFILES_BOOTSTRAP_COMMAND_KILL_AFTER:-5}
 delays=${DOTFILES_BOOTSTRAP_RETRY_DELAYS:-15,30}
-IFS=, read -r delay_one delay_two <<<"$delays"
-phase_window=$((3 * (timeout + grace) + delay_one + delay_two))
-total_window=$((3 * phase_window))
-[[ "$total_window" -lt 1200 ]] ||
-  fail "dotfiles bootstrap retry budget exceeds the 20-minute outer step (${total_window}s)"
+IFS=, read -r delay_one _ <<<"$delays"
+short_timeout=90
+short_attempts=2
+dot_timeout=900
+dot_attempts=1
+short_window=$((short_attempts * (short_timeout + grace) + delay_one))
+dot_window=$((dot_attempts * (dot_timeout + grace)))
+total_window=$((2 * short_window + dot_window))
+[[ "$total_window" -lt 1500 ]] ||
+  fail "dotfiles bootstrap retry budget exceeds the 25-minute outer step (${total_window}s)"
 
 printf 'ok - dotfiles bootstrap network retries are bounded\n'
