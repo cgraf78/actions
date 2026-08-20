@@ -275,9 +275,21 @@ than one worker are split into first-party composite actions:
 Callers pin reusable workflows to reviewed commit SHAs and use dependency PRs
 to roll shared fixes across the fleet. Consumer lock verification prevents a
 partial bump from mixing revisions. This repository uses the same lock and
-synchronizer for its internal self-pins; because a commit cannot contain its
-own hash, that lock names the immediately preceding reviewed commit and a
-follow-up commit contains only the synchronized refs and their verification.
+synchronizer for its internal self-pins. Because a commit cannot contain its
+own hash, the lock names the immediately preceding reviewed implementation
+commit and a follow-up commit contains only the synchronized refs. Before
+squash-merging, retain that implementation and verify its remote identity:
+
+```bash
+consumer-ci/retain-self-pin.sh
+consumer-ci/verify-self-pin.sh
+```
+
+The deterministic lightweight tag is
+`self-pin/<implementation-sha>`. Non-force tooling refuses to
+move it, and the repository tag ruleset for `self-pin/**` must
+block updates and deletion. This makes squash-only history safe without a
+follow-up self-pin repair PR.
 
 ## License
 

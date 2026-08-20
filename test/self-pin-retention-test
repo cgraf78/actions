@@ -1,0 +1,264 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() {
+  printf 'self-pin-retention-test: %s\n' "$1" >&2
+  exit 1
+}
+
+make_provider() {
+  local work=$1 remote=$2
+
+  mkdir -p "$work/.github/actions/example" "$work/.github/workflows" \
+    "$work/consumer-ci"
+  cp "$root/consumer-ci/sync.sh" "$work/consumer-ci/sync.sh"
+  cp "$root/consumer-ci/verify-self-pin.sh" \
+    "$work/consumer-ci/verify-self-pin.sh"
+  cp "$root/consumer-ci/retain-self-pin.sh" \
+    "$work/consumer-ci/retain-self-pin.sh"
+  cp -R "$root/release-scripts" "$work/release-scripts"
+  cp -R "$root/release-installer" "$work/release-installer"
+  cp -R "$root/checkout-installer" "$work/checkout-installer"
+  cat >"$work/.github/actions/example/action.yml" <<'EOF'
+name: example
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: echo example
+EOF
+  cat >"$work/.github/workflows/ci.yml" <<'EOF'
+jobs:
+  example:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: cgraf78/actions/.github/actions/example@1111111111111111111111111111111111111111
+EOF
+  git -C "$work" init --quiet --initial-branch=main --template=''
+  git -C "$work" config core.hooksPath /dev/null
+  git -C "$work" config user.name Test
+  git -C "$work" config user.email test@example.invalid
+  git -C "$work" add .
+  git -C "$work" commit --quiet -m implementation
+  git init --quiet --bare --initial-branch=main "$remote"
+  git -C "$work" remote add origin "$remote"
+  git -C "$work" push --quiet -u origin main
+  "$work/consumer-ci/sync.sh" --self >/dev/null
+  git -C "$work" add .github
+  git -C "$work" commit --quiet -m pins
+  git -C "$work" push --quiet origin main
+}
+
+work=$tmp/provider
+remote=$tmp/provider.git
+make_provider "$work" "$remote"
+implementation=$(git -C "$work" rev-parse HEAD^)
+tag_ref="refs/tags/self-pin/$implementation"
+
+set +e
+missing_output=$("$work/consumer-ci/verify-self-pin.sh" 2>&1)
+missing_status=$?
+set -e
+[[ $missing_status -ne 0 ]] || fail 'missing retention tag verified'
+[[ $missing_output == *'consumer-ci/retain-self-pin.sh'* ]] ||
+  fail 'missing tag failure omitted remediation'
+
+retain_output=$("$work/consumer-ci/retain-self-pin.sh") ||
+  fail 'retention command failed'
+[[ $retain_output == *"$tag_ref"* && $retain_output == *"$implementation"* ]] ||
+  fail 'retention success omitted tag identity'
+[[ $(git --git-dir="$remote" rev-parse "$tag_ref") == "$implementation" ]] ||
+  fail 'retention tag does not name implementation'
+"$work/consumer-ci/retain-self-pin.sh" >/dev/null ||
+  fail 'exact retention tag was not idempotent'
+
+shallow=$tmp/shallow
+git clone --quiet --depth=1 "file://$remote" "$shallow"
+git -C "$shallow" config core.hooksPath /dev/null
+"$shallow/consumer-ci/verify-self-pin.sh" >/dev/null ||
+  fail 'shallow clone did not fetch exact retention tag'
+
+printf '\n# drift\n' >>"$work/.github/actions/example/action.yml"
+git -C "$work" add .github/actions/example/action.yml
+git -C "$work" commit --quiet -m drift
+set +e
+drift_output=$("$work/consumer-ci/verify-self-pin.sh" 2>&1)
+drift_status=$?
+set -e
+[[ $drift_status -ne 0 && $drift_output == *'internal action implementations differ'* ]] ||
+  fail 'retained tag bypassed implementation drift check'
+git -C "$work" reset --quiet --hard HEAD^
+
+conflict_remote=$tmp/conflict.git
+cp -R "$remote" "$conflict_remote"
+wrong=$(git -C "$work" rev-parse HEAD)
+git --git-dir="$conflict_remote" update-ref "$tag_ref" "$wrong"
+git -C "$work" remote set-url origin "$conflict_remote"
+set +e
+conflict_output=$("$work/consumer-ci/retain-self-pin.sh" 2>&1)
+conflict_status=$?
+set -e
+[[ $conflict_status -ne 0 && $conflict_output == *'points to'* ]] ||
+  fail 'conflicting retention tag was not rejected'
+[[ $(git --git-dir="$conflict_remote" rev-parse "$tag_ref") == "$wrong" ]] ||
+  fail 'conflicting retention tag was moved'
+
+ambiguous_remote=$tmp/ambiguous.git
+git init --quiet --bare --initial-branch=main "$ambiguous_remote"
+git -C "$work" remote set-url origin "$ambiguous_remote"
+git -C "$work" push --quiet origin main
+wrapper_bin=$tmp/wrapper-bin
+mkdir "$wrapper_bin"
+real_git=$(PATH=/usr/bin:/bin command -v git)
+[[ -n "$real_git" ]] || fail 'cannot locate system Git for wrapper fixtures'
+cat >"$wrapper_bin/git" <<'EOF'
+#!/usr/bin/env bash
+command=
+for argument in "$@"; do
+  case "$argument" in
+    push | ls-remote | fetch)
+      command=$argument
+      break
+      ;;
+  esac
+done
+if [[ $command == push && ${SELF_PIN_TEST_PUSH_MODE:-} == ambiguous ]]; then
+  "$SELF_PIN_TEST_REAL_GIT" "$@"
+  exit 71
+fi
+if [[ $command == push && ${SELF_PIN_TEST_PUSH_MODE:-} == fail ]]; then
+  exit 72
+fi
+if [[ $command == push && ${SELF_PIN_TEST_PUSH_MODE:-} == hang ]]; then
+  sleep 30
+fi
+if [[ $command == ls-remote && ${SELF_PIN_TEST_LS_MODE:-} == multiple ]]; then
+  printf '%s\t%s\n' "$SELF_PIN_TEST_SHA" "$SELF_PIN_TEST_TAG_REF"
+  printf '%s\t%s-extra\n' "$SELF_PIN_TEST_SHA" "$SELF_PIN_TEST_TAG_REF"
+  exit 0
+fi
+if [[ $command == ls-remote && ${SELF_PIN_TEST_LS_MODE:-} == hang ]]; then
+  sleep 30
+fi
+if [[ $command == fetch && ${SELF_PIN_TEST_FETCH_MODE:-} == hang ]]; then
+  sleep 30
+fi
+if [[ -n "$command" && ${SELF_PIN_TEST_REQUIRE_LOW_SPEED:-0} == 1 ]]; then
+  joined=" $* "
+  [[ $joined == *' -c http.lowSpeedLimit=1024 '* &&
+    $joined == *' -c http.lowSpeedTime=30 '* ]] || exit 73
+fi
+exec "$SELF_PIN_TEST_REAL_GIT" "$@"
+EOF
+chmod 0755 "$wrapper_bin/git"
+
+PATH="$wrapper_bin:$PATH" SELF_PIN_TEST_REAL_GIT="$real_git" \
+  SELF_PIN_TEST_PUSH_MODE=ambiguous \
+  "$work/consumer-ci/retain-self-pin.sh" >/dev/null ||
+  fail 'ambiguous successful push was not reconciled'
+[[ $(git --git-dir="$ambiguous_remote" rev-parse "$tag_ref") == "$implementation" ]] ||
+  fail 'ambiguous push did not create exact retention tag'
+
+absent_remote=$tmp/absent.git
+git init --quiet --bare --initial-branch=main "$absent_remote"
+git -C "$work" remote set-url origin "$absent_remote"
+git -C "$work" push --quiet origin main
+set +e
+push_output=$(PATH="$wrapper_bin:$PATH" SELF_PIN_TEST_REAL_GIT="$real_git" \
+  SELF_PIN_TEST_PUSH_MODE=fail \
+  "$work/consumer-ci/retain-self-pin.sh" 2>&1)
+push_status=$?
+set -e
+[[ $push_status -ne 0 && $push_output == *'cannot create retention tag'* ]] ||
+  fail 'failed push was not actionable'
+if git --git-dir="$absent_remote" show-ref --verify --quiet "$tag_ref"; then
+  fail 'failed push unexpectedly created retention tag'
+fi
+
+set +e
+push_timeout_output=$(PATH="$wrapper_bin:$PATH" SELF_PIN_TEST_REAL_GIT="$real_git" \
+  SELF_PIN_TEST_PUSH_MODE=hang CGRAF78_SELF_PIN_NETWORK_TIMEOUT_SECS=1 \
+  "$work/consumer-ci/retain-self-pin.sh" 2>&1)
+push_timeout_status=$?
+set -e
+[[ $push_timeout_status -ne 0 && $push_timeout_output == *'infra-stall:'* ]] ||
+  fail 'retention push timeout was not classified'
+
+set +e
+multiple_output=$(PATH="$wrapper_bin:$PATH" SELF_PIN_TEST_REAL_GIT="$real_git" \
+  SELF_PIN_TEST_LS_MODE=multiple SELF_PIN_TEST_SHA="$implementation" \
+  SELF_PIN_TEST_TAG_REF="$tag_ref" \
+  "$work/consumer-ci/retain-self-pin.sh" 2>&1)
+multiple_status=$?
+set -e
+[[ $multiple_status -ne 0 && $multiple_output == *'unexpected remote tag response'* ]] ||
+  fail 'multiple remote tag records were accepted'
+
+set +e
+timeout_output=$(PATH="$wrapper_bin:$PATH" SELF_PIN_TEST_REAL_GIT="$real_git" \
+  SELF_PIN_TEST_LS_MODE=hang CGRAF78_SELF_PIN_NETWORK_TIMEOUT_SECS=1 \
+  "$work/consumer-ci/retain-self-pin.sh" 2>&1)
+timeout_status=$?
+set -e
+[[ $timeout_status -ne 0 && $timeout_output == *'infra-stall:'* ]] ||
+  fail 'retention lookup timeout was not classified'
+
+git -C "$work" remote set-url origin "$conflict_remote"
+set +e
+verify_conflict_output=$("$work/consumer-ci/verify-self-pin.sh" 2>&1)
+verify_conflict_status=$?
+set -e
+[[ $verify_conflict_status -ne 0 &&
+  $verify_conflict_output == *'resolved to'* &&
+  $verify_conflict_output == *"want $implementation"* ]] ||
+  fail 'verification accepted a retention tag pointing elsewhere'
+
+git -C "$work" remote set-url origin "$remote"
+set +e
+fetch_timeout_output=$(PATH="$wrapper_bin:$PATH" \
+  SELF_PIN_TEST_REAL_GIT="$real_git" SELF_PIN_TEST_FETCH_MODE=hang \
+  CGRAF78_SELF_PIN_NETWORK_TIMEOUT_SECS=1 \
+  "$work/consumer-ci/verify-self-pin.sh" 2>&1)
+fetch_timeout_status=$?
+set -e
+[[ $fetch_timeout_status -ne 0 && $fetch_timeout_output == *'infra-stall:'* ]] ||
+  fail 'retention fetch timeout was not classified'
+
+PATH="$wrapper_bin:$PATH" SELF_PIN_TEST_REAL_GIT="$real_git" \
+  SELF_PIN_TEST_REQUIRE_LOW_SPEED=1 \
+  "$work/consumer-ci/retain-self-pin.sh" >/dev/null ||
+  fail 'retention lookup omitted low-speed network bounds'
+PATH="$wrapper_bin:$PATH" SELF_PIN_TEST_REAL_GIT="$real_git" \
+  SELF_PIN_TEST_REQUIRE_LOW_SPEED=1 \
+  "$work/consumer-ci/verify-self-pin.sh" >/dev/null ||
+  fail 'retention fetch omitted low-speed network bounds'
+
+cat >"$wrapper_bin/gtimeout" <<'EOF'
+#!/usr/bin/env bash
+exec /usr/bin/timeout "$@"
+EOF
+chmod 0755 "$wrapper_bin/gtimeout"
+PATH="$wrapper_bin:$PATH" SELF_PIN_TEST_REAL_GIT="$real_git" \
+  CGRAF78_SELF_PIN_TIMEOUT_COMMAND=gtimeout \
+  "$work/consumer-ci/retain-self-pin.sh" >/dev/null ||
+  fail 'retention command did not accept the macOS gtimeout fallback'
+PATH="$wrapper_bin:$PATH" SELF_PIN_TEST_REAL_GIT="$real_git" \
+  CGRAF78_SELF_PIN_TIMEOUT_COMMAND=gtimeout \
+  "$work/consumer-ci/verify-self-pin.sh" >/dev/null ||
+  fail 'verification did not accept the macOS gtimeout fallback'
+
+set +e
+missing_timeout_output=$(CGRAF78_SELF_PIN_TIMEOUT_COMMAND=missing-timeout \
+  "$work/consumer-ci/retain-self-pin.sh" 2>&1)
+missing_timeout_status=$?
+set -e
+[[ $missing_timeout_status -eq 2 &&
+  $missing_timeout_output == *'configured timeout command is unavailable'* ]] ||
+  fail 'missing timeout command was not actionable'
+
+printf 'self-pin-retention-test: ok\n'

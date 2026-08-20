@@ -60,14 +60,19 @@ GITHUB_ACTION_PATH="$self_source/.github/actions/verify-consumer-sync" \
   GITHUB_WORKSPACE="$self_source" ACTION_REF="$self_want" \
   "$self_source/.github/actions/verify-consumer-sync/verify.sh" >/dev/null ||
   fail "self-synchronized provider did not verify"
-"$self_source/consumer-ci/verify-self-pin.sh" >/dev/null ||
-  fail "self-synchronized provider implementation did not verify"
 
 git -C "$self_source" -c user.email=t@example.com -c user.name=Test \
   -c commit.gpgsign=false commit --quiet -m pin
+"$self_source/consumer-ci/retain-self-pin.sh" >/dev/null ||
+  fail "self-synchronized provider implementation was not retained"
+"$self_source/consumer-ci/verify-self-pin.sh" >/dev/null ||
+  fail "self-synchronized provider implementation did not verify"
 self_shallow="$tmp/actions-self-shallow"
 git clone --quiet --depth=1 "file://$self_source" "$self_shallow"
 git -C "$self_shallow" config core.hooksPath /dev/null
+# The pin commit is cloned from the local reviewed branch, while the immutable
+# retention tag lives on that branch's origin just as it does for a PR branch.
+git -C "$self_shallow" remote set-url origin "file://$actions_source"
 "$self_shallow/consumer-ci/verify-self-pin.sh" >/dev/null ||
   fail "shallow provider checkout did not fetch and verify its lock commit"
 

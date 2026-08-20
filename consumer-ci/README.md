@@ -80,13 +80,44 @@ a maintainer regenerates the consumer. This is deliberate fail-closed behavior,
 not a bot failure to ignore.
 
 The actions repository also uses this command on itself. A commit cannot
-contain its own hash, so first commit the provider changes, then run
-`consumer-ci/sync.sh --self` from that clean commit and commit the resulting lock
-and internal refs as a small follow-up. Consumer repositories do not have that
-cycle and pin the final reviewed commit directly.
+contain its own hash, so use this copy-paste sequence:
 
-Provider CI compares `.github/actions/` at HEAD with the locked commit. If an
-internal action changes without that follow-up, the quality job fails and
-prints the same `consumer-ci/sync.sh --self` remediation command. The existing
-consumer verifier independently rejects a lock or literal reference that
-drifts from the generated set.
+```bash
+# Commit the reviewed implementation first.
+consumer-ci/sync.sh --self
+git add .github/cgraf78-actions.lock .github/workflows
+git commit  # Use the repository Summary/Testing commit template.
+
+# After pushing the PR branch, retain the implementation before squash.
+consumer-ci/retain-self-pin.sh
+consumer-ci/verify-self-pin.sh
+```
+
+The retention command creates the lightweight tag
+`self-pin/<implementation-sha>` without force. It is
+idempotent when the exact tag exists, refuses to move a conflicting tag, and
+reconciles an ambiguous push before reporting failure. The repository tag
+ruleset for `self-pin/**` must allow creation while blocking
+updates and deletion; local tooling cannot make an administrator-owned remote
+ref immutable by itself.
+
+Provider CI fetches that exact tag and requires it to resolve to the lock. Raw
+SHA fetchability is deliberately insufficient because pull-request refs and
+orphaned objects can disappear after a squash. If verification reports a
+missing retention tag, restore network access if necessary and run:
+
+```bash
+consumer-ci/retain-self-pin.sh
+consumer-ci/verify-self-pin.sh
+```
+
+Consumer repositories do not have this cycle and pin the final reviewed
+commit directly.
+
+Provider CI compares `.github/actions/` at HEAD with the locked commit and
+requires the immutable retention tag. If an internal action changes without
+the pin follow-up, the quality job prints the `consumer-ci/sync.sh --self`
+remediation. If the implementation is correct but not retained, it prints the
+`consumer-ci/retain-self-pin.sh` remediation. The existing consumer verifier
+independently rejects a lock or literal reference that drifts from the
+generated set.
