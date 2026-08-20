@@ -230,7 +230,7 @@ jobs:
           persist-credentials: false
 
       - name: Verify internal Actions sync
-        uses: cgraf78/actions/.github/actions/verify-consumer-sync@5e49306f11b3f6111f3fc039cc708c9281ea9a1b
+        uses: cgraf78/actions/.github/actions/verify-consumer-sync@32ea2ebadbc85643863a8ca878a788017d3a7661
 
       - name: Verify internal action implementations
         shell: bash

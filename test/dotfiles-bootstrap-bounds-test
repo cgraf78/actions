@@ -29,6 +29,8 @@ started=$(date +%s)
 if ATTEMPT_LOG=$attempt_log \
   DOTFILES_BOOTSTRAP_COMMAND_TIMEOUT=1 \
   DOTFILES_BOOTSTRAP_COMMAND_KILL_AFTER=1 \
+  DOTFILES_BOOTSTRAP_SHORT_ATTEMPTS=3 \
+  DOTFILES_BOOTSTRAP_SHORT_TIMEOUT=1 \
   DOTFILES_BOOTSTRAP_RETRY_DELAYS=0,0 \
   dotfiles_bootstrap_retry network "$tmp/hang" 2>"$stderr"; then
   fail 'hung command unexpectedly succeeded'
@@ -39,10 +41,155 @@ elapsed=$(($(date +%s) - started))
 [[ "$elapsed" -lt 12 ]] || fail "hung retries exceeded their budget (${elapsed}s)"
 grep -Fq 'infra-stall: dotfiles bootstrap network command exhausted bounded retries' \
   "$stderr" || fail 'hung retries omitted their owned infrastructure marker'
+grep -Fq 'infra-stall: dotfiles bootstrap network command timed out after 1s' \
+  "$stderr" || fail 'hung retries omitted the active command and timeout'
 while IFS= read -r pid; do
   kill -0 "$pid" 2>/dev/null &&
     fail "bounded supervisor left attempt process running: $pid"
 done <"$attempt_log"
+
+dot_attempt_log=$tmp/dot-attempts
+dot_stderr=$tmp/dot-stderr
+set +e
+ATTEMPT_LOG=$dot_attempt_log \
+  DOTFILES_BOOTSTRAP_DOT_TIMEOUT=0.1 \
+  DOTFILES_BOOTSTRAP_COMMAND_KILL_AFTER=0.1 \
+  DOTFILES_BOOTSTRAP_RETRY_DELAYS=0,0 \
+  dotfiles_bootstrap_retry Dot "$tmp/hang" 2>"$dot_stderr"
+dot_status=$?
+set -e
+[[ "$dot_status" -eq 124 ]] ||
+  fail "bounded Dot command returned $dot_status instead of 124"
+[[ $(wc -l <"$dot_attempt_log") -eq 1 ]] ||
+  fail 'bounded Dot command repeated its long convergence attempt'
+grep -Fq 'dotfiles bootstrap Dot command exhausted bounded retries' \
+  "$dot_stderr" || fail 'bounded Dot command omitted its phase label'
+
+mkdir "$tmp/python-fixture"
+cat >"$tmp/python-fixture/sitecustomize.py" <<'PY'
+import errno
+import os
+
+real_killpg = os.killpg
+denied_signals = {
+    int(value) for value in os.environ.get("DENIED_KILLPG_SIGNALS", "0").split(",")
+}
+
+def permission_denied_liveness_probe(process_group, signum):
+    if signum in denied_signals:
+        raise PermissionError(errno.EPERM, "Operation not permitted")
+    return real_killpg(process_group, signum)
+
+os.killpg = permission_denied_liveness_probe
+PY
+permission_pid_log=$tmp/permission.pid
+permission_stderr=$tmp/permission.stderr
+set +e
+PYTHONPATH=$tmp/python-fixture \
+  ATTEMPT_LOG=$permission_pid_log \
+  DOTFILES_BOOTSTRAP_COMMAND_TIMEOUT=0.1 \
+  DOTFILES_BOOTSTRAP_COMMAND_KILL_AFTER=0.1 \
+  dotfiles_bootstrap_bounded "$tmp/hang" 2>"$permission_stderr"
+permission_status=$?
+set -e
+[[ "$permission_status" -eq 124 ]] ||
+  fail "permission-denied liveness probe returned $permission_status instead of 124"
+! grep -Fq 'Traceback' "$permission_stderr" ||
+  fail 'permission-denied liveness probe leaked a Python traceback'
+grep -Fq 'dotfiles bootstrap cleanup: process group still contains protected descendants' \
+  "$permission_stderr" ||
+  fail 'permission-denied liveness probe omitted the protected-descendant warning'
+permission_pid=$(<"$permission_pid_log")
+kill -0 "$permission_pid" 2>/dev/null &&
+  fail 'permission-denied liveness probe left the command running'
+
+permission_kill_pid_log=$tmp/permission-kill.pid
+permission_kill_stderr=$tmp/permission-kill.stderr
+set +e
+PYTHONPATH=$tmp/python-fixture \
+  DENIED_KILLPG_SIGNALS=0,9 \
+  ATTEMPT_LOG=$permission_kill_pid_log \
+  DOTFILES_BOOTSTRAP_COMMAND_TIMEOUT=0.1 \
+  DOTFILES_BOOTSTRAP_COMMAND_KILL_AFTER=0.1 \
+  dotfiles_bootstrap_bounded "$tmp/hang" 2>"$permission_kill_stderr"
+permission_kill_status=$?
+set -e
+[[ "$permission_kill_status" -eq 124 ]] ||
+  fail "permission-denied group kill returned $permission_kill_status instead of 124"
+! grep -Fq 'Traceback' "$permission_kill_stderr" ||
+  fail 'permission-denied group kill leaked a Python traceback'
+permission_kill_pid=$(<"$permission_kill_pid_log")
+kill -0 "$permission_kill_pid" 2>/dev/null &&
+  fail 'permission-denied group kill left the direct command running'
+
+permission_forward_pid_log=$tmp/permission-forward.pid
+permission_forward_stderr=$tmp/permission-forward.stderr
+# shellcheck disable=SC2016 # Positional parameters expand in the nested shell.
+PYTHONPATH=$tmp/python-fixture \
+  DENIED_KILLPG_SIGNALS=15 \
+  ATTEMPT_LOG=$permission_forward_pid_log \
+  setsid bash -c \
+  'source "$1"; DOTFILES_BOOTSTRAP_COMMAND_TIMEOUT=20 DOTFILES_BOOTSTRAP_COMMAND_KILL_AFTER=0.1 dotfiles_bootstrap_bounded "$2"' \
+  bash "$supervisor" "$tmp/hang" 2>"$permission_forward_stderr" &
+permission_forward_supervisor=$!
+for _ in {1..50}; do
+  [[ -s "$permission_forward_pid_log" ]] && break
+  sleep 0.05
+done
+[[ -s "$permission_forward_pid_log" ]] ||
+  fail 'permission-denied forwarding fixture did not start'
+permission_forward_pid=$(<"$permission_forward_pid_log")
+kill -TERM -- "-$permission_forward_supervisor"
+set +e
+wait "$permission_forward_supervisor"
+permission_forward_status=$?
+set -e
+[[ "$permission_forward_status" -eq 143 ]] ||
+  fail "permission-denied signal forwarding returned $permission_forward_status instead of 143"
+! grep -Fq 'Traceback' "$permission_forward_stderr" ||
+  fail 'permission-denied signal forwarding leaked a Python traceback'
+for _ in {1..20}; do
+  kill -0 "$permission_forward_pid" 2>/dev/null || break
+  sleep 0.05
+done
+if kill -0 "$permission_forward_pid" 2>/dev/null &&
+  [[ $(ps -o stat= -p "$permission_forward_pid" 2>/dev/null) != Z* ]]; then
+  fail 'permission-denied signal forwarding left the command running'
+fi
+
+secret_stderr=$tmp/secret.stderr
+secret_url='https://private-token@example.invalid/private/repository'
+set +e
+DOTFILES_BOOTSTRAP_COMMAND_LABEL=Git \
+  ATTEMPT_LOG=$tmp/secret.pid \
+  DOTFILES_BOOTSTRAP_COMMAND_TIMEOUT=0.1 \
+  DOTFILES_BOOTSTRAP_COMMAND_KILL_AFTER=0.1 \
+  dotfiles_bootstrap_bounded "$tmp/hang" "$secret_url" 2>"$secret_stderr"
+secret_status=$?
+set -e
+[[ "$secret_status" -eq 124 ]] ||
+  fail "secret-bearing timeout returned $secret_status instead of 124"
+grep -Fq 'infra-stall: dotfiles bootstrap Git command timed out after 0.1s' \
+  "$secret_stderr" || fail 'secret-bearing timeout omitted its safe label'
+! grep -Fq "$secret_url" "$secret_stderr" ||
+  fail 'timeout diagnostic leaked a credential-bearing command argument'
+
+heartbeat_stderr=$tmp/heartbeat.stderr
+set +e
+DOTFILES_BOOTSTRAP_COMMAND_LABEL=Dot \
+  DOTFILES_BOOTSTRAP_HEARTBEAT=0.05 \
+  ATTEMPT_LOG=$tmp/heartbeat.pid \
+  DOTFILES_BOOTSTRAP_COMMAND_TIMEOUT=0.16 \
+  DOTFILES_BOOTSTRAP_COMMAND_KILL_AFTER=0.1 \
+  dotfiles_bootstrap_bounded "$tmp/hang" "$secret_url" 2>"$heartbeat_stderr"
+heartbeat_status=$?
+set -e
+[[ "$heartbeat_status" -eq 124 ]] ||
+  fail "heartbeat timeout returned $heartbeat_status instead of 124"
+grep -Fq 'dotfiles bootstrap Dot command still running (' "$heartbeat_stderr" ||
+  fail 'long-running command emitted no safe phase heartbeat'
+! grep -Fq "$secret_url" "$heartbeat_stderr" ||
+  fail 'phase heartbeat leaked a credential-bearing command argument'
 
 cat >"$tmp/descendant" <<'SCRIPT'
 #!/usr/bin/env bash
@@ -80,13 +227,17 @@ if kill -0 "$descendant_pid" 2>/dev/null &&
   fail 'bounded cancellation left a TERM-ignoring descendant running'
 fi
 
-timeout=${DOTFILES_BOOTSTRAP_COMMAND_TIMEOUT:-90}
 grace=${DOTFILES_BOOTSTRAP_COMMAND_KILL_AFTER:-5}
 delays=${DOTFILES_BOOTSTRAP_RETRY_DELAYS:-15,30}
-IFS=, read -r delay_one delay_two <<<"$delays"
-phase_window=$((3 * (timeout + grace) + delay_one + delay_two))
-total_window=$((3 * phase_window))
-[[ "$total_window" -lt 1200 ]] ||
-  fail "dotfiles bootstrap retry budget exceeds the 20-minute outer step (${total_window}s)"
+IFS=, read -r delay_one _ <<<"$delays"
+short_timeout=90
+short_attempts=2
+dot_timeout=900
+dot_attempts=1
+short_window=$((short_attempts * (short_timeout + grace) + delay_one))
+dot_window=$((dot_attempts * (dot_timeout + grace)))
+total_window=$((2 * short_window + dot_window))
+[[ "$total_window" -lt 1500 ]] ||
+  fail "dotfiles bootstrap retry budget exceeds the 25-minute outer step (${total_window}s)"
 
 printf 'ok - dotfiles bootstrap network retries are bounded\n'
