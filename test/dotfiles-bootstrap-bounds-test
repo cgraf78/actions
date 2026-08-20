@@ -39,10 +39,101 @@ elapsed=$(($(date +%s) - started))
 [[ "$elapsed" -lt 12 ]] || fail "hung retries exceeded their budget (${elapsed}s)"
 grep -Fq 'infra-stall: dotfiles bootstrap network command exhausted bounded retries' \
   "$stderr" || fail 'hung retries omitted their owned infrastructure marker'
+grep -Fq "infra-stall: dotfiles bootstrap command timed out after 1s: $tmp/hang" \
+  "$stderr" || fail 'hung retries omitted the active command and timeout'
 while IFS= read -r pid; do
   kill -0 "$pid" 2>/dev/null &&
     fail "bounded supervisor left attempt process running: $pid"
 done <"$attempt_log"
+
+mkdir "$tmp/python-fixture"
+cat >"$tmp/python-fixture/sitecustomize.py" <<'PY'
+import errno
+import os
+
+real_killpg = os.killpg
+denied_signals = {
+    int(value) for value in os.environ.get("DENIED_KILLPG_SIGNALS", "0").split(",")
+}
+
+def permission_denied_liveness_probe(process_group, signum):
+    if signum in denied_signals:
+        raise PermissionError(errno.EPERM, "Operation not permitted")
+    return real_killpg(process_group, signum)
+
+os.killpg = permission_denied_liveness_probe
+PY
+permission_pid_log=$tmp/permission.pid
+permission_stderr=$tmp/permission.stderr
+set +e
+PYTHONPATH=$tmp/python-fixture \
+  ATTEMPT_LOG=$permission_pid_log \
+  DOTFILES_BOOTSTRAP_COMMAND_TIMEOUT=0.1 \
+  DOTFILES_BOOTSTRAP_COMMAND_KILL_AFTER=0.1 \
+  dotfiles_bootstrap_bounded "$tmp/hang" 2>"$permission_stderr"
+permission_status=$?
+set -e
+[[ "$permission_status" -eq 124 ]] ||
+  fail "permission-denied liveness probe returned $permission_status instead of 124"
+! grep -Fq 'Traceback' "$permission_stderr" ||
+  fail 'permission-denied liveness probe leaked a Python traceback'
+permission_pid=$(<"$permission_pid_log")
+kill -0 "$permission_pid" 2>/dev/null &&
+  fail 'permission-denied liveness probe left the command running'
+
+permission_kill_pid_log=$tmp/permission-kill.pid
+permission_kill_stderr=$tmp/permission-kill.stderr
+set +e
+PYTHONPATH=$tmp/python-fixture \
+  DENIED_KILLPG_SIGNALS=0,9 \
+  ATTEMPT_LOG=$permission_kill_pid_log \
+  DOTFILES_BOOTSTRAP_COMMAND_TIMEOUT=0.1 \
+  DOTFILES_BOOTSTRAP_COMMAND_KILL_AFTER=0.1 \
+  dotfiles_bootstrap_bounded "$tmp/hang" 2>"$permission_kill_stderr"
+permission_kill_status=$?
+set -e
+[[ "$permission_kill_status" -eq 124 ]] ||
+  fail "permission-denied group kill returned $permission_kill_status instead of 124"
+! grep -Fq 'Traceback' "$permission_kill_stderr" ||
+  fail 'permission-denied group kill leaked a Python traceback'
+permission_kill_pid=$(<"$permission_kill_pid_log")
+kill -0 "$permission_kill_pid" 2>/dev/null &&
+  fail 'permission-denied group kill left the direct command running'
+
+permission_forward_pid_log=$tmp/permission-forward.pid
+permission_forward_stderr=$tmp/permission-forward.stderr
+# shellcheck disable=SC2016 # Positional parameters expand in the nested shell.
+PYTHONPATH=$tmp/python-fixture \
+  DENIED_KILLPG_SIGNALS=15 \
+  ATTEMPT_LOG=$permission_forward_pid_log \
+  setsid bash -c \
+  'source "$1"; DOTFILES_BOOTSTRAP_COMMAND_TIMEOUT=20 DOTFILES_BOOTSTRAP_COMMAND_KILL_AFTER=0.1 dotfiles_bootstrap_bounded "$2"' \
+  bash "$supervisor" "$tmp/hang" 2>"$permission_forward_stderr" &
+permission_forward_supervisor=$!
+for _ in {1..50}; do
+  [[ -s "$permission_forward_pid_log" ]] && break
+  sleep 0.05
+done
+[[ -s "$permission_forward_pid_log" ]] ||
+  fail 'permission-denied forwarding fixture did not start'
+permission_forward_pid=$(<"$permission_forward_pid_log")
+kill -TERM -- "-$permission_forward_supervisor"
+set +e
+wait "$permission_forward_supervisor"
+permission_forward_status=$?
+set -e
+[[ "$permission_forward_status" -eq 143 ]] ||
+  fail "permission-denied signal forwarding returned $permission_forward_status instead of 143"
+! grep -Fq 'Traceback' "$permission_forward_stderr" ||
+  fail 'permission-denied signal forwarding leaked a Python traceback'
+for _ in {1..20}; do
+  kill -0 "$permission_forward_pid" 2>/dev/null || break
+  sleep 0.05
+done
+if kill -0 "$permission_forward_pid" 2>/dev/null &&
+  [[ $(ps -o stat= -p "$permission_forward_pid" 2>/dev/null) != Z* ]]; then
+  fail 'permission-denied signal forwarding left the command running'
+fi
 
 cat >"$tmp/descendant" <<'SCRIPT'
 #!/usr/bin/env bash

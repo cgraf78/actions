@@ -10,6 +10,7 @@ dotfiles_bootstrap_bounded() {
   }
   python3 - "$timeout" "$grace" "$@" <<'PY'
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -29,6 +30,8 @@ def forward(signum, _frame):
         os.killpg(process.pid, signum)
     except ProcessLookupError:
         pass
+    except PermissionError:
+        process.send_signal(signum)
     raise ForwardedSignal(signum)
 
 def terminate_group(initial_signal):
@@ -38,17 +41,28 @@ def terminate_group(initial_signal):
         os.killpg(process.pid, initial_signal)
     except ProcessLookupError:
         pass
+    except PermissionError:
+        process.send_signal(initial_signal)
     deadline = time.monotonic() + grace
     while time.monotonic() < deadline:
         try:
             os.killpg(process.pid, 0)
         except ProcessLookupError:
             break
+        except PermissionError:
+            # POSIX reports EPERM when the group still exists but its remaining
+            # members cannot be signaled by this user. Keep the bounded grace
+            # period instead of mistaking that state for a supervisor failure.
+            pass
         time.sleep(0.05)
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
+    except PermissionError:
+        # The direct child belongs to this supervisor even when a privileged
+        # descendant makes the process-group operation fail on macOS.
+        process.kill()
     process.wait()
 
 signal.signal(signal.SIGHUP, forward)
@@ -57,6 +71,11 @@ signal.signal(signal.SIGTERM, forward)
 try:
     status = process.wait(timeout=timeout)
 except subprocess.TimeoutExpired:
+    print(
+        "infra-stall: dotfiles bootstrap command timed out after "
+        f"{timeout:g}s: {shlex.join(sys.argv[3:])}",
+        file=sys.stderr,
+    )
     terminate_group(signal.SIGTERM)
     status = 124
 except ForwardedSignal as interruption:
