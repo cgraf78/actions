@@ -16,10 +16,10 @@ that same commit. See
 [`consumer-ci/README.md`](consumer-ci/README.md) for the update and verification
 contract.
 
-[`examples/`](examples/) contains tested, copyable shell CI, Rust CI/release,
-infrastructure retry, Dependabot, ShellCheck inventory, and release-policy
-templates. The examples are staged as real consumer repositories in tests and
-must pass the production synchronizer and verifier.
+[`examples/`](examples/) contains tested, copyable Mise refresh, shell CI, Rust
+CI/release, infrastructure retry, Dependabot, ShellCheck inventory, and
+release-policy templates. The examples are staged as real consumer repositories
+in tests and must pass the production synchronizer and verifier.
 
 ## Workflows
 
@@ -27,6 +27,35 @@ For the full caller-facing API, see
 [`docs/workflow-api.md`](docs/workflow-api.md). The README gives quick-start
 examples; the docs file is the source of truth for inputs, secrets, matrix
 policy, and command-hook contracts.
+
+### `mise-lock-refresh.yml`
+
+Regenerates one tracked Mise lockfile on a caller-owned weekly schedule, opens
+or updates a dedicated pull request, and enables squash auto-merge. The shared
+workflow never pushes the default branch directly. It uses a repository-scoped
+deploy key for the final PR synchronization so the caller's normal protected
+`pull_request` checks attach to the exact commit that auto-merge will land.
+
+```yaml
+jobs:
+  refresh:
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: cgraf78/actions/.github/workflows/mise-lock-refresh.yml@FULL_COMMIT_SHA
+    with:
+      project_name: Example
+      mise_config_file: .github/mise/example.toml
+      mise_lock_file: .github/mise/mise.lock
+    secrets:
+      deploy_key: ${{ secrets.MISE_REFRESH_DEPLOY_KEY }}
+```
+
+The caller owns the `schedule` and `workflow_dispatch` triggers. Configure the
+deploy key with write access to only that repository, enable auto-merge, and
+require the ordinary CI contexts on the default branch. An optional
+`verify_command` can run repository-specific lock validation before any write
+permission is available.
 
 ### `shell-ci.yml`
 

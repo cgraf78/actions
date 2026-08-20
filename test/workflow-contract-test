@@ -124,6 +124,45 @@ shell_platform_test_window=$((shell_platform_job_window - \
 contracts() {
   local workflow
 
+  check '.on.workflow_call.inputs.project_name.required == true' mise-lock-refresh.yml
+  check '.on.workflow_call.inputs.project_name.type == "string"' mise-lock-refresh.yml
+  check '.on.workflow_call.inputs.mise_config_file.required == true' mise-lock-refresh.yml
+  check '.on.workflow_call.inputs.mise_config_file.type == "string"' mise-lock-refresh.yml
+  check '.on.workflow_call.inputs.mise_lock_file.required == true' mise-lock-refresh.yml
+  check '.on.workflow_call.inputs.mise_lock_file.type == "string"' mise-lock-refresh.yml
+  check '.on.workflow_call.inputs.verify_command.default == ""' mise-lock-refresh.yml
+  check '.on.workflow_call.inputs.verify_command.required == false' mise-lock-refresh.yml
+  check '.on.workflow_call.inputs.verify_command.type == "string"' mise-lock-refresh.yml
+  check '.on.workflow_call.inputs.mise_version.default == "2026.7.11"' mise-lock-refresh.yml
+  check '.on.workflow_call.secrets.deploy_key.required == true' mise-lock-refresh.yml
+  check '(.permissions | length) == 0' mise-lock-refresh.yml
+  check '.jobs.resolve.permissions.contents == "read"' mise-lock-refresh.yml
+  check '(.jobs.resolve.permissions | length) == 1' mise-lock-refresh.yml
+  check '.jobs.resolve."timeout-minutes" == 20' mise-lock-refresh.yml
+  check '.jobs.resolve.steps[] | select(.name == "Install Mise").uses == "jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518"' mise-lock-refresh.yml
+  check '.jobs.resolve.steps[] | select(.name == "Install Mise").with.version == "${{ inputs.mise_version }}"' mise-lock-refresh.yml
+  check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").env.MISE_CONFIG_FILE == "${{ inputs.mise_config_file }}"' mise-lock-refresh.yml
+  check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").env.MISE_LOCK_FILE == "${{ inputs.mise_lock_file }}"' mise-lock-refresh.yml
+  check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").run | contains("mise lock --global")' mise-lock-refresh.yml
+  check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").run | contains("unexpected path changed during Mise lock refresh")' mise-lock-refresh.yml
+  check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").run | contains("git diff --name-only -z HEAD")' mise-lock-refresh.yml
+  check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").run | contains("verification changed repository history during Mise lock refresh")' mise-lock-refresh.yml
+  check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").run | contains("git diff --cached --binary --full-index")' mise-lock-refresh.yml
+  check '.jobs.resolve.steps[] | select(.name == "Upload validated lock patch").uses == "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"' mise-lock-refresh.yml
+  check '.jobs.publish.needs == "resolve"' mise-lock-refresh.yml
+  check '.jobs.publish.if == "needs.resolve.outputs.changed == '\''true'\''"' mise-lock-refresh.yml
+  check '.jobs.publish.permissions.contents == "write"' mise-lock-refresh.yml
+  check '.jobs.publish.permissions."pull-requests" == "write"' mise-lock-refresh.yml
+  check '.jobs.publish.steps[] | select(.name == "Require the repository-scoped deploy key").env.DEPLOY_KEY == "${{ secrets.deploy_key }}"' mise-lock-refresh.yml
+  check '.jobs.publish.steps[] | select(.name == "Checkout exact refresh base").with."ssh-key" == "${{ secrets.deploy_key }}"' mise-lock-refresh.yml
+  check '.jobs.publish.steps[] | select(.name == "Checkout exact refresh base").with."persist-credentials" == true' mise-lock-refresh.yml
+  check '.jobs.publish.steps[] | select(.name == "Download validated lock patch").uses == "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"' mise-lock-refresh.yml
+  check '.jobs.publish.steps[] | select(.name == "Publish update and enable auto-merge").run | contains("gh pr create")' mise-lock-refresh.yml
+  check '.jobs.publish.steps[] | select(.name == "Publish update and enable auto-merge").run | contains("git commit --amend")' mise-lock-refresh.yml
+  check '.jobs.publish.steps[] | select(.name == "Publish update and enable auto-merge").run | contains("--force-with-lease=$remote_ref:$published_sha")' mise-lock-refresh.yml
+  check '.jobs.publish.steps[] | select(.name == "Publish update and enable auto-merge").run | contains("gh pr merge \"$number\" --auto --squash")' mise-lock-refresh.yml
+  check '.jobs.publish.steps[] | select(.name == "Publish update and enable auto-merge").run | contains("--admin") | not' mise-lock-refresh.yml
+
   check '.jobs.required.name == "Required"' shell-ci.yml
   check '.jobs.required.if == "${{ always() }}"' shell-ci.yml
   check '.jobs.required.needs | join(",") == "platforms,shellcheck,termux"' shell-ci.yml

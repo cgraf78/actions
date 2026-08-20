@@ -1,0 +1,310 @@
+name: Mise Lock Refresh
+
+on:
+  workflow_call:
+    inputs:
+      project_name:
+        description: Human-readable project name used in the update commit and pull request.
+        required: true
+        type: string
+      mise_config_file:
+        description: Tracked repository-relative Mise configuration to resolve.
+        required: true
+        type: string
+      mise_lock_file:
+        description: Tracked repository-relative Mise lockfile to regenerate.
+        required: true
+        type: string
+      verify_command:
+        description: Optional caller command that validates the regenerated lockfile.
+        required: false
+        type: string
+        default: ""
+      mise_version:
+        description: Mise release used to regenerate the lockfile.
+        required: false
+        type: string
+        default: "2026.7.11"
+    secrets:
+      deploy_key:
+        description: Repository-scoped write deploy key used to trigger protected pull request checks.
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: mise-lock-refresh-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Resolve current tools
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      base_sha: ${{ steps.refresh.outputs.base_sha }}
+      changed: ${{ steps.refresh.outputs.changed }}
+    steps:
+      - name: Checkout exact default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Install Mise
+        uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
+        with:
+          version: ${{ inputs.mise_version }}
+          install: false
+          cache: false
+
+      - name: Refresh and validate lockfile
+        id: refresh
+        shell: bash
+        env:
+          MISE_CONFIG_FILE: ${{ inputs.mise_config_file }}
+          MISE_GITHUB_TOKEN: ${{ github.token }}
+          MISE_LOCK_FILE: ${{ inputs.mise_lock_file }}
+          VERIFY_COMMAND: ${{ inputs.verify_command }}
+        run: |
+          set -euo pipefail
+
+          python3 - "$MISE_CONFIG_FILE" "$MISE_LOCK_FILE" <<'PY'
+          import os
+          import sys
+
+          for label, value in zip(("Mise config", "Mise lock"), sys.argv[1:]):
+              parts = value.split("/")
+              if (
+                  not value
+                  or value.startswith("/")
+                  or any(part in ("", ".", "..") for part in parts)
+                  or any(ord(character) < 32 for character in value)
+              ):
+                  raise SystemExit(f"{label} path is not a safe repository-relative path: {value!r}")
+              if os.path.islink(value) or not os.path.isfile(value):
+                  raise SystemExit(f"{label} must be a regular nonsymlink file: {value}")
+          PY
+
+          git ls-files --error-unmatch -- "$MISE_CONFIG_FILE" >/dev/null
+          git ls-files --error-unmatch -- "$MISE_LOCK_FILE" >/dev/null
+          base_sha=$(git rev-parse HEAD)
+
+          mise_config_root=$(dirname "$MISE_CONFIG_FILE")
+          export MISE_GLOBAL_CONFIG_FILE="$GITHUB_WORKSPACE/$MISE_CONFIG_FILE"
+          export MISE_GLOBAL_CONFIG_ROOT="$GITHUB_WORKSPACE/$mise_config_root"
+          export MISE_SAFE=1
+
+          # Resolve from the manifest so fuzzy selectors move forward and tools
+          # removed from the manifest cannot survive as stale lock entries.
+          : >"$MISE_LOCK_FILE"
+          mise lock --global
+
+          if [[ -n "$VERIFY_COMMAND" ]]; then
+            eval "$VERIFY_COMMAND"
+          fi
+
+          unexpected=false
+          while IFS= read -r -d '' path; do
+            if [[ "$path" != "$MISE_LOCK_FILE" ]]; then
+              printf 'unexpected path changed during Mise lock refresh: %s\n' "$path" >&2
+              unexpected=true
+            fi
+          done < <(git diff --name-only -z HEAD)
+          while IFS= read -r -d '' path; do
+            printf 'unexpected path changed during Mise lock refresh: %s\n' "$path" >&2
+            unexpected=true
+          done < <(git ls-files --others --exclude-standard -z)
+          if [[ "$unexpected" == true ]]; then
+            exit 1
+          fi
+          if [[ "$(git rev-parse HEAD)" != "$base_sha" ]]; then
+            echo "verification changed repository history during Mise lock refresh" >&2
+            exit 1
+          fi
+
+          echo "base_sha=$base_sha" >>"$GITHUB_OUTPUT"
+          if git diff --quiet HEAD -- "$MISE_LOCK_FILE"; then
+            echo "changed=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git add -- "$MISE_LOCK_FILE"
+          git diff --cached --check
+          git diff --cached --binary --full-index >"$RUNNER_TEMP/mise-lock.patch"
+          echo "changed=true" >>"$GITHUB_OUTPUT"
+
+      - name: Upload validated lock patch
+        if: steps.refresh.outputs.changed == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
+        with:
+          name: mise-lock-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mise-lock.patch
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish toolchain update
+    needs: resolve
+    if: needs.resolve.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions: # zizmor: ignore[excessive-permissions]
+      contents: write # Push the automation branch and request auto-merge.
+      pull-requests: write # Create or update the dedicated refresh PR.
+    env:
+      BASE_BRANCH: ${{ github.event.repository.default_branch }}
+      BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
+      GH_TOKEN: ${{ github.token }}
+      MISE_LOCK_FILE: ${{ inputs.mise_lock_file }}
+      PROJECT_NAME: ${{ inputs.project_name }}
+      UPDATE_BRANCH: automation/mise-lock-refresh
+    steps:
+      - name: Require the repository-scoped deploy key
+        shell: bash
+        env:
+          DEPLOY_KEY: ${{ secrets.deploy_key }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DEPLOY_KEY" ]]; then
+            echo "the repository-scoped Mise refresh deploy key is not configured" >&2
+            exit 1
+          fi
+
+      - name: Checkout exact refresh base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The repository-only key makes the post-PR push a real synchronize
+          # event, attaching protected pull_request checks to the final commit.
+          ssh-key: ${{ secrets.deploy_key }}
+          token: unused-by-ssh-checkout
+          persist-credentials: true # zizmor: ignore[artipacked]
+          path: repo
+          ref: ${{ needs.resolve.outputs.base_sha }}
+
+      - name: Download validated lock patch
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v5.0.0
+        with:
+          name: mise-lock-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifact
+
+      - name: Publish update and enable auto-merge
+        shell: bash
+        run: |-
+          set -euo pipefail
+
+          if [[ -z "$PROJECT_NAME" || "$PROJECT_NAME" == *$'\n'* ]]; then
+            echo "project_name must be a nonempty single-line value" >&2
+            exit 1
+          fi
+
+          latest_base=$(gh api "repos/$GITHUB_REPOSITORY/branches/$BASE_BRANCH" \
+            --jq .commit.sha)
+          if [[ "$latest_base" != "$BASE_SHA" ]]; then
+            echo "default branch changed during lock resolution; rerun the workflow" >&2
+            exit 1
+          fi
+
+          cd repo
+          git apply --index --binary "$GITHUB_WORKSPACE/artifact/mise-lock.patch"
+          staged_path=$(git diff --cached --name-only)
+          if [[ "$staged_path" != "$MISE_LOCK_FILE" ]]; then
+            echo "validated patch did not stage exactly $MISE_LOCK_FILE" >&2
+            exit 1
+          fi
+          git diff --cached --check
+
+          remote_ref="refs/heads/$UPDATE_BRANCH"
+          remote_sha=$(git ls-remote --heads origin "$remote_ref" | awk '{print $1}')
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$UPDATE_BRANCH"
+          git commit -m "Stage refreshed ${PROJECT_NAME} mise lock"
+
+          if [[ -n "$remote_sha" ]]; then
+            git push origin "HEAD:$remote_ref" \
+              "--force-with-lease=$remote_ref:$remote_sha"
+          else
+            git push origin "HEAD:$remote_ref"
+          fi
+
+          body="$RUNNER_TEMP/mise-lock-pr.md"
+          printf '%s\n' \
+            "Refresh the committed ${PROJECT_NAME} Mise lock so routine CI" \
+            "continues using reviewed tool versions and integrity metadata." \
+            "" \
+            "Summary" \
+            "" \
+            "- re-resolve every fuzzy selector from the committed Mise config" \
+            "- remove stale lock entries no longer present in the config" \
+            "- auto-merge only after the repository's protected CI passes" \
+            "" \
+            "Testing" \
+            "" \
+            "- caller lockfile verification" \
+            "- full protected CI on the final automation commit" >"$body"
+
+          owner=${GITHUB_REPOSITORY%%/*}
+          head="$owner:$UPDATE_BRANCH"
+          prs=$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls" \
+            -f state=open -f "head=$head" -f per_page=2)
+          count=$(jq 'length' <<<"$prs")
+          if ((count > 1)); then
+            echo "multiple open Mise refresh PRs for $head" >&2
+            exit 1
+          fi
+
+          title="Refresh ${PROJECT_NAME}'s \`mise\` lock"
+          if ((count == 0)); then
+            gh pr create --base "$BASE_BRANCH" --head "$UPDATE_BRANCH" \
+              --title "$title" --body-file "$body"
+            prs=$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls" \
+              -f state=open -f "head=$head" -f per_page=2)
+            count=$(jq 'length' <<<"$prs")
+          fi
+          if ((count != 1)); then
+            echo "expected exactly one open Mise refresh PR for $head" >&2
+            exit 1
+          fi
+
+          number=$(jq -r '.[0].number' <<<"$prs")
+          base=$(jq -r '.[0].base.ref' <<<"$prs")
+          head_repo=$(jq -r '.[0].head.repo.full_name' <<<"$prs")
+          head_ref=$(jq -r '.[0].head.ref' <<<"$prs")
+          if [[ "$base" != "$BASE_BRANCH" ]]; then
+            echo "unexpected base on Mise refresh PR #$number: $base" >&2
+            exit 1
+          fi
+          if [[ "$head_repo" != "$GITHUB_REPOSITORY" ]]; then
+            echo "unexpected head repository on Mise refresh PR #$number: $head_repo" >&2
+            exit 1
+          fi
+          if [[ "$head_ref" != "$UPDATE_BRANCH" ]]; then
+            echo "unexpected head branch on Mise refresh PR #$number: $head_ref" >&2
+            exit 1
+          fi
+          gh pr edit "$number" --title "$title" --body-file "$body"
+
+          # A GITHUB_TOKEN-created PR does not start another workflow. Amend
+          # after the PR exists and push through the scoped deploy key so the
+          # protected pull_request checks attach to the final commit.
+          published_sha=$(git rev-parse HEAD)
+          git commit --amend -F - <<EOF
+          Refresh ${PROJECT_NAME}'s \`mise\` lock
+
+          Summary
+
+          Regenerate the committed tool lock from the repository's Mise config.
+
+          Testing
+
+          - caller lockfile verification
+          - full protected CI
+          EOF
+          git push origin "HEAD:$remote_ref" \
+            "--force-with-lease=$remote_ref:$published_sha"
+
+          gh pr merge "$number" --auto --squash
