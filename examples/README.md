@@ -4,6 +4,15 @@ These are drafting templates for the public `cgraf78/actions` interfaces. They
 use only synthetic names and least-privilege permissions. `FULL_COMMIT_SHA` is
 intentional: do not choose several refs by hand.
 
+## Mise lock refresh
+
+Copy `examples/mise-lock-refresh.yml` to
+`.github/workflows/update-mise-lock.yml`, then set the project name and the
+repository-relative config and lock paths. The example expects a
+`MISE_REFRESH_DEPLOY_KEY` Actions secret containing a write deploy key scoped
+only to the consumer repository. The caller owns the weekly schedule; the
+shared workflow owns lock resolution, the update PR, and protected auto-merge.
+
 ## Shell repository
 
 Copy the following files into a shell-tool repository and adapt the test path

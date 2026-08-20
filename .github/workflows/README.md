@@ -6,6 +6,8 @@ local organization.
 
 ## Public Workflows
 
+- `mise-lock-refresh.yml` regenerates one caller lockfile and maintains a
+  protected, auto-merging update pull request.
 - `shell-ci.yml` runs shell project tests across the shared platform matrix
   and in the official Termux app.
 - `bash32-ci.yml` runs Bash 3.2 compatibility checks.

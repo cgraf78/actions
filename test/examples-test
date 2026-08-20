@@ -16,6 +16,7 @@ fail() {
 for example in \
   README.md \
   dependabot.yml \
+  mise-lock-refresh.yml \
   retry-infrastructure.yml \
   rust-ci.yml \
   rust-release.yml \
@@ -28,10 +29,26 @@ done
 # Workflow syntax is the first contract. actionlint also checks reusable-call
 # keys, expression contexts, permissions placement, and workflow_run spelling.
 actionlint \
+  "$examples/mise-lock-refresh.yml" \
   "$examples/shell-ci.yml" \
   "$examples/rust-ci.yml" \
   "$examples/rust-release.yml" \
   "$examples/retry-infrastructure.yml"
+
+# GitHub expressions are literal data in these yq programs.
+# shellcheck disable=SC2016
+yq -e '
+  (.permissions | length) == 0 and
+  .on.schedule[0].cron == "0 8 * * 1" and
+  (.on | has("workflow_dispatch")) and
+  .jobs.refresh.permissions.contents == "write" and
+  .jobs.refresh.permissions."pull-requests" == "write" and
+  .jobs.refresh.uses == "cgraf78/actions/.github/workflows/mise-lock-refresh.yml@FULL_COMMIT_SHA" and
+  .jobs.refresh.with.project_name == "Example" and
+  .jobs.refresh.with.mise_config_file == ".github/mise/example.toml" and
+  .jobs.refresh.with.mise_lock_file == ".github/mise/mise.lock" and
+  .jobs.refresh.secrets.deploy_key == "${{ secrets.MISE_REFRESH_DEPLOY_KEY }}"
+' "$examples/mise-lock-refresh.yml" >/dev/null
 
 yq -e '
   .permissions.contents == "read" and (.permissions | length) == 1 and
@@ -101,6 +118,8 @@ stage_consumer() {
   cp "$examples/$kind-ci.yml" "$consumer/.github/workflows/test.yml"
   cp "$examples/retry-infrastructure.yml" \
     "$consumer/.github/workflows/retry-infrastructure.yml"
+  cp "$examples/mise-lock-refresh.yml" \
+    "$consumer/.github/workflows/update-mise-lock.yml"
   cp "$examples/dependabot.yml" "$consumer/.github/dependabot.yml"
   if [[ "$kind" == shell ]]; then
     cp "$examples/shellcheck-files.txt" "$consumer/.github/shellcheck-files.txt"

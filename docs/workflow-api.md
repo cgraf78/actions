@@ -49,6 +49,56 @@ to a source-distributed checkout bootstrap without requiring release assets. A
 Dependabot update to only a literal SHA therefore fails closed until a
 maintainer synchronizes the lock and derived bytes.
 
+## `mise-lock-refresh.yml`
+
+`mise-lock-refresh.yml` gives repositories with a committed Mise lock one
+reviewable weekly update path. The caller owns its `schedule` and optional
+`workflow_dispatch` trigger; reusable workflows cannot define those triggers
+for their consumers. The caller job grants `contents: write` and
+`pull-requests: write`, then passes a repository-scoped write deploy key.
+
+The workflow resolves from an exact snapshot of the default branch in a
+read-only job. It requires the config and lock to be tracked, regular,
+nonsymlink repository-relative files, truncates the lock before `mise lock
+--global` so removed tools cannot survive, runs the optional caller verifier,
+and rejects every changed or untracked path except the declared lock. A binary
+full-index patch is the only payload crossing into the write-scoped job.
+
+The publishing job refuses to proceed if the default branch moved during
+resolution. It applies and revalidates the patch, force-updates only
+`automation/mise-lock-refresh` with a lease, and creates or updates exactly one
+pull request. After the PR exists, it amends the commit and pushes through the
+deploy key. That real `synchronize` event attaches ordinary protected
+`pull_request` checks to the final commit; `gh pr merge --auto --squash` then
+waits for those protections. The workflow never pushes the default branch and
+does not bypass protection with an administrative merge.
+
+Callers must enable repository auto-merge and require their normal CI contexts.
+Use a deploy key that can write only the caller repository; do not reuse a
+cross-repository machine credential. A caller may reuse an existing
+repository-only automation deploy key when its scope and rotation policy are
+appropriate.
+
+### Inputs
+
+| Input | Default | Contract |
+| ----- | ------- | -------- |
+| `project_name` | required | Nonempty single-line display name used in the generated commit and PR. |
+| `mise_config_file` | required | Tracked repository-relative Mise config used as the global config. |
+| `mise_lock_file` | required | Tracked repository-relative lockfile; it must be the only path changed by resolution and verification. |
+| `verify_command` | `""` | Optional caller-owned Bash snippet run after resolution and before patch creation. |
+| `mise_version` | `2026.7.11` | Exact Mise release used for regeneration. |
+
+### Secrets
+
+| Secret | Required | Contract |
+| ------ | -------- | -------- |
+| `deploy_key` | yes | Private write deploy key scoped only to the caller repository. Its post-PR push triggers protected CI on the final commit. |
+
+An example caller is available at `examples/mise-lock-refresh.yml`. As with the
+other public workflows, replace its drafting placeholder by running
+`consumer-ci/sync.sh` from the reviewed provider commit.
+
 ## Required Check Contract
 
 The public `shell-ci.yml`, `rust-ci.yml`, and `termux-ci.yml` workflows each

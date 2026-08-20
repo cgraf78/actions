@@ -1,0 +1,21 @@
+name: Refresh Mise lock
+
+on:
+  schedule:
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  refresh:
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: cgraf78/actions/.github/workflows/mise-lock-refresh.yml@FULL_COMMIT_SHA
+    with:
+      project_name: Example
+      mise_config_file: .github/mise/example.toml
+      mise_lock_file: .github/mise/mise.lock
+    secrets:
+      deploy_key: ${{ secrets.MISE_REFRESH_DEPLOY_KEY }}
