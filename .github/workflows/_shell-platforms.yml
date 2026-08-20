@@ -71,9 +71,10 @@ jobs:
     # hosts. Without an explicit cap a stalled transfer inherits the 6h default
     # and holds the required check open instead of failing, which also keeps
     # retry-infrastructure.yml from ever seeing it: that workflow only reacts to
-    # a failed conclusion. The slowest healthy platform (macOS) finishes in
-    # ~13m, so this leaves generous headroom while still bounding a stall.
-    timeout-minutes: 45
+    # a failed conclusion. The prerequisite and full-provider bootstrap steps
+    # own 20m and 25m caps respectively; retain 15m for checkout, caller tests,
+    # and teardown while keeping the job far below GitHub's 6h default.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.select-platforms.outputs.matrix) }}

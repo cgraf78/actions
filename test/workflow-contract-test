@@ -108,6 +108,16 @@ bash32_overhead=$((bash32_job_window - bash32_setup_window - bash32_caller_windo
   exit 1
 }
 
+shell_platform_job_window=$((60 * 60))
+shell_platform_prereq_window=$((20 * 60))
+shell_platform_bootstrap_window=$((25 * 60))
+shell_platform_test_window=$((shell_platform_job_window - \
+  shell_platform_prereq_window - shell_platform_bootstrap_window))
+[[ "$shell_platform_test_window" -ge $((15 * 60)) ]] || {
+  echo 'workflow contract failed: shell platform setup leaves under 15m for checkout and tests' >&2
+  exit 1
+}
+
 # The yq programs intentionally compare literal GitHub and shell expressions;
 # neither language should be expanded by this test process.
 # shellcheck disable=SC2016
@@ -166,7 +176,7 @@ contracts() {
   check '.on.workflow_call.inputs.dotfiles-provider.default == false' _shell-platforms.yml
   check '.on.workflow_call.inputs.dotfiles-provider.required == false' _shell-platforms.yml
   check '.on.workflow_call.inputs.dotfiles-provider.type == "boolean"' _shell-platforms.yml
-  check '.jobs.platform."timeout-minutes" == 45' _shell-platforms.yml
+  check '.jobs.platform."timeout-minutes" == 60' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Install OS prerequisites")."timeout-minutes" == 20' _shell-platforms.yml
   check ".jobs.platform.steps[] | select(.name == \"Install OS prerequisites\").uses == \"cgraf78/actions/.github/actions/shell-ci-prereqs@$actions_lock\"" _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Configure lightweight dotfiles bootstrap").if == "inputs.setup == '\''dotfiles'\'' && !inputs.dotfiles-provider"' _shell-platforms.yml
