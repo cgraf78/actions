@@ -149,7 +149,8 @@ file_inode() {
 }
 
 interrupt_parent_of_ready_child() {
-  local ready=$1 timeout_marker=$2 generations=${3:-1} child parent
+  local ready=$1 timeout_marker=$2 generations=${3:-1}
+  local child_release=${4:-} child_ready=${5:-} child parent
 
   for _ in {1..100}; do
     [[ -e "$ready" ]] && break
@@ -157,6 +158,21 @@ interrupt_parent_of_ready_child() {
   done
   [[ -e "$ready" ]] || return 1
   child=$(sed -n '1p' "$ready")
+  if [[ -n "$child_release" ]]; then
+    : >"$child_release"
+  fi
+  if [[ -n "$child_ready" ]]; then
+    for _ in {1..100}; do
+      [[ -e "$child_ready" ]] && break
+      kill -0 "$child" 2>/dev/null || break
+      sleep 0.05
+    done
+    if [[ ! -e "$child_ready" ]]; then
+      : >"$timeout_marker"
+      kill -TERM "$child" 2>/dev/null || true
+      return 1
+    fi
+  fi
   parent=$child
   while [[ "$generations" -gt 0 ]]; do
     parent=$(ps -o ppid= -p "$parent" 2>/dev/null || true)
@@ -249,6 +265,13 @@ fi
 if [[ -n ${CHECKOUT_TEST_BLOCK_READY:-} ]]; then
   printf '%s\n' "$$" >"$CHECKOUT_TEST_BLOCK_READY"
   if [[ -n ${CHECKOUT_TEST_BLOCK_CHILD_FILE:-} ]]; then
+    if [[ -n ${CHECKOUT_TEST_BLOCK_CHILD_RELEASE:-} ]]; then
+      for _ in {1..100}; do
+        [[ -e ${CHECKOUT_TEST_BLOCK_CHILD_RELEASE} ]] && break
+        sleep 0.05
+      done
+      [[ -e ${CHECKOUT_TEST_BLOCK_CHILD_RELEASE} ]] || exit 124
+    fi
     if [[ ${CHECKOUT_TEST_BLOCK_DELAYED_TERM:-0} == 1 ]]; then
       block_child_script=$CHECKOUT_TEST_BLOCK_CHILD_FILE.script
       cat >"$block_child_script" <<'CHILD'
@@ -1593,7 +1616,8 @@ signal_delegate_child_file="$tmp/post-direct-int.delegate-child"
 post_direct_int_timeout="$tmp/post-direct-int.timeout"
 rm -f "$post_direct_phase_log"
 interrupt_parent_of_ready_child \
-  "$post_direct_int_ready" "$post_direct_int_timeout" &
+  "$post_direct_int_ready" "$post_direct_int_timeout" 1 \
+  "$signal_release" "$signal_delegate_child_file" &
 interrupt_killer_pid=$!
 set +e
 CHECKOUT_TEST_LOG="$post_direct_log" \
@@ -1601,6 +1625,7 @@ CHECKOUT_TEST_LOG="$post_direct_log" \
   CHECKOUT_TEST_BLOCK_READY="$post_direct_int_ready" \
   CHECKOUT_TEST_BLOCK_RELEASE="$signal_release" \
   CHECKOUT_TEST_BLOCK_CHILD_FILE="$signal_delegate_child_file" \
+  CHECKOUT_TEST_BLOCK_CHILD_RELEASE="$signal_release" \
   CHECKOUT_TEST_BLOCK_DELAYED_TERM=1 \
   "$active_bash" "$post_source/install.sh" >/dev/null 2>&1
 post_direct_int_status=$?
