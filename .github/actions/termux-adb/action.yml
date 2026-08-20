@@ -1,0 +1,16 @@
+name: Stage bounded Termux ADB helper
+description: Expose the provider-owned bounded ADB helper to reusable workflows
+
+runs:
+  using: composite
+  steps:
+    - name: Export helper path
+      shell: bash
+      run: |-
+        set -euo pipefail
+        helper="$GITHUB_ACTION_PATH/termux-adb.sh"
+        if [[ ! -f "$helper" || -L "$helper" ]]; then
+          echo "Termux ADB helper is missing or unsafe: $helper" >&2
+          exit 1
+        fi
+        printf 'TERMUX_ADB_HELPER=%s\n' "$helper" >>"$GITHUB_ENV"
