@@ -59,7 +59,7 @@ jobs:
         # This neutral action is the OS-matrix source of truth. Future Rust,
         # C++, or other reusable workflows should call the same action, then
         # run language-specific setup/tests against the returned matrix.
-        uses: cgraf78/actions/.github/actions/platform-matrix@4f19231db8809e955d38761262bdf5c43b02d8f6
+        uses: cgraf78/actions/.github/actions/platform-matrix@3245542d7cddcfa06a1b062960c4fdbdbae6d8e9
         with:
           matrix-set: ${{ inputs.matrix-set }}
 
@@ -86,7 +86,7 @@ jobs:
         # Healthy runs finish in ~90s; a wedged apt mirror has been seen to hang
         # here for tens of minutes with no output.
         timeout-minutes: 20
-        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@4f19231db8809e955d38761262bdf5c43b02d8f6
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@3245542d7cddcfa06a1b062960c4fdbdbae6d8e9
         with:
           matrix-name: ${{ matrix.name }}
           profiles: ${{ inputs.profiles }}
@@ -235,7 +235,7 @@ jobs:
         # transfer. Cap the step so the surrounding retry paths get a failure to
         # act on rather than a job that eventually succeeds after 45m.
         timeout-minutes: 20
-        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@4f19231db8809e955d38761262bdf5c43b02d8f6
+        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@3245542d7cddcfa06a1b062960c4fdbdbae6d8e9
         env:
           # The explicit cross-repository token wins for private dependencies.
           # Full-provider public CI still needs authenticated release metadata:
