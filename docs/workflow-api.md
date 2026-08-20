@@ -326,6 +326,7 @@ jobs:
 | --------------------- | -------- | ---------------------------------------------------------------------------------- |
 | `concurrency-scope`   | `default` | Stable identity for this call. Must differ between multiple shell calls.          |
 | `force-dotfiles-update` | `false` | With `setup: dotfiles`, refresh shdeps before conventional-platform dependency resolution. |
+| `dotfiles-shdeps-update-policy` | `config` | Dot policy override across conventional platforms and Termux. Supported values are `config`, `pinned`, and `latest`. |
 | `dotfiles-provider`   | `false`   | With `setup: dotfiles`, run the client's configured Dot dependency provider.      |
 | `profiles`            | `""`     | Comma-separated prerequisite profiles used by conventional platforms and Termux.   |
 | `shellcheck-inventory-path` | `""` | Repository-relative typed inventory for one Ubuntu ShellCheck gate. Empty disables it. |
@@ -361,7 +362,11 @@ executables and their shared libraries on one supported Termux package state.
 
 `force-dotfiles-update` maps to the dotfiles `SHDEPS_FORCE=1` API at the
 conventional-platform bootstrap boundary. It defaults off so ordinary callers
-keep the cache-first bootstrap. `dotfiles-provider` is an independent opt-in:
+keep the cache-first bootstrap. `dotfiles-shdeps-update-policy` defaults to
+`config`, preserving the policy committed by the client. Setting it to `pinned`
+or `latest` exports the corresponding `DOT_SHDEPS_UPDATE_POLICY` override before
+Dot runs on both conventional platforms and Termux. Invalid values fail before
+bootstrap. `dotfiles-provider` is an independent opt-in:
 the default setup installs only the caller's explicit CI profiles, while the
 dotfiles owner can exercise its complete provider policy before end-to-end
 tests. Termux starts from a fresh application sandbox and does not restore that
@@ -583,6 +588,7 @@ committed provider configuration.
 | Input               | Default  | Contract                                                              |
 | ------------------- | -------- | --------------------------------------------------------------------- |
 | `command`           | required | Bash command executed inside Termux.                                  |
+| `dotfiles-shdeps-update-policy` | `config` | Dot policy override for `setup: dotfiles`; supports `config`, `pinned`, and `latest`. |
 | `host-command`      | `""`     | Optional command that prepares checkout artifacts on the Ubuntu host. |
 | `profiles`          | `runtime` | Termux profiles; `runtime` is lightweight, while `base` adds Git/curl. |
 | `rust-toolchain`    | `""`     | Optional toolchain enabling the fixed x86_64 Android NDK host build.   |

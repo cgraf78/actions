@@ -16,6 +16,11 @@ on:
         required: false
         type: boolean
         default: false
+      dotfiles-shdeps-update-policy:
+        description: Dotfiles Shdeps policy override. Supported values are config, pinned, and latest.
+        required: false
+        type: string
+        default: config
       dotfiles-provider:
         description: Run the configured Dot dependency provider during dotfiles setup.
         required: false
@@ -220,6 +225,26 @@ jobs:
           key: dot-deps-${{ runner.os }}-${{ matrix.name }}-${{ hashFiles('.config/mise/config.toml', '.config/mise/mise.lock', '.config/shdeps/**/*.conf', '.config/shdeps/hooks.d/**/*') }}
           restore-keys: |
             dot-deps-${{ runner.os }}-${{ matrix.name }}-
+
+      - name: Configure Dotfiles Shdeps update policy
+        if: inputs.setup == 'dotfiles'
+        shell: bash
+        env:
+          DOTFILES_SHDEPS_UPDATE_POLICY: ${{ inputs.dotfiles-shdeps-update-policy }}
+        run: |
+          set -euo pipefail
+          case "$DOTFILES_SHDEPS_UPDATE_POLICY" in
+            config | pinned | latest) ;;
+            *)
+              printf 'unsupported Dotfiles Shdeps update policy: %s\n' \
+                "$DOTFILES_SHDEPS_UPDATE_POLICY" >&2
+              exit 2
+              ;;
+          esac
+          if [[ "$DOTFILES_SHDEPS_UPDATE_POLICY" != config ]]; then
+            printf 'DOT_SHDEPS_UPDATE_POLICY=%s\n' \
+              "$DOTFILES_SHDEPS_UPDATE_POLICY" >>"$GITHUB_ENV"
+          fi
 
       - name: Configure lightweight dotfiles bootstrap
         if: inputs.setup == 'dotfiles' && !inputs.dotfiles-provider
