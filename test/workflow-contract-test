@@ -348,9 +348,14 @@ contracts() {
   check '.jobs.rustsec.steps[] | select(.name == "Audit the committed dependency graph")."timeout-minutes" == 10' rust-ci.yml
   check '.on.workflow_call.inputs.android-package-smoke-command.required == true' rust-ci.yml
   check '.on.workflow_call.inputs.termux-command.required == true' rust-ci.yml
+  check '.on.workflow_call.inputs.profiles.default == ""' rust-ci.yml
+  check '.jobs.platforms.with.profiles == "${{ inputs.profiles }}"' rust-ci.yml
+  check '.on.workflow_call.inputs.termux-profiles.default == "runtime"' rust-ci.yml
+  check '.jobs.termux.with.profiles == "${{ inputs.termux-profiles }}"' rust-ci.yml
+  check '.on.workflow_call.inputs.profiles.default == ""' _rust-platforms.yml
+  check '.jobs.platform.steps[] | select(.name == "Install test prerequisites").with.profiles == "${{ inputs.profiles }}"' _rust-platforms.yml
   check '.jobs.android-package.if == null' rust-ci.yml
   check '.jobs.termux.if == null' rust-ci.yml
-  check '.jobs.termux.with.profiles == "runtime"' rust-ci.yml
   check '.on.workflow_call.inputs.concurrency-scope.default == "default"' rust-ci.yml
 
   # Installing a Rust target is common to every package smoke. Installing the
