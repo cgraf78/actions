@@ -38,6 +38,16 @@ on:
         required: false
         type: string
         default: ""
+      profiles:
+        description: Optional shell-ci-prereqs profiles needed by cross-platform integration tests.
+        required: false
+        type: string
+        default: ""
+      termux-profiles:
+        description: Optional Termux prerequisite profiles; defaults to the lightweight runtime set.
+        required: false
+        type: string
+        default: runtime
       test-command:
         description: Rust test command to run on every selected platform.
         required: false
@@ -133,6 +143,7 @@ jobs:
       matrix-set: ${{ inputs.matrix-set != 'auto' && inputs.matrix-set || ((github.event_name == 'push' || github.event_name == 'pull_request') && 'core' || 'full') }}
       rust-toolchain: ${{ inputs.rust-toolchain }}
       working-directory: ${{ inputs.working-directory }}
+      profiles: ${{ inputs.profiles }}
       setup-command: ${{ inputs.setup-command }}
       test-command: ${{ inputs.test-command }}
 
@@ -441,7 +452,7 @@ jobs:
     with:
       command: ${{ inputs.termux-command }}
       host-command: ${{ inputs.termux-host-command }}
-      profiles: runtime
+      profiles: ${{ inputs.termux-profiles }}
       rust-toolchain: ${{ inputs.rust-toolchain }}
       working-directory: ${{ inputs.working-directory }}
 

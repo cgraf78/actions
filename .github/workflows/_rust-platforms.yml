@@ -28,6 +28,11 @@ on:
         required: false
         type: string
         default: ""
+      profiles:
+        description: Optional portable dependency profiles for integration tests.
+        required: false
+        type: string
+        default: ""
       test-command:
         description: Rust test command to run on every selected platform.
         required: false
@@ -73,6 +78,16 @@ jobs:
         uses: cgraf78/actions/.github/actions/rust-ci-prereqs@32ea2ebadbc85643863a8ca878a788017d3a7661
         with:
           matrix-name: ${{ matrix.name }}
+
+      # Rust repositories sometimes own shell/Lua integration tests in
+      # addition to Cargo tests. Reuse the same named package profiles as
+      # shell-ci instead of making each consumer duplicate an OS matrix.
+      - name: Install test prerequisites
+        if: inputs.profiles != ''
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@32ea2ebadbc85643863a8ca878a788017d3a7661
+        with:
+          matrix-name: ${{ matrix.name }}
+          profiles: ${{ inputs.profiles }}
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
