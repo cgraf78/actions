@@ -18,7 +18,7 @@ jobs:
       actions: write
       contents: read
     steps:
-      - uses: cgraf78/actions/.github/actions/infra-retry@32ea2ebadbc85643863a8ca878a788017d3a7661
+      - uses: cgraf78/actions/.github/actions/infra-retry@3680a10cfcf6808c430e7dcbb0546dde4e316f9f
         with:
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
