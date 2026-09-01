@@ -48,6 +48,7 @@ program	test/package-manager-test
 program	test/rust-prereqs-test
 program	test/release-installer-test
 program	test/release-asset-upload-test
+program	test/release-asset-selection-test
 program	test/release-gh-commands-test
 program	test/release-scripts-test
 program	test/self-pin-retention-test

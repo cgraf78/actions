@@ -16,7 +16,7 @@ local organization.
   default-on RustSec audit on every CI event.
 - `termux-ci.yml` is the stable caller contract for running commands inside the
   official Termux app on an Android emulator.
-- `rust-release.yml` builds and publishes Rust release artifacts.
+- `rust-release.yml` builds, attests, and publishes Rust release artifacts.
 
 The `infra-retry` composite action is an opt-in companion for caller
 `workflow_run` controllers. It reruns failed jobs once only when every failed

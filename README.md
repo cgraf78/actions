@@ -206,13 +206,21 @@ Builds and publishes Rust binary archives for the standard release platform
 set: Linux x86_64 musl, Linux aarch64 musl, macOS x86_64, and macOS aarch64.
 Callers can opt into Android aarch64 and x86_64 without changing their packaging
 command.
-The workflow owns draft creation, tag/version validation, asset upload, and
-publishing. The caller owns packaging and smoke-test behavior through scripts,
-and can opt out of publishing to leave a draft release.
+The workflow owns draft creation, tag/version validation, provenance
+attestation, asset upload, and publishing. Every selected release asset is
+attested automatically before upload; callers do not run a separate signing
+command. The same resolved paths feed both operations, and retries verify remote
+SHA-256 digests before preserving an existing asset. The caller owns packaging
+and smoke-test behavior through scripts, and can opt out of publishing to leave
+a draft release.
 
 ```yaml
 jobs:
   release:
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     uses: cgraf78/actions/.github/workflows/rust-release.yml@FULL_COMMIT_SHA
     with:
       android-aarch64: true
@@ -224,7 +232,11 @@ jobs:
 Callers with non-Cargo release identity can provide `tag-command` to print the
 exact expected Git tag. The release matrix exposes Rust compiler triples through
 `RUST_TARGET` and installer-facing archive labels through `ASSET_PLATFORM`; use
-the latter for public asset names.
+the latter for public asset names. GitHub does not let a called workflow elevate
+its caller's token, so every caller must grant all three permissions shown
+above. An attestation or build failure keeps the release as a draft; successful
+matrix legs may already have uploaded assets, matching the workflow's existing
+retry-safe partial-draft behavior.
 
 ## Release scripts
 
@@ -269,7 +281,8 @@ than one worker are split into first-party composite actions:
 - `.github/workflows/_rust-platforms.yml` is the internal Rust worker that runs
   cargo tests across the shared OS matrix.
 - `.github/workflows/rust-release.yml` owns standard Rust binary release
-  mechanics: draft creation, the release asset matrix, uploads, and publishing.
+  mechanics: draft creation, the release asset matrix, provenance attestations,
+  uploads, and publishing.
 - `.github/actions/platform-matrix/` owns the shared OS matrix. Shell CI uses it
   today; Rust CI uses it too; future C++ or other language-specific reusable
   workflows should consume the same action instead of copying platform JSON.

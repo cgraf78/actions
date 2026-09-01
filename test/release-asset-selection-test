@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+select_assets=$(yq -r \
+  '.jobs.build.steps[] | select(.name == "Select release assets").run' \
+  "$root/.github/workflows/rust-release.yml")
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() {
+  printf 'release-asset-selection-test: %s\n' "$*" >&2
+  exit 1
+}
+
+mkdir -p "$tmp/assets"
+printf 'archive\n' >"$tmp/assets/tool.tar.gz"
+printf 'checksum\n' >"$tmp/assets/tool.tar.gz.sha256"
+: >"$tmp/output"
+
+(
+  cd "$tmp"
+  ASSET_GLOB='assets/tool.tar.gz assets/tool.tar.gz.sha256' \
+    GITHUB_OUTPUT="$tmp/output" \
+    WORKING_DIRECTORY=. \
+    bash -c "$select_assets"
+)
+
+delimiter=$(sed -n '1s/^asset-paths<<//p' "$tmp/output")
+[[ -n $delimiter ]] || fail 'selection output omitted its multiline delimiter'
+mapfile -t selected < <(sed -n "2,/^${delimiter}$/p" "$tmp/output" | sed '$d')
+[[ ${#selected[@]} -eq 2 ]] || fail 'multi-file selection did not emit both assets'
+[[ ${selected[0]} == "$tmp/assets/tool.tar.gz" ]] ||
+  fail 'archive selection was not absolute and ordered'
+[[ ${selected[1]} == "$tmp/assets/tool.tar.gz.sha256" ]] ||
+  fail 'checksum selection was not absolute and ordered'
+
+set +e
+(
+  cd "$tmp"
+  ASSET_GLOB='assets/missing-*' GITHUB_OUTPUT="$tmp/empty-output" \
+    WORKING_DIRECTORY=. bash -c "$select_assets"
+) >"$tmp/empty-stdout" 2>"$tmp/empty-stderr"
+empty_status=$?
+set -e
+[[ $empty_status -eq 1 ]] || fail 'empty selection succeeded'
+grep -q 'matched no files' "$tmp/empty-stderr" ||
+  fail 'empty selection did not explain the failure'
+
+mkdir -p "$tmp/a" "$tmp/b"
+printf 'a\n' >"$tmp/a/tool.tar.gz"
+printf 'b\n' >"$tmp/b/tool.tar.gz"
+set +e
+(
+  cd "$tmp"
+  ASSET_GLOB='*/tool.tar.gz' GITHUB_OUTPUT="$tmp/duplicate-output" \
+    WORKING_DIRECTORY=. bash -c "$select_assets"
+) >"$tmp/duplicate-stdout" 2>"$tmp/duplicate-stderr"
+duplicate_status=$?
+set -e
+[[ $duplicate_status -eq 1 ]] || fail 'duplicate basenames were accepted'
+grep -q 'duplicate release asset name' "$tmp/duplicate-stderr" ||
+  fail 'duplicate basename failure was not explained'
+
+printf 'unsafe\n' >"$tmp/assets/tool[1].tar.gz"
+set +e
+(
+  cd "$tmp"
+  ASSET_GLOB='assets/tool*.tar.gz' GITHUB_OUTPUT="$tmp/unsafe-output" \
+    WORKING_DIRECTORY=. bash -c "$select_assets"
+) >"$tmp/unsafe-stdout" 2>"$tmp/unsafe-stderr"
+unsafe_status=$?
+set -e
+[[ $unsafe_status -eq 1 ]] || fail 'attestation metacharacters were accepted'
+grep -q 'unsafe release asset name' "$tmp/unsafe-stderr" ||
+  fail 'unsafe asset name failure was not explained'
+
+mkdir -p "$tmp/build[1]"
+printf 'unsafe-dir\n' >"$tmp/build[1]/tool.tar.gz"
+set +e
+(
+  cd "$tmp"
+  ASSET_GLOB='tool.tar.gz' GITHUB_OUTPUT="$tmp/unsafe-dir-output" \
+    WORKING_DIRECTORY='build[1]' bash -c "$select_assets"
+) >"$tmp/unsafe-dir-stdout" 2>"$tmp/unsafe-dir-stderr"
+unsafe_dir_status=$?
+set -e
+[[ $unsafe_dir_status -eq 1 ]] || fail 'unsafe attestation path was accepted'
+grep -q 'unsafe release asset path' "$tmp/unsafe-dir-stderr" ||
+  fail 'unsafe asset path failure was not explained'
+
+printf 'release asset selection tests passed\n'

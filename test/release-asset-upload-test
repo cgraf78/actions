@@ -48,11 +48,11 @@ case "$1:$2" in
     fi
     printf '{"assets":['
     first=true
-    while IFS='|' read -r name size; do
+    while IFS='|' read -r name size digest; do
       [[ -n "$name" ]] || continue
       if [[ "$first" == false ]]; then printf ','; fi
       first=false
-      printf '{"name":"%s","size":%s}' "$name" "$size"
+      printf '{"name":"%s","size":%s,"digest":"%s"}' "$name" "$size" "$digest"
     done <"$FAKE_REMOTE"
     printf ']}\n'
     ;;
@@ -60,6 +60,7 @@ case "$1:$2" in
     asset=$4
     name=${asset##*/}
     size=$(wc -c <"$asset" | tr -d ' ')
+    digest="sha256:$(shasum -a 256 "$asset" | awk '{print $1}')"
     attempt_file="$FAKE_DIR/attempt-$name"
     attempt=0
     [[ ! -f "$attempt_file" ]] || attempt=$(<"$attempt_file")
@@ -68,12 +69,12 @@ case "$1:$2" in
     case "$FAKE_SCENARIO:$name:$attempt" in
       fail:*:*) exit 1 ;;
       ambiguous:tool.tar.gz:1 | ambiguous-view-failure:tool.tar.gz:1)
-        printf '%s|%s\n' "$name" "$size" >>"$FAKE_REMOTE"
+        printf '%s|%s|%s\n' "$name" "$size" "$digest" >>"$FAKE_REMOTE"
         exit 1
         ;;
     esac
     awk -F '|' -v name="$name" '$1 != name' "$FAKE_REMOTE" >"$FAKE_REMOTE.next"
-    printf '%s|%s\n' "$name" "$size" >>"$FAKE_REMOTE.next"
+    printf '%s|%s|%s\n' "$name" "$size" "$digest" >>"$FAKE_REMOTE.next"
     mv "$FAKE_REMOTE.next" "$FAKE_REMOTE"
     ;;
   *)
@@ -94,26 +95,42 @@ EOF
 
   case "$scenario" in
     existing)
-      printf 'tool.tar.gz|%s\n' \
+      printf 'tool.tar.gz|%s|sha256:%s\n' \
         "$(wc -c <"$case_dir/assets/tool.tar.gz" | tr -d ' ')" \
+        "$(shasum -a 256 "$case_dir/assets/tool.tar.gz" | awk '{print $1}')" \
         >"$case_dir/remote"
       ;;
     partial)
-      printf 'tool.tar.gz|%s\n' \
+      printf 'tool.tar.gz|%s|sha256:%s\n' \
         "$(wc -c <"$case_dir/assets/tool.tar.gz" | tr -d ' ')" \
+        "$(shasum -a 256 "$case_dir/assets/tool.tar.gz" | awk '{print $1}')" \
         >"$case_dir/remote"
       ;;
     mismatch)
-      printf 'tool.tar.gz|1\n' >"$case_dir/remote"
+      printf 'tool.tar.gz|1|sha256:wrong\n' >"$case_dir/remote"
+      ;;
+    same-size-mismatch)
+      printf 'tool.tar.gz|%s|sha256:%064d\n' \
+        "$(wc -c <"$case_dir/assets/tool.tar.gz" | tr -d ' ')" 0 \
+        >"$case_dir/remote"
       ;;
   esac
 
   local glob="$case_dir/assets/tool.tar.gz"
   [[ "$scenario" != multi && "$scenario" != partial ]] || glob="$case_dir/assets/tool.tar.gz*"
   [[ "$scenario" != empty ]] || glob="$case_dir/assets/missing-*"
+  local asset_paths=
+  if [[ "$scenario" != empty ]]; then
+    shopt -s nullglob
+    # shellcheck disable=SC2206 # The fixture deliberately exercises glob expansion.
+    local selected_assets=($glob)
+    shopt -u nullglob
+    printf -v asset_paths '%s\n' "${selected_assets[@]}"
+  fi
 
   set +e
   ASSET_GLOB="$glob" \
+    ASSET_PATHS="$asset_paths" \
     FAKE_CALLS="$case_dir/calls" \
     FAKE_DIR="$case_dir" \
     FAKE_REMOTE="$case_dir/remote" \
@@ -159,6 +176,10 @@ run_case ambiguous-view-failure ambiguous-view-failure 0
 run_case mismatch mismatch 0
 [[ $(grep -c '^release upload ' "$CASE_DIR/calls") -eq 1 ]] ||
   fail "mismatched asset was not replaced"
+
+run_case same-size-mismatch same-size-mismatch 0
+[[ $(grep -c '^release upload ' "$CASE_DIR/calls") -eq 1 ]] ||
+  fail "same-size digest mismatch was not replaced"
 
 run_case failure fail 1
 [[ $(grep -c '^release upload ' "$CASE_DIR/calls") -eq 3 ]] ||
