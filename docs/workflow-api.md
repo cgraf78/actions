@@ -665,10 +665,37 @@ with:
 ### Caller-Owned Packaging
 
 The release workflow deliberately does not inspect archive contents. It only
-passes `RUST_TARGET` and `ASSET_PLATFORM`, runs caller commands, uploads matching
-assets, and publishes the release. Release scripts live in the product
-repository so changes to installer or archive contracts review with the product
-code.
+passes `RUST_TARGET` and `ASSET_PLATFORM`, runs caller commands, resolves
+`asset-glob` once, attests and uploads that exact asset set, and publishes the
+release. Release scripts live in the product repository so changes to installer
+or archive contracts review with the product code.
+
+Selected asset paths must use slash-separated components containing only
+letters, digits, dots, underscores, plus signs, and hyphens. This matches the
+shared release naming convention and keeps GitHub's attestation glob/list
+parser from reinterpreting a literal upload path.
+
+Attestation is mandatory for every enabled matrix leg and uses GitHub's
+short-lived OIDC identity; callers provide no signing secret or manual release
+step. Because a reusable workflow cannot elevate caller permissions, its job
+must grant the shared release workflow everything it needs:
+
+```yaml
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+```
+
+Packaging and smoke validation run before asset selection and attestation, and
+upload runs after them. The selector emits absolute paths, so repository-relative
+and absolute `working-directory` values resolve consistently. Upload retries
+compare GitHub's recorded SHA-256 digest with the selected local file before
+preserving an existing remote asset. If any build or attestation fails,
+publication does not run and the release remains a draft. With the existing
+non-fail-fast matrix, successful legs may already have uploaded their attested
+assets; a workflow retry reconciles that partial draft instead of promising
+transactional rollback.
 
 Their *logic* does not have to be written three times. `release-scripts/` in
 this repo holds the shared implementation of release identity, packaging, and

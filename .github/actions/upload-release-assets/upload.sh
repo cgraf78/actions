@@ -2,9 +2,12 @@
 
 set -euo pipefail
 
-: "${ASSET_GLOB:?ASSET_GLOB is required}"
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 : "${TAG:?TAG is required}"
+[[ -n ${ASSET_PATHS:-} || -n ${ASSET_GLOB:-} ]] || {
+  echo 'ASSET_PATHS or ASSET_GLOB is required' >&2
+  exit 1
+}
 
 retry_delays=${RELEASE_UPLOAD_RETRY_DELAYS:-1,3}
 IFS=, read -r -a delays <<<"$retry_delays"
@@ -16,12 +19,19 @@ run_gh() {
 
 # The glob is trusted caller configuration from the reusable workflow. Preserve
 # its historical shell expansion contract while making an empty match fatal.
-shopt -s nullglob
-# shellcheck disable=SC2206
-assets=($ASSET_GLOB)
-shopt -u nullglob
+assets=()
+if [[ -n ${ASSET_PATHS:-} ]]; then
+  while IFS= read -r asset; do
+    [[ -n $asset ]] && assets+=("$asset")
+  done <<<"$ASSET_PATHS"
+else
+  shopt -s nullglob
+  # shellcheck disable=SC2206
+  assets=($ASSET_GLOB)
+  shopt -u nullglob
+fi
 if ((${#assets[@]} == 0)); then
-  printf 'release asset glob matched no files: %s\n' "$ASSET_GLOB" >&2
+  printf 'release asset selection matched no files: %s\n' "${ASSET_GLOB:-}" >&2
   exit 1
 fi
 
@@ -37,7 +47,7 @@ for asset in "${assets[@]}"; do
   asset_names+=("$asset_name")
 done
 
-remote_size() {
+remote_digest() {
   local asset_name=$1
   local response
 
@@ -46,17 +56,17 @@ remote_size() {
     return 2
   fi
   jq -r --arg name "$asset_name" \
-    '.assets[] | select(.name == $name) | .size' <<<"$response" | head -n 1
+    '.assets[] | select(.name == $name) | (.digest // "")' <<<"$response" | head -n 1
 }
 
 remote_state() {
   local asset_name=$1
-  local expected_size=$2
-  local actual_size
+  local expected_digest=$2
+  local actual_digest
 
-  if ! actual_size=$(remote_size "$asset_name"); then
+  if ! actual_digest=$(remote_digest "$asset_name"); then
     printf 'unknown\n'
-  elif [[ "$actual_size" == "$expected_size" ]]; then
+  elif [[ "$actual_digest" == "$expected_digest" ]]; then
     printf 'matching\n'
   else
     printf 'different\n'
@@ -66,7 +76,7 @@ remote_state() {
 upload_one() {
   local asset=$1
   local asset_name=${asset##*/}
-  local asset_size
+  local asset_digest
   local attempt
   local delay
   local state
@@ -75,9 +85,9 @@ upload_one() {
     printf 'release asset is not a regular file: %s\n' "$asset" >&2
     return 1
   }
-  asset_size=$(wc -c <"$asset" | tr -d ' ')
+  asset_digest="sha256:$(shasum -a 256 "$asset" | awk '{print $1}')"
 
-  state=$(remote_state "$asset_name" "$asset_size")
+  state=$(remote_state "$asset_name" "$asset_digest")
   if [[ "$state" == matching ]]; then
     printf 'release asset already uploaded: %s\n' "$asset_name"
     return 0
@@ -85,7 +95,7 @@ upload_one() {
 
   for attempt in 1 2 3; do
     if ((attempt > 1)); then
-      state=$(remote_state "$asset_name" "$asset_size")
+      state=$(remote_state "$asset_name" "$asset_digest")
       if [[ "$state" == matching ]]; then
         return 0
       fi
@@ -106,7 +116,7 @@ upload_one() {
       upload_status=$?
     fi
 
-    state=$(remote_state "$asset_name" "$asset_size")
+    state=$(remote_state "$asset_name" "$asset_digest")
     if [[ "$state" == matching ]]; then
       if ((upload_status != 0)); then
         printf 'release asset arrived after an ambiguous upload error: %s\n' \

@@ -229,9 +229,12 @@ jobs:
     name: Build ${{ matrix.asset-platform }}
     needs: create-release
     runs-on: ${{ matrix.os }}
-    # Asset upload is the only write operation in this job.
+    # Keep release uploads and provenance signing in the build leg that created
+    # and smoke-tested each archive so no unattested asset can be published.
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -278,7 +281,7 @@ jobs:
           matrix.enabled &&
           (matrix.rust-target == 'aarch64-linux-android' ||
           matrix.rust-target == 'x86_64-linux-android')
-        uses: cgraf78/actions/.github/actions/android-rust-toolchain@32ea2ebadbc85643863a8ca878a788017d3a7661
+        uses: cgraf78/actions/.github/actions/android-rust-toolchain@3680a10cfcf6808c430e7dcbb0546dde4e316f9f
         with:
           rust-target: ${{ matrix.rust-target }}
 
@@ -290,7 +293,7 @@ jobs:
         if: >-
           matrix.enabled && inputs.install-musl-tools &&
           endsWith(matrix.rust-target, '-musl')
-        uses: cgraf78/actions/.github/actions/musl-build-prereqs@32ea2ebadbc85643863a8ca878a788017d3a7661
+        uses: cgraf78/actions/.github/actions/musl-build-prereqs@3680a10cfcf6808c430e7dcbb0546dde4e316f9f
 
       - name: Run repo setup
         if: matrix.enabled && inputs.setup-command != ''
@@ -330,14 +333,79 @@ jobs:
           cd "$WORKING_DIRECTORY"
           eval "$SMOKE_COMMAND"
 
+      - name: Select release assets
+        id: release-assets
+        if: matrix.enabled
+        shell: bash
+        env:
+          ASSET_GLOB: ${{ inputs.asset-glob }}
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        run: |
+          cd "$WORKING_DIRECTORY"
+          shopt -s nullglob
+          # The glob is trusted caller configuration from this workflow's API.
+          # shellcheck disable=SC2206
+          assets=($ASSET_GLOB)
+          shopt -u nullglob
+          if ((${#assets[@]} == 0)); then
+            printf 'release asset glob matched no files: %s\n' "$ASSET_GLOB" >&2
+            exit 1
+          fi
+
+          root=$(pwd -P)
+          asset_names=()
+          asset_paths=()
+          for asset in "${assets[@]}"; do
+            [[ -f $asset ]] || {
+              printf 'release asset is not a regular file: %s\n' "$asset" >&2
+              exit 1
+            }
+            asset_name=${asset##*/}
+            # actions/attest accepts glob and comma/newline list syntax. Keep
+            # selected filenames in the release convention's safe vocabulary
+            # so its parser cannot reinterpret a literal upload path.
+            [[ $asset_name =~ ^[A-Za-z0-9._+-]+$ ]] || {
+              printf 'unsafe release asset name: %s\n' "$asset_name" >&2
+              exit 1
+            }
+            for existing_name in ${asset_names[@]+"${asset_names[@]}"}; do
+              if [[ $existing_name == "$asset_name" ]]; then
+                printf 'duplicate release asset name: %s\n' "$asset_name" >&2
+                exit 1
+              fi
+            done
+            asset_names+=("$asset_name")
+            case $asset in
+              /*) asset_path=$asset ;;
+              *) asset_path=$root/$asset ;;
+            esac
+            [[ $asset_path =~ ^/[A-Za-z0-9._+/-]+$ ]] || {
+              printf 'unsafe release asset path: %s\n' "$asset_path" >&2
+              exit 1
+            }
+            asset_paths+=("$asset_path")
+          done
+
+          delimiter="CGRAF78_RELEASE_ASSETS_${RANDOM}_$$"
+          {
+            printf 'asset-paths<<%s\n' "$delimiter"
+            printf '%s\n' "${asset_paths[@]}"
+            printf '%s\n' "$delimiter"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Attest release assets
+        if: matrix.enabled
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ steps.release-assets.outputs.asset-paths }}
+
       - name: Upload release assets
         if: matrix.enabled
-        uses: cgraf78/actions/.github/actions/upload-release-assets@32ea2ebadbc85643863a8ca878a788017d3a7661
+        uses: cgraf78/actions/.github/actions/upload-release-assets@3680a10cfcf6808c430e7dcbb0546dde4e316f9f
         with:
-          asset-glob: ${{ inputs.asset-glob }}
+          asset-paths: ${{ steps.release-assets.outputs.asset-paths }}
           github-token: ${{ github.token }}
           tag: ${{ github.ref_name }}
-          working-directory: ${{ inputs.working-directory }}
 
   publish-release:
     name: Publish release

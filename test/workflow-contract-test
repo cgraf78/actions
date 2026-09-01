@@ -29,6 +29,23 @@ check_file() {
   fi
 }
 
+check_step_order() {
+  local before=$1
+  local after=$2
+  local workflow=$3
+  local before_index after_index
+
+  before_index=$(yq -r ".jobs.build.steps | to_entries | .[] | select(.value.name == \"$before\") | .key" \
+    "$root/.github/workflows/$workflow")
+  after_index=$(yq -r ".jobs.build.steps | to_entries | .[] | select(.value.name == \"$after\") | .key" \
+    "$root/.github/workflows/$workflow")
+  if [[ -z $before_index || -z $after_index || $before_index -ge $after_index ]]; then
+    printf 'workflow contract failed: %s: %s must precede %s\n' \
+      "$workflow" "$before" "$after" >&2
+    return 1
+  fi
+}
+
 check_no_unsupervised_adb() {
   local workflow=$1
   local run
@@ -413,6 +430,10 @@ contracts() {
   check '.on.workflow_call.inputs.install-musl-tools.default == false' rust-release.yml
   check '.on.workflow_call.inputs.install-musl-tools.required == false' rust-release.yml
   check '.on.workflow_call.inputs.install-musl-tools.type == "boolean"' rust-release.yml
+  check '.jobs.build.permissions.contents == "write"' rust-release.yml
+  check '.jobs.build.permissions."id-token" == "write"' rust-release.yml
+  check '.jobs.build.permissions.attestations == "write"' rust-release.yml
+  check '(.jobs.build.permissions | length) == 3' rust-release.yml
   check '.jobs.create-release.steps[] | select(.name == "Create draft release").run | contains("timeout -k 5 \"${RELEASE_GH_TIMEOUT_SECONDS:-120}\"")' rust-release.yml
   check '.jobs.create-release.steps[] | select(.name == "Create draft release").run | contains("state=$(release_state)")' rust-release.yml
   check '.jobs.create-release.steps[] | select(.name == "Create draft release").run | contains("state is unknown; deferring creation")' rust-release.yml
@@ -420,12 +441,23 @@ contracts() {
   check '.jobs.publish-release.steps[] | select(.name == "Publish draft release").run | contains("state=$(release_state)")' rust-release.yml
   check '.jobs.publish-release.steps[] | select(.name == "Publish draft release").run | contains("state is unknown; deferring publication")' rust-release.yml
   check ".jobs.build.steps[] | select(.name == \"Upload release assets\").uses == \"cgraf78/actions/.github/actions/upload-release-assets@$actions_lock\"" rust-release.yml
-  check '.jobs.build.steps[] | select(.name == "Upload release assets").with."asset-glob" == "${{ inputs.asset-glob }}"' rust-release.yml
+  check '.jobs.build.steps[] | select(.name == "Select release assets").if == "matrix.enabled"' rust-release.yml
+  check '.jobs.build.steps[] | select(.name == "Select release assets").env.ASSET_GLOB == "${{ inputs.asset-glob }}"' rust-release.yml
+  check '.jobs.build.steps[] | select(.name == "Select release assets").env.WORKING_DIRECTORY == "${{ inputs.working-directory }}"' rust-release.yml
+  check '.jobs.build.steps[] | select(.name == "Select release assets").run | contains("assets=($ASSET_GLOB)")' rust-release.yml
+  check '.jobs.build.steps[] | select(.name == "Select release assets").run | contains("asset-paths<<%s")' rust-release.yml
+  check '.jobs.build.steps[] | select(.name == "Upload release assets").with."asset-paths" == "${{ steps.release-assets.outputs.asset-paths }}"' rust-release.yml
   check '.jobs.build.steps[] | select(.name == "Upload release assets").with."github-token" == "${{ github.token }}"' rust-release.yml
   check '.jobs.build.steps[] | select(.name == "Upload release assets").with.tag == "${{ github.ref_name }}"' rust-release.yml
-  check '.jobs.build.steps[] | select(.name == "Upload release assets").with."working-directory" == "${{ inputs.working-directory }}"' rust-release.yml
+  check '.jobs.build.steps[] | select(.name == "Attest release assets").if == "matrix.enabled"' rust-release.yml
+  check '.jobs.build.steps[] | select(.name == "Attest release assets").uses == "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6"' rust-release.yml
+  check '.jobs.build.steps[] | select(.name == "Attest release assets").with."subject-path" == "${{ steps.release-assets.outputs.asset-paths }}"' rust-release.yml
+  check_step_order 'Package archive' 'Select release assets' rust-release.yml
+  check_step_order 'Smoke install' 'Select release assets' rust-release.yml
+  check_step_order 'Select release assets' 'Attest release assets' rust-release.yml
+  check_step_order 'Attest release assets' 'Upload release assets' rust-release.yml
   check '.runs.using == "composite"' ../actions/upload-release-assets/action.yml
-  check '.runs.steps[0].env.ASSET_GLOB == "${{ inputs.asset-glob }}"' ../actions/upload-release-assets/action.yml
+  check '.runs.steps[0].env.ASSET_PATHS == "${{ inputs.asset-paths }}"' ../actions/upload-release-assets/action.yml
   check '.runs.steps[0].env.GH_TOKEN == "${{ inputs.github-token }}"' ../actions/upload-release-assets/action.yml
   check '.runs.steps[0].run | contains("$GITHUB_ACTION_PATH/upload.sh")' ../actions/upload-release-assets/action.yml
   # Guarded on the matrix row so a caller that opts in does not run apt on the

@@ -69,7 +69,9 @@ yq -e '
 yq -e '
   .permissions.contents == "read" and (.permissions | length) == 1 and
   .jobs.release.permissions.contents == "write" and
-  (.jobs.release.permissions | length) == 1 and
+  .jobs.release.permissions."id-token" == "write" and
+  .jobs.release.permissions.attestations == "write" and
+  (.jobs.release.permissions | length) == 3 and
   .jobs.release.uses == "cgraf78/actions/.github/workflows/rust-release.yml@FULL_COMMIT_SHA" and
   .jobs.release.with."tag-command" == "scripts/release-tag.sh"
 ' "$examples/rust-release.yml" >/dev/null

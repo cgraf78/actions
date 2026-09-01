@@ -15,6 +15,8 @@ this repo and by other `cgraf78` repositories.
   `dtolnay/rust-toolchain`.
 - `musl-build-prereqs` installs the musl linker toolchain, and optionally adds
   the Rust musl target, for repos whose crates link C code.
+- `upload-release-assets` reconciles that selected set against remote SHA-256
+  digests and retries bounded uploads without preserving different remote bytes.
 - `dotfiles-bootstrap` installs Dot and locked Mise tools, runs doctor when the
   full dependency provider converges, or stages and installs one exact
   standalone Dot payload for sandbox CI.

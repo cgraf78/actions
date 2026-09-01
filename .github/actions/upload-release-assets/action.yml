@@ -2,9 +2,12 @@ name: Upload release assets safely
 description: Upload release assets idempotently with verification and bounded retries.
 
 inputs:
+  asset-paths:
+    description: Newline-delimited release asset paths selected before attestation.
+    required: false
   asset-glob:
-    description: Caller-owned shell glob selecting release assets.
-    required: true
+    description: Legacy caller-owned shell glob used when asset-paths is empty.
+    required: false
   github-token:
     description: Token with contents write access to the target repository.
     required: true
@@ -23,9 +26,12 @@ runs:
       shell: bash
       env:
         ASSET_GLOB: ${{ inputs.asset-glob }}
+        ASSET_PATHS: ${{ inputs.asset-paths }}
         GH_TOKEN: ${{ inputs.github-token }}
         TAG: ${{ inputs.tag }}
         WORKING_DIRECTORY: ${{ inputs.working-directory }}
       run: |-
-        cd "$WORKING_DIRECTORY"
+        if [[ -z "$ASSET_PATHS" ]]; then
+          cd "$WORKING_DIRECTORY"
+        fi
         "$GITHUB_ACTION_PATH/upload.sh"
