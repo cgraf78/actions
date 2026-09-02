@@ -60,6 +60,30 @@ check_no_unsupervised_adb() {
   fi
 }
 
+check_platform_matrices() {
+  local action script tmp matrix_set output matrix
+  local expected_centos_image
+
+  action=$root/.github/actions/platform-matrix/action.yml
+  script=$(yq -r '.runs.steps[] | select(.id == "select").run' "$action")
+  tmp=$(mktemp -d)
+  trap 'rm -rf -- "$tmp"' RETURN
+  expected_centos_image='quay.io/centos/centos:stream9@sha256:16b6434effb2d49724afe96c5610bafe6659bb0ec8eb8abf761a89c93c5917ad'
+
+  for matrix_set in core full; do
+    output=$tmp/$matrix_set
+    MATRIX_SET=$matrix_set GITHUB_OUTPUT=$output bash -c "$script"
+    matrix=$(sed -n 's/^matrix=//p' "$output")
+    jq -e --arg image "$expected_centos_image" \
+      '[.include[] | select(.name == "CentOS Stream" and .container == $image)] | length == 1' \
+      <<<"$matrix" >/dev/null || {
+      printf 'workflow contract failed: %s matrix lacks the pinned CentOS image\n' \
+        "$matrix_set" >&2
+      return 1
+    }
+  done
+}
+
 # The live Termux job reserves 20 minutes for caller code. Prove the explicit
 # emulator boot and every sequential ADB window still leave five minutes for
 # checkout, APK download, host preparation, and runner overhead under the cap.
@@ -584,4 +608,5 @@ contracts() {
 }
 
 contracts
+check_platform_matrices
 printf 'workflow-contract-test: ok\n'
