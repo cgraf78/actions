@@ -112,7 +112,7 @@ jobs:
         # Keep this in step with the platform prerequisite cap. The shared
         # retry controller recognizes this named network-bootstrap timeout.
         timeout-minutes: 20
-        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@3680a10cfcf6808c430e7dcbb0546dde4e316f9f
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@2503387b54863081eb34b2f476e17541d173e4a5
         with:
           matrix-name: Ubuntu
           profiles: base,shellcheck
@@ -124,7 +124,7 @@ jobs:
           persist-credentials: false
 
       - name: Validate and lint shell inventory
-        uses: cgraf78/actions/.github/actions/shellcheck-inventory@3680a10cfcf6808c430e7dcbb0546dde4e316f9f
+        uses: cgraf78/actions/.github/actions/shellcheck-inventory@2503387b54863081eb34b2f476e17541d173e4a5
         with:
           inventory-path: ${{ inputs.shellcheck-inventory-path }}
           exclude-codes: ${{ inputs.shellcheck-exclude-codes }}
