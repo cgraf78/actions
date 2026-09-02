@@ -505,9 +505,10 @@ contracts() {
   check '.jobs.shell-smoke.with.termux-command | contains("test -x \"$PREFIX/bin/bash\"")' ci.yml
   check '.jobs.shell-smoke.with.termux-command | contains("curl --version >/dev/null")' ci.yml
   check '.jobs.shell-smoke.with.termux-command | contains("bash test/checkout-installer-test")' ci.yml
-  check '.jobs.shell-smoke.with.profiles == "base,procps"' ci.yml
+  check '.jobs.shell-smoke.with.profiles == "base,procps,python"' ci.yml
   check '.jobs.shell-smoke.with.termux-profiles == "base,procps"' ci.yml
   check '.jobs.shell-smoke.with.test-command | contains("bash test/checkout-installer-test")' ci.yml
+  check '.jobs.shell-smoke.with.test-command | contains("python3 -c '\''import tomllib'\''")' ci.yml
   check '.jobs.shell-smoke.with.shellcheck-inventory-path == ".github/shellcheck-files.txt"' ci.yml
   check '.jobs.quality.steps[] | select(.name == "Test shared ShellCheck inventory action").run == "test/shellcheck-action-test"' ci.yml
   check '.jobs.quality.steps[] | select(.name == "Test consumer synchronization").run == "test/consumer-sync-test"' ci.yml

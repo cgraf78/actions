@@ -24,7 +24,14 @@ install_checkrun_prereqs() {
       retry_pkg pacman -Syu --noconfirm bash git curl ca-certificates jq python python-pip zsh tar gzip unzip xz
       install_yq_v4
       ;;
-    CentOS* | Fedora)
+    CentOS*)
+      # Stream 9's unversioned Python is 3.9. Install its parallel 3.11
+      # packages so Checkrun's stdlib tomllib requirement remains explicit.
+      # shellcheck disable=SC2086
+      retry_pkg dnf $DNF_NET_OPTS install -y --allowerasing bash git curl ca-certificates jq python3.11 python3.11-pip zsh tar gzip unzip xz
+      install_yq_v4
+      ;;
+    Fedora)
       # shellcheck disable=SC2086
       retry_pkg dnf $DNF_NET_OPTS install -y --allowerasing bash git curl ca-certificates jq python3 python3-pip zsh tar gzip unzip xz
       install_yq_v4
@@ -36,4 +43,5 @@ install_checkrun_prereqs() {
       retry_pkg apk $APK_NET_OPTS add --no-cache bash git curl ca-certificates jq python3 tar gzip unzip xz
       ;;
   esac
+  ensure_modern_python
 }

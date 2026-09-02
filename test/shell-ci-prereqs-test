@@ -123,6 +123,14 @@ assert_eq 'dcron fd ripgrep' "$apk_pkgs" \
 
 printf 'ok - shared profiles map dotfiles system commands\n'
 
+export MATRIX_NAME='CentOS Stream'
+export PROFILES=python
+install_profile_prereqs
+assert_eq python3.11 "$dnf_pkgs" \
+  'CentOS Python profile provides the supported runtime floor'
+
+printf 'ok - CentOS Python profile selects a tomllib-capable runtime\n'
+
 export MATRIX_NAME=Ubuntu
 export PROFILES=shellcheck
 pinned_shellcheck_calls=0
@@ -187,6 +195,36 @@ bounded true
 assert_eq 'timeout -k 5 120 true' "$(cat "$command_log")" \
   'bounded package command uses portable forced-kill syntax'
 
+python_bin=$mock_bin/python-modern
+python_marker=$python_bin/linked
+mkdir -p "$python_bin"
+cat >"$python_bin/python3" <<'MOCK'
+#!/bin/sh
+[ -f "$python_marker" ]
+MOCK
+cat >"$python_bin/python3.11" <<'MOCK'
+#!/bin/sh
+exit 0
+MOCK
+chmod +x "$python_bin/python3" "$python_bin/python3.11"
+: >"$command_log"
+(
+  PATH=$python_bin
+  export PATH python_marker
+  # shellcheck disable=SC2329 # The sourced helper invokes this fixture seam.
+  sudo_if_available() {
+    printf '%s\n' "$*" >>"$command_log"
+    : >"$python_marker"
+  }
+  ensure_modern_python
+)
+assert_eq \
+  "ln -sf $python_bin/python3.11 /usr/local/bin/python3" \
+  "$(cat "$command_log")" \
+  'modern Python fallback publishes the portable command name'
+
+printf 'ok - modern Python fallback selects the versioned runtime\n'
+
 # Hosted macOS has no GNU/BusyBox timeout command. Its fallback must still
 # enter a real supervisor rather than executing Homebrew unsupervised.
 fallback_bin=$mock_bin/python-fallback
@@ -219,7 +257,7 @@ assert_contains \
   'dnf --setopt=timeout=30 --setopt=retries=3 install -y --allowerasing epel-release' \
   "$(cat "$command_log")" 'dotfiles CentOS enables capability packages'
 assert_contains \
-  'dnf --setopt=timeout=30 --setopt=retries=3 install -y --allowerasing git curl sudo openssh-clients lsof nmap-ncat procps-ng python3 cronie fd-find ripgrep hostname' \
+  'dnf --setopt=timeout=30 --setopt=retries=3 install -y --allowerasing git curl sudo openssh-clients lsof nmap-ncat procps-ng python3.11 cronie fd-find ripgrep hostname' \
   "$(cat "$command_log")" 'dotfiles dnf installs required system commands'
 
 : >"$command_log"
@@ -247,6 +285,13 @@ assert_contains \
 assert_contains \
   'apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 install -y bash git curl ca-certificates jq python3 python3-pip python3-venv zsh tar gzip unzip xz-utils' \
   "$(cat "$command_log")" 'checkrun Debian installs with bounded apt controls'
+
+: >"$command_log"
+export MATRIX_NAME='CentOS Stream'
+install_checkrun_prereqs
+assert_contains \
+  'dnf --setopt=timeout=30 --setopt=retries=3 install -y --allowerasing bash git curl ca-certificates jq python3.11 python3.11-pip zsh tar gzip unzip xz' \
+  "$(cat "$command_log")" 'checkrun CentOS installs a tomllib-capable Python'
 unset -f install_yq_v4
 
 printf 'ok - checkrun setup uses bounded package controls\n'

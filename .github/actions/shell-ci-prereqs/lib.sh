@@ -110,6 +110,31 @@ install_package_lists() {
   esac
 }
 
+ensure_modern_python() (
+  candidate=
+  resolved=
+
+  if command -v python3 >/dev/null 2>&1 &&
+    python3 -c 'import tomllib' >/dev/null 2>&1; then
+    return
+  fi
+
+  for candidate in python3.14 python3.13 python3.12 python3.11; do
+    command -v "$candidate" >/dev/null 2>&1 || continue
+    "$candidate" -c 'import tomllib' >/dev/null 2>&1 || continue
+    resolved=$(command -v "$candidate") || return 1
+    # CentOS Stream 9 keeps newer parallel Python runtimes versioned. Publish
+    # the portable command name without replacing the distribution package.
+    sudo_if_available ln -sf "$resolved" /usr/local/bin/python3
+    hash -r 2>/dev/null || true
+    python3 -c 'import tomllib' >/dev/null 2>&1 || return 1
+    return
+  done
+
+  echo 'python3 with standard-library tomllib is required' >&2
+  return 1
+)
+
 install_yq_v4() {
   # Some distro package managers ship old or incompatible yq variants. checkrun
   # expects mikefarah/yq v4 behavior, so install the upstream binary whenever a
