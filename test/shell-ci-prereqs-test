@@ -209,7 +209,7 @@ MOCK
 chmod +x "$python_bin/python3" "$python_bin/python3.11"
 : >"$command_log"
 (
-  PATH=$python_bin:$PATH
+  PATH=$python_bin
   export PATH python_marker
   # shellcheck disable=SC2329 # The sourced helper invokes this fixture seam.
   sudo_if_available() {
