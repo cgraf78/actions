@@ -93,7 +93,7 @@ mkdir -p "$consumer/.github/workflows" "$consumer/scripts" \
 git -C "$consumer" init --quiet --template=''
 git -C "$consumer" config core.hooksPath /dev/null
 
-cat >"$consumer/.github/workflows/ci.yml" <<'YAML'
+cat >"$consumer/.github/workflows/test.yml" <<'YAML'
 jobs:
   rust:
     uses: cgraf78/actions/.github/workflows/rust-ci.yml@1111111111111111111111111111111111111111
@@ -152,7 +152,7 @@ fi
 if grep -Fq ',evil' "$consumer/.github/workflows/quoted.yml"; then
   fail "sync left a suffix inside a quoted actions ref"
 fi
-if ! grep -Fq "@$want, with:" "$consumer/.github/workflows/ci.yml"; then
+if ! grep -Fq "@$want, with:" "$consumer/.github/workflows/test.yml"; then
   fail "sync damaged the comma after a flow-style uses value"
 fi
 
@@ -269,10 +269,10 @@ fi
 # A flow-style sequence can contain multiple step mappings on one physical
 # line. Drift in the second use must not hide behind a matching first use.
 sed "s/@${want}}]/@8888888888888888888888888888888888888888}]/" \
-  "$consumer/.github/workflows/ci.yml" \
-  >"$consumer/.github/workflows/ci.yml.tmp"
-mv "$consumer/.github/workflows/ci.yml.tmp" \
-  "$consumer/.github/workflows/ci.yml"
+  "$consumer/.github/workflows/test.yml" \
+  >"$consumer/.github/workflows/test.yml.tmp"
+mv "$consumer/.github/workflows/test.yml.tmp" \
+  "$consumer/.github/workflows/test.yml"
 if GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
   GITHUB_WORKSPACE="$consumer" \
   ACTION_REF="$want" \
@@ -294,9 +294,9 @@ fi
 
 sed \
   '/rust-ci\.yml/s/@[0-9a-f]\{40\}$/@3333333333333333333333333333333333333333/' \
-  "$consumer/.github/workflows/ci.yml" >"$consumer/.github/workflows/ci.yml.tmp"
-mv "$consumer/.github/workflows/ci.yml.tmp" \
-  "$consumer/.github/workflows/ci.yml"
+  "$consumer/.github/workflows/test.yml" >"$consumer/.github/workflows/test.yml.tmp"
+mv "$consumer/.github/workflows/test.yml.tmp" \
+  "$consumer/.github/workflows/test.yml"
 if GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
   GITHUB_WORKSPACE="$consumer" \
   ACTION_REF="$want" \
@@ -310,7 +310,7 @@ fi
 plain_consumer="$tmp/plain-consumer"
 mkdir -p "$plain_consumer/.github/workflows"
 git -C "$plain_consumer" init --quiet --template=''
-cat >"$plain_consumer/.github/workflows/ci.yml" <<'YAML'
+cat >"$plain_consumer/.github/workflows/test.yml" <<'YAML'
 jobs:
   shell:
     uses: cgraf78/actions/.github/workflows/shell-ci.yml@main
@@ -334,7 +334,7 @@ checkout_consumer="$tmp/checkout-consumer"
 mkdir -p "$checkout_consumer/.github/workflows" \
   "$checkout_consumer/scripts" "$checkout_consumer/support"
 git -C "$checkout_consumer" init --quiet --template=''
-cat >"$checkout_consumer/.github/workflows/ci.yml" <<'YAML'
+cat >"$checkout_consumer/.github/workflows/test.yml" <<'YAML'
 jobs:
   shell:
     uses: cgraf78/actions/.github/workflows/shell-ci.yml@main
@@ -413,20 +413,20 @@ fi
 [[ ! -e "$checkout_consumer/support/checkout-bash-v1.sh" ]] ||
   fail "sync did not retire the disabled checkout Bash resolver"
 
-sed '/uses:/s/$/,evil/' "$plain_consumer/.github/workflows/ci.yml" \
-  >"$plain_consumer/.github/workflows/ci.yml.tmp"
-mv "$plain_consumer/.github/workflows/ci.yml.tmp" \
-  "$plain_consumer/.github/workflows/ci.yml"
+sed '/uses:/s/$/,evil/' "$plain_consumer/.github/workflows/test.yml" \
+  >"$plain_consumer/.github/workflows/test.yml.tmp"
+mv "$plain_consumer/.github/workflows/test.yml.tmp" \
+  "$plain_consumer/.github/workflows/test.yml"
 if GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
   GITHUB_WORKSPACE="$plain_consumer" \
   ACTION_REF="$want" \
   "$verify" >/dev/null 2>&1; then
   fail "ambiguous comma suffix in an unquoted block ref unexpectedly verified"
 fi
-sed '/uses:/s/,evil$//' "$plain_consumer/.github/workflows/ci.yml" \
-  >"$plain_consumer/.github/workflows/ci.yml.tmp"
-mv "$plain_consumer/.github/workflows/ci.yml.tmp" \
-  "$plain_consumer/.github/workflows/ci.yml"
+sed '/uses:/s/,evil$//' "$plain_consumer/.github/workflows/test.yml" \
+  >"$plain_consumer/.github/workflows/test.yml.tmp"
+mv "$plain_consumer/.github/workflows/test.yml.tmp" \
+  "$plain_consumer/.github/workflows/test.yml"
 git -C "$plain_consumer" add .
 
 mkdir -p "$plain_consumer/scripts"
@@ -450,7 +450,7 @@ fi
 empty_consumer="$tmp/empty-consumer"
 mkdir -p "$empty_consumer/.github/workflows"
 git -C "$empty_consumer" init --quiet --template=''
-printf 'name: unrelated\n' >"$empty_consumer/.github/workflows/ci.yml"
+printf 'name: unrelated\n' >"$empty_consumer/.github/workflows/test.yml"
 git -C "$empty_consumer" add .
 if "$sync" "$empty_consumer" >/dev/null 2>&1; then
   fail "consumer without cgraf78/actions references unexpectedly synchronized"
@@ -462,7 +462,7 @@ fi
 ambiguous_consumer="$tmp/ambiguous-consumer"
 mkdir -p "$ambiguous_consumer/.github/workflows"
 git -C "$ambiguous_consumer" init --quiet --template=''
-cat >"$ambiguous_consumer/.github/workflows/ci.yml" <<'YAML'
+cat >"$ambiguous_consumer/.github/workflows/test.yml" <<'YAML'
 jobs:
   ambiguous:
     uses: cgraf78/actions/.github/workflows/shell-ci.yml@main,evil
@@ -482,7 +482,7 @@ transition_consumer="$tmp/installer-transition-consumer"
 mkdir -p "$transition_consumer/.github/workflows" \
   "$transition_consumer/scripts" "$transition_consumer/support"
 git -C "$transition_consumer" init --quiet --template=''
-cat >"$transition_consumer/.github/workflows/ci.yml" <<'YAML'
+cat >"$transition_consumer/.github/workflows/test.yml" <<'YAML'
 jobs:
   shell:
     uses: cgraf78/actions/.github/workflows/shell-ci.yml@main
@@ -560,7 +560,7 @@ mixed_consumer="$tmp/mixed-installer-consumer"
 mkdir -p "$mixed_consumer/.github/workflows" "$mixed_consumer/scripts" \
   "$mixed_consumer/support"
 git -C "$mixed_consumer" init --quiet --template=''
-cat >"$mixed_consumer/.github/workflows/ci.yml" <<'YAML'
+cat >"$mixed_consumer/.github/workflows/test.yml" <<'YAML'
 jobs:
   shell:
     uses: cgraf78/actions/.github/workflows/shell-ci.yml@main
@@ -584,7 +584,7 @@ fi
   fail "competing installer policy preflight left a partial lock"
 [[ ! -e "$mixed_consumer/install.sh" ]] ||
   fail "competing installer policy preflight left generated bytes"
-grep -Fq '@main' "$mixed_consumer/.github/workflows/ci.yml" ||
+grep -Fq '@main' "$mixed_consumer/.github/workflows/test.yml" ||
   fail "competing installer policy preflight rewrote workflow references"
 mixed_after=$(git -C "$mixed_consumer" status --short)
 [[ "$mixed_after" == "$mixed_before" ]] ||

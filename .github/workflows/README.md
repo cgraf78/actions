@@ -24,7 +24,7 @@ leaf job matches a narrowly allowlisted infrastructure signature. See
 `docs/workflow-api.md` for the caller and security contract.
 
 Pull requests unit-test its classifier and workflow contract. GitHub loads
-`workflow_run` only from the default branch, so `CI` also exposes an explicit
+`workflow_run` only from the default branch, so `Tests` also exposes an explicit
 `retry_canary` dispatch input for live post-merge validation; normal runs leave
 it at `none`.
 
@@ -39,7 +39,7 @@ worker and matrix job names are diagnostic details rather than stable API.
   workflows for the public platform CI entrypoints.
 - `_termux-ci.yml` owns emulator provisioning, sandbox transport, and runtime
   execution for the public Termux entrypoint.
-- `ci.yml` validates this repository's workflow and action definitions.
+- `test.yml` validates this repository's workflow and action definitions.
 
 Keep input names and behavior backward compatible for public reusable
 workflows. Implementation workflows may change more freely, but callers should
