@@ -499,85 +499,87 @@ contracts() {
   check ".jobs.build.steps[] | select(.name == \"Configure Android NDK toolchain\").uses == \"cgraf78/actions/.github/actions/android-rust-toolchain@$actions_lock\"" rust-release.yml
   check '.jobs.build.steps[] | select(.name == "Configure Android NDK toolchain").with."rust-target" == "${{ matrix.rust-target }}"' rust-release.yml
 
-  check '.jobs.shell-smoke.with.termux-command != null' ci.yml
-  check '.jobs.shell-smoke.with.termux-command | contains("test \"$(uname -o)\" = Android")' ci.yml
-  check '.jobs.shell-smoke.with.termux-command | contains("test \"$PREFIX\" = /data/data/com.termux/files/usr")' ci.yml
-  check '.jobs.shell-smoke.with.termux-command | contains("test -x \"$PREFIX/bin/bash\"")' ci.yml
-  check '.jobs.shell-smoke.with.termux-command | contains("curl --version >/dev/null")' ci.yml
-  check '.jobs.shell-smoke.with.termux-command | contains("bash test/checkout-installer-test")' ci.yml
-  check '.jobs.shell-smoke.with.profiles == "base,procps,python"' ci.yml
-  check '.jobs.shell-smoke.with.termux-profiles == "base,procps"' ci.yml
-  check '.jobs.shell-smoke.with.test-command | contains("bash test/checkout-installer-test")' ci.yml
-  check '.jobs.shell-smoke.with.test-command | contains("python3 -c '\''import tomllib'\''")' ci.yml
-  check '.jobs.shell-smoke.with.shellcheck-inventory-path == ".github/shellcheck-files.txt"' ci.yml
-  check '.jobs.quality.steps[] | select(.name == "Test shared ShellCheck inventory action").run == "test/shellcheck-action-test"' ci.yml
-  check '.jobs.quality.steps[] | select(.name == "Test consumer synchronization").run == "test/consumer-sync-test"' ci.yml
-  check '.jobs.quality.steps[] | select(.name == "Test generated release installer").run == "test/release-installer-test"' ci.yml
-  check '.jobs.quality.steps[] | select(.name == "Test generated checkout installer").run == "test/checkout-installer-test"' ci.yml
-  check '.jobs.quality.steps[] | select(.name == "Test bounded Termux ADB commands").run == "test/termux-adb-test"' ci.yml
-  check ".jobs.quality.steps[] | select(.name == \"Verify internal Actions sync\").uses == \"cgraf78/actions/.github/actions/verify-consumer-sync@$actions_lock\"" ci.yml
-  check '.jobs.quality.steps[] | select(.name == "Verify internal action implementations").run == "bash consumer-ci/verify-self-pin.sh"' ci.yml
-  check '.jobs.release-installer-bash32.name == "Release installer / Bash 3.2"' ci.yml
-  check '.jobs.release-installer-bash32.uses == "./.github/workflows/bash32-ci.yml"' ci.yml
-  check '.jobs.release-installer-bash32.with.command == "/bin/bash test/release-installer-test"' ci.yml
-  check '.jobs.checkout-installer-bash32.name == "Checkout installer / Bash 3.2"' ci.yml
-  check '.jobs.checkout-installer-bash32.uses == "./.github/workflows/bash32-ci.yml"' ci.yml
-  check '.jobs.checkout-installer-bash32.with.command == "/bin/bash test/checkout-installer-test"' ci.yml
+  check '.name == "Tests"' test.yml
+  check '.on.workflow_run.workflows | join(",") == "Tests"' retry-infrastructure.yml
+  check '.jobs.shell-smoke.with.termux-command != null' test.yml
+  check '.jobs.shell-smoke.with.termux-command | contains("test \"$(uname -o)\" = Android")' test.yml
+  check '.jobs.shell-smoke.with.termux-command | contains("test \"$PREFIX\" = /data/data/com.termux/files/usr")' test.yml
+  check '.jobs.shell-smoke.with.termux-command | contains("test -x \"$PREFIX/bin/bash\"")' test.yml
+  check '.jobs.shell-smoke.with.termux-command | contains("curl --version >/dev/null")' test.yml
+  check '.jobs.shell-smoke.with.termux-command | contains("bash test/checkout-installer-test")' test.yml
+  check '.jobs.shell-smoke.with.profiles == "base,procps,python"' test.yml
+  check '.jobs.shell-smoke.with.termux-profiles == "base,procps"' test.yml
+  check '.jobs.shell-smoke.with.test-command | contains("bash test/checkout-installer-test")' test.yml
+  check '.jobs.shell-smoke.with.test-command | contains("python3 -c '\''import tomllib'\''")' test.yml
+  check '.jobs.shell-smoke.with.shellcheck-inventory-path == ".github/shellcheck-files.txt"' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Test shared ShellCheck inventory action").run == "test/shellcheck-action-test"' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Test consumer synchronization").run == "test/consumer-sync-test"' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Test generated release installer").run == "test/release-installer-test"' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Test generated checkout installer").run == "test/checkout-installer-test"' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Test bounded Termux ADB commands").run == "test/termux-adb-test"' test.yml
+  check ".jobs.quality.steps[] | select(.name == \"Verify internal Actions sync\").uses == \"cgraf78/actions/.github/actions/verify-consumer-sync@$actions_lock\"" test.yml
+  check '.jobs.quality.steps[] | select(.name == "Verify internal action implementations").run == "bash consumer-ci/verify-self-pin.sh"' test.yml
+  check '.jobs.release-installer-bash32.name == "Release installer / Bash 3.2"' test.yml
+  check '.jobs.release-installer-bash32.uses == "./.github/workflows/bash32-ci.yml"' test.yml
+  check '.jobs.release-installer-bash32.with.command == "/bin/bash test/release-installer-test"' test.yml
+  check '.jobs.checkout-installer-bash32.name == "Checkout installer / Bash 3.2"' test.yml
+  check '.jobs.checkout-installer-bash32.uses == "./.github/workflows/bash32-ci.yml"' test.yml
+  check '.jobs.checkout-installer-bash32.with.command == "/bin/bash test/checkout-installer-test"' test.yml
   check '.jobs.smoke.steps[] | select(.name == "Provision modern Bash candidate").run | contains("[[ -z \"$modern_bash\" || ! -x \"$modern_bash\" ]]")' bash32-ci.yml
-  check '.jobs.release-asset-upload-bash32.name == "Release asset upload / Bash 3.2"' ci.yml
-  check '.jobs.release-asset-upload-bash32.uses == "./.github/workflows/bash32-ci.yml"' ci.yml
-  check '.jobs.release-asset-upload-bash32.with.command == "/bin/bash test/release-asset-upload-test"' ci.yml
+  check '.jobs.release-asset-upload-bash32.name == "Release asset upload / Bash 3.2"' test.yml
+  check '.jobs.release-asset-upload-bash32.uses == "./.github/workflows/bash32-ci.yml"' test.yml
+  check '.jobs.release-asset-upload-bash32.with.command == "/bin/bash test/release-asset-upload-test"' test.yml
   check '.jobs.smoke."timeout-minutes" == 45' bash32-ci.yml
   check '.jobs.smoke.steps[] | select(.name == "Verify stock Bash resolver failure")."timeout-minutes" == 5' bash32-ci.yml
   check '.jobs.smoke.steps[] | select(.name == "Provision modern Bash candidate")."timeout-minutes" == 10' bash32-ci.yml
   check '.jobs.smoke.steps[] | select(.name == "Run Bash 3.2 smoke")."timeout-minutes" == 20' bash32-ci.yml
-  check '.jobs.quality."timeout-minutes" == 35' ci.yml
-  check '.jobs.quality.steps[] | select(.name == "Install actionlint")."timeout-minutes" == 5' ci.yml
-  check '.jobs.quality.steps[] | select(.name == "Install actionlint").run | contains("--connect-timeout 10 --max-time 60")' ci.yml
-  check '.jobs.quality.steps[] | select(.name == "Install actionlint").run | contains("--speed-limit 1024 --speed-time 30")' ci.yml
-  check '.jobs.quality.steps[] | select(.name == "Install zizmor")."timeout-minutes" == 10' ci.yml
-  check '.jobs.quality.steps[] | select(.name == "Install zizmor").env.PIP_DEFAULT_TIMEOUT == "60"' ci.yml
-  check '.jobs.quality.steps[] | select(.name == "Install zizmor").env.PIP_RETRIES == "3"' ci.yml
-  check '.jobs.quality.steps[] | select(.name == "Install ShellCheck")."timeout-minutes" == 10' ci.yml
-  check '.jobs.quality.steps[] | select(.name == "Install actionlint").run | contains("--retry 3 --retry-all-errors --retry-delay 1")' ci.yml
-  check '.jobs.quality.steps[] | select(.name == "Install zizmor").env.ZIZMOR_VERSION == "1.29.0"' ci.yml
-  check '.jobs.quality.steps[] | select(.name == "Lint shell inventory").uses == "./.github/actions/shellcheck-inventory"' ci.yml
-  check '.jobs.quality.steps[] | select(.name == "Lint shell inventory").with."inventory-path" == ".github/shellcheck-files.txt"' ci.yml
-  check '[.jobs.quality.steps[] | select(.name == "Lint shell scripts")] | length == 0' ci.yml
-  check '.on.schedule[0].cron == "7 7 * * *"' ci.yml
-  check '.on | has("workflow_dispatch")' ci.yml
-  check '.on.workflow_dispatch.inputs.retry_canary.default == "none"' ci.yml
-  check '.on.workflow_dispatch.inputs.retry_canary.type == "choice"' ci.yml
-  check '.on.workflow_dispatch.inputs.retry_canary.options | join(",") == "none,infra,application"' ci.yml
-  check '.jobs."retry-canary".if == "github.event_name == '\''workflow_dispatch'\'' && github.ref == format('\''refs/heads/{0}'\'', github.event.repository.default_branch) && inputs.retry_canary != '\''none'\''"' ci.yml
-  check '.jobs."retry-canary".permissions.contents == "read"' ci.yml
-  check '.jobs."retry-canary".steps[0].env.CANARY_MODE == "${{ inputs.retry_canary }}"' ci.yml
+  check '.jobs.quality."timeout-minutes" == 35' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Install actionlint")."timeout-minutes" == 5' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Install actionlint").run | contains("--connect-timeout 10 --max-time 60")' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Install actionlint").run | contains("--speed-limit 1024 --speed-time 30")' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Install zizmor")."timeout-minutes" == 10' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Install zizmor").env.PIP_DEFAULT_TIMEOUT == "60"' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Install zizmor").env.PIP_RETRIES == "3"' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Install ShellCheck")."timeout-minutes" == 10' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Install actionlint").run | contains("--retry 3 --retry-all-errors --retry-delay 1")' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Install zizmor").env.ZIZMOR_VERSION == "1.29.0"' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Lint shell inventory").uses == "./.github/actions/shellcheck-inventory"' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Lint shell inventory").with."inventory-path" == ".github/shellcheck-files.txt"' test.yml
+  check '[.jobs.quality.steps[] | select(.name == "Lint shell scripts")] | length == 0' test.yml
+  check '.on.schedule[0].cron == "7 7 * * *"' test.yml
+  check '.on | has("workflow_dispatch")' test.yml
+  check '.on.workflow_dispatch.inputs.retry_canary.default == "none"' test.yml
+  check '.on.workflow_dispatch.inputs.retry_canary.type == "choice"' test.yml
+  check '.on.workflow_dispatch.inputs.retry_canary.options | join(",") == "none,infra,application"' test.yml
+  check '.jobs."retry-canary".if == "github.event_name == '\''workflow_dispatch'\'' && github.ref == format('\''refs/heads/{0}'\'', github.event.repository.default_branch) && inputs.retry_canary != '\''none'\''"' test.yml
+  check '.jobs."retry-canary".permissions.contents == "read"' test.yml
+  check '.jobs."retry-canary".steps[0].env.CANARY_MODE == "${{ inputs.retry_canary }}"' test.yml
   # GitHub logs the full inline script before executing it. The application
   # canary must not expose the infra marker through an unexecuted case branch.
-  check '.jobs."retry-canary".steps[0].run | contains("infra-stall: package command exhausted bounded retries") | not' ci.yml
-  check '.jobs."retry-canary".steps[0].run | contains("printf '\''infra-stall: package command exhausted bounded %s\\n'\'' retries")' ci.yml
-  check '.jobs."retry-canary".steps[0].run | contains("deliberate application failure")' ci.yml
-  check '.jobs.shell-smoke.with.matrix-set == "full"' ci.yml
-  check '.jobs.rust-smoke.with.matrix-set == "auto"' ci.yml
-  check '.jobs.rust-smoke.with.android-package-smoke-command != null' ci.yml
-  check '.jobs.rust-smoke.with.package-smoke-musl-target == "x86_64-unknown-linux-musl"' ci.yml
-  check '.jobs.rust-smoke.with.package-smoke-command | contains("cargo build --release --locked --target \"$RUST_TARGET\"")' ci.yml
-  check '.jobs.rust-smoke.with | has("package-smoke-install-musl-tools") | not' ci.yml
-  check '.jobs.rust-smoke.with.termux-host-command != null' ci.yml
-  check '.jobs.rust-smoke.with.termux-host-command | contains("--target-dir \"$RUNNER_TEMP/actions-rust-smoke-target\"")' ci.yml
-  check '.jobs.rust-smoke.with.termux-command != null' ci.yml
-  check '.jobs.termux-runtime == null' ci.yml
-  check '.jobs.required.name == "Required"' ci.yml
-  check '.jobs.required.if == "${{ always() }}"' ci.yml
-  check '.jobs.required.needs | join(",") == "shell-smoke,rust-smoke,matrix-contract,android-rust-toolchain,release-installer-bash32,checkout-installer-bash32,release-asset-upload-bash32,quality"' ci.yml
-  check '.jobs.required.steps[0].run | contains("test \"$SHELL_SMOKE_RESULT\" = success")' ci.yml
-  check '.jobs.required.steps[0].run | contains("test \"$RUST_SMOKE_RESULT\" = success")' ci.yml
-  check '.jobs.required.steps[0].run | contains("test \"$MATRIX_CONTRACT_RESULT\" = success")' ci.yml
-  check '.jobs.required.steps[0].run | contains("test \"$ANDROID_TOOLCHAIN_RESULT\" = success")' ci.yml
-  check '.jobs.required.steps[0].run | contains("test \"$RELEASE_INSTALLER_BASH32_RESULT\" = success")' ci.yml
-  check '.jobs.required.steps[0].run | contains("test \"$CHECKOUT_INSTALLER_BASH32_RESULT\" = success")' ci.yml
-  check '.jobs.required.steps[0].run | contains("test \"$RELEASE_ASSET_UPLOAD_BASH32_RESULT\" = success")' ci.yml
-  check '.jobs.required.steps[0].run | contains("test \"$QUALITY_RESULT\" = success")' ci.yml
+  check '.jobs."retry-canary".steps[0].run | contains("infra-stall: package command exhausted bounded retries") | not' test.yml
+  check '.jobs."retry-canary".steps[0].run | contains("printf '\''infra-stall: package command exhausted bounded %s\\n'\'' retries")' test.yml
+  check '.jobs."retry-canary".steps[0].run | contains("deliberate application failure")' test.yml
+  check '.jobs.shell-smoke.with.matrix-set == "full"' test.yml
+  check '.jobs.rust-smoke.with.matrix-set == "auto"' test.yml
+  check '.jobs.rust-smoke.with.android-package-smoke-command != null' test.yml
+  check '.jobs.rust-smoke.with.package-smoke-musl-target == "x86_64-unknown-linux-musl"' test.yml
+  check '.jobs.rust-smoke.with.package-smoke-command | contains("cargo build --release --locked --target \"$RUST_TARGET\"")' test.yml
+  check '.jobs.rust-smoke.with | has("package-smoke-install-musl-tools") | not' test.yml
+  check '.jobs.rust-smoke.with.termux-host-command != null' test.yml
+  check '.jobs.rust-smoke.with.termux-host-command | contains("--target-dir \"$RUNNER_TEMP/actions-rust-smoke-target\"")' test.yml
+  check '.jobs.rust-smoke.with.termux-command != null' test.yml
+  check '.jobs.termux-runtime == null' test.yml
+  check '.jobs.required.name == "Required"' test.yml
+  check '.jobs.required.if == "${{ always() }}"' test.yml
+  check '.jobs.required.needs | join(",") == "shell-smoke,rust-smoke,matrix-contract,android-rust-toolchain,release-installer-bash32,checkout-installer-bash32,release-asset-upload-bash32,quality"' test.yml
+  check '.jobs.required.steps[0].run | contains("test \"$SHELL_SMOKE_RESULT\" = success")' test.yml
+  check '.jobs.required.steps[0].run | contains("test \"$RUST_SMOKE_RESULT\" = success")' test.yml
+  check '.jobs.required.steps[0].run | contains("test \"$MATRIX_CONTRACT_RESULT\" = success")' test.yml
+  check '.jobs.required.steps[0].run | contains("test \"$ANDROID_TOOLCHAIN_RESULT\" = success")' test.yml
+  check '.jobs.required.steps[0].run | contains("test \"$RELEASE_INSTALLER_BASH32_RESULT\" = success")' test.yml
+  check '.jobs.required.steps[0].run | contains("test \"$CHECKOUT_INSTALLER_BASH32_RESULT\" = success")' test.yml
+  check '.jobs.required.steps[0].run | contains("test \"$RELEASE_ASSET_UPLOAD_BASH32_RESULT\" = success")' test.yml
+  check '.jobs.required.steps[0].run | contains("test \"$QUALITY_RESULT\" = success")' test.yml
 
   # The consumer gate intentionally has no configurable paths: one canonical
   # lock plus release.conf auto-detection gives the fleet a smaller contract
