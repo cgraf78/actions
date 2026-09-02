@@ -60,9 +60,10 @@ jobs:
     uses: ./.github/workflows/shell-ci.yml
     with:
       matrix-set: full
-      profiles: base,procps
+      profiles: base,procps,python
       shellcheck-inventory-path: .github/shellcheck-files.txt
       test-command: |
+        python3 -c 'import tomllib'
         test -f .github/workflows/shell-ci.yml
         test -f .github/workflows/_termux-ci.yml
         bash test/checkout-installer-test

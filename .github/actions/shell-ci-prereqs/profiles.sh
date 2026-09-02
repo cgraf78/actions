@@ -37,7 +37,10 @@ collect_profile_prereqs() {
     add_pkg brew_pkgs "python"
     add_pkg apt_pkgs "python3"
     add_pkg arch_pkgs "python"
-    add_pkg dnf_pkgs "python3"
+    case "$MATRIX_NAME" in
+      CentOS*) add_pkg dnf_pkgs "python3.11" ;;
+      *) add_pkg dnf_pkgs "python3" ;;
+    esac
     add_pkg apk_pkgs "python3"
   fi
   if has_profile zsh; then
@@ -128,6 +131,9 @@ install_profile_prereqs() {
 
   install_package_lists
 
+  if has_profile python; then
+    ensure_modern_python
+  fi
   if has_profile lua; then
     ensure_lua_command
   fi
