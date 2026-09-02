@@ -19,18 +19,22 @@ runs:
       shell: bash
       env:
         MATRIX_SET: ${{ inputs.matrix-set }}
-      run: |
+      run: |-
         set -euo pipefail
 
         # This is the shared OS policy for portable repos. Shell CI uses it
         # today, and Rust or other future repo families should consume this
         # same action instead of copying platform JSON into another workflow.
+        # GitHub starts job containers with `tail -f /dev/null`. Pin Stream 9
+        # because the moving CentOS `latest`/Stream 10 image omits that required
+        # executable and can break every consumer before checkout begins.
+        centos_image='quay.io/centos/centos:stream9@sha256:16b6434effb2d49724afe96c5610bafe6659bb0ec8eb8abf761a89c93c5917ad'
         case "$MATRIX_SET" in
           core)
-            matrix='{"include":[{"name":"macOS","runner":"macos-latest"},{"name":"CentOS Stream","runner":"ubuntu-latest","container":"quay.io/centos/centos:latest"},{"name":"Arch","runner":"ubuntu-latest","container":"archlinux:latest"},{"name":"Debian","runner":"ubuntu-latest","container":"debian:stable"},{"name":"Ubuntu","runner":"ubuntu-latest"}]}'
+            matrix='{"include":[{"name":"macOS","runner":"macos-latest"},{"name":"CentOS Stream","runner":"ubuntu-latest","container":"'"$centos_image"'"},{"name":"Arch","runner":"ubuntu-latest","container":"archlinux:latest"},{"name":"Debian","runner":"ubuntu-latest","container":"debian:stable"},{"name":"Ubuntu","runner":"ubuntu-latest"}]}'
             ;;
           full)
-            matrix='{"include":[{"name":"macOS","runner":"macos-latest"},{"name":"CentOS Stream","runner":"ubuntu-latest","container":"quay.io/centos/centos:latest"},{"name":"Arch","runner":"ubuntu-latest","container":"archlinux:latest"},{"name":"Debian","runner":"ubuntu-latest","container":"debian:stable"},{"name":"Ubuntu","runner":"ubuntu-latest"},{"name":"WSL","runner":"ubuntu-latest"},{"name":"Fedora","runner":"ubuntu-latest","container":"fedora:latest"},{"name":"Alpine","runner":"ubuntu-latest","container":"alpine:latest"}]}'
+            matrix='{"include":[{"name":"macOS","runner":"macos-latest"},{"name":"CentOS Stream","runner":"ubuntu-latest","container":"'"$centos_image"'"},{"name":"Arch","runner":"ubuntu-latest","container":"archlinux:latest"},{"name":"Debian","runner":"ubuntu-latest","container":"debian:stable"},{"name":"Ubuntu","runner":"ubuntu-latest"},{"name":"WSL","runner":"ubuntu-latest"},{"name":"Fedora","runner":"ubuntu-latest","container":"fedora:latest"},{"name":"Alpine","runner":"ubuntu-latest","container":"alpine:latest"}]}'
             ;;
           *)
             echo "unsupported matrix set: $MATRIX_SET" >&2
