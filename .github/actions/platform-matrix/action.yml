@@ -25,10 +25,12 @@ runs:
         # This is the shared OS policy for portable repos. Shell CI uses it
         # today, and Rust or other future repo families should consume this
         # same action instead of copying platform JSON into another workflow.
-        # GitHub starts job containers with `tail -f /dev/null`. Pin Stream 9
-        # because the moving CentOS `latest`/Stream 10 image omits that required
-        # executable and can break every consumer before checkout begins.
-        centos_image='quay.io/centos/centos:stream9@sha256:16b6434effb2d49724afe96c5610bafe6659bb0ec8eb8abf761a89c93c5917ad'
+        # GitHub starts job containers with `tail -f /dev/null`. Select the
+        # Stream 9 tag because the moving CentOS `latest`/Stream 10 image omits
+        # that command. Quay may garbage-collect an untagged historical
+        # manifest, so an immutable digest is less available than this
+        # major-version tag for an ephemeral CI environment.
+        centos_image='quay.io/centos/centos:stream9'
         case "$MATRIX_SET" in
           core)
             matrix='{"include":[{"name":"macOS","runner":"macos-latest"},{"name":"CentOS Stream","runner":"ubuntu-latest","container":"'"$centos_image"'"},{"name":"Arch","runner":"ubuntu-latest","container":"archlinux:latest"},{"name":"Debian","runner":"ubuntu-latest","container":"debian:stable"},{"name":"Ubuntu","runner":"ubuntu-latest"}]}'

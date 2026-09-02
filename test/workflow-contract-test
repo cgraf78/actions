@@ -68,7 +68,7 @@ check_platform_matrices() {
   script=$(yq -r '.runs.steps[] | select(.id == "select").run' "$action")
   tmp=$(mktemp -d)
   trap 'rm -rf -- "$tmp"' RETURN
-  expected_centos_image='quay.io/centos/centos:stream9@sha256:16b6434effb2d49724afe96c5610bafe6659bb0ec8eb8abf761a89c93c5917ad'
+  expected_centos_image='quay.io/centos/centos:stream9'
 
   for matrix_set in core full; do
     output=$tmp/$matrix_set
@@ -77,7 +77,7 @@ check_platform_matrices() {
     jq -e --arg image "$expected_centos_image" \
       '[.include[] | select(.name == "CentOS Stream" and .container == $image)] | length == 1' \
       <<<"$matrix" >/dev/null || {
-      printf 'workflow contract failed: %s matrix lacks the pinned CentOS image\n' \
+      printf 'workflow contract failed: %s matrix lacks the CentOS Stream 9 image\n' \
         "$matrix_set" >&2
       return 1
     }
