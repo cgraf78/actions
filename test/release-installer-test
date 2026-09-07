@@ -125,6 +125,49 @@ fi
 [[ ! -e "$invalid_consumer/install.sh" ]] ||
   fail "invalid binary destination left a generated installer"
 
+invalid_style_consumer="$tmp/invalid-style-consumer"
+mkdir -p "$invalid_style_consumer/scripts"
+cp "$consumer/scripts/release.conf" \
+  "$invalid_style_consumer/scripts/release.conf"
+printf '%s\n' 'RELEASE_BINARY_VERSION_STYLE=unknown' \
+  >>"$invalid_style_consumer/scripts/release.conf"
+if "$root/release-installer/render.sh" "$invalid_style_consumer" \
+  >/dev/null 2>&1; then
+  fail "renderer accepted an unknown binary version style"
+fi
+
+commit_style_consumer="$tmp/commit-style-consumer"
+mkdir -p "$commit_style_consumer/scripts"
+cp "$consumer/scripts/release.conf" "$commit_style_consumer/scripts/release.conf"
+printf '%s\n' 'RELEASE_BINARY_VERSION_STYLE=commit' \
+  >>"$commit_style_consumer/scripts/release.conf"
+"$root/release-installer/render.sh" "$commit_style_consumer" >/dev/null ||
+  fail "renderer rejected commit-style binary identity"
+
+init_consumer="$tmp/init-consumer"
+mkdir -p "$init_consumer/scripts"
+cp "$consumer/scripts/release.conf" "$init_consumer/scripts/release.conf"
+printf '%s\n' 'RELEASE_INSTALL_INIT_SUBCOMMAND=init' \
+  >>"$init_consumer/scripts/release.conf"
+"$root/release-installer/render.sh" "$init_consumer" >/dev/null ||
+  fail "renderer rejected a safe post-install init subcommand"
+init_help=$(/bin/bash "$init_consumer/install.sh" --help) ||
+  fail "configured installer help failed"
+[[ "$init_help" == *'--init [ARGS...]'* ]] ||
+  fail "configured installer help omitted --init"
+[[ "$help" != *'--init [ARGS...]'* ]] ||
+  fail "default installer advertised an unavailable --init option"
+
+unsafe_init_consumer="$tmp/unsafe-init-consumer"
+mkdir -p "$unsafe_init_consumer/scripts"
+cp "$consumer/scripts/release.conf" "$unsafe_init_consumer/scripts/release.conf"
+printf '%s\n' "RELEASE_INSTALL_INIT_SUBCOMMAND='init now'" \
+  >>"$unsafe_init_consumer/scripts/release.conf"
+if "$root/release-installer/render.sh" "$unsafe_init_consumer" \
+  >/dev/null 2>&1; then
+  fail "renderer accepted an unsafe post-install init subcommand"
+fi
+
 checksum_file() {
   local archive=$1
 
@@ -141,6 +184,9 @@ make_archive() {
   local version=$1 platform=$2 label=$3
   local repo=${4:-example/example-tool}
   local schema=${5:-1}
+  local binary_version=${6:-$version}
+  local binary_behavior=${7:-normal}
+  local descendant_pid_file=${8:-$tmp/unused-descendant.pid}
   local commit payload archive
 
   commit=${version##*-}11111111111111111111111111111111
@@ -149,7 +195,51 @@ make_archive() {
     "$payload/examples" "$payload/schemas"
   cat >"$payload/bin/example-tool" <<EOF
 #!/usr/bin/env bash
-printf '%s\n' '$label'
+if [[ '$binary_behavior' == environment &&
+  ( -n \${CALLER_SECRET:-} || \$PWD == '$tmp/caller-cwd' ) ]]; then
+  exit 91
+fi
+if [[ '$binary_behavior' == hang && \${1:-} == --version ]]; then
+  trap '' TERM
+  while :; do sleep 1; done
+fi
+if [[ '$binary_behavior' == flood && \${1:-} == --version ]]; then
+  while :; do printf '%01024d' 0; done
+fi
+if [[ '$binary_behavior' == fork && \${1:-} == --version ]]; then
+  (trap '' TERM; while :; do sleep 1; done) &
+  printf '%s\n' "\$!" >'$descendant_pid_file'
+  exit 0
+fi
+if [[ '$binary_behavior' == interrupt && \${1:-} == --version ]]; then
+  printf '%s\n' "\$\$" >'$descendant_pid_file'
+  trap '' TERM
+  while :; do sleep 1; done
+fi
+if [[ '$binary_behavior' == fork-interrupt && \${1:-} == --version ]]; then
+  (trap '' TERM; while :; do sleep 1; done) &
+  printf '%s\n' "\$\$ \$!" >'$descendant_pid_file'
+  trap '' TERM
+  while :; do sleep 1; done
+fi
+if [[ \${1:-} == init ]]; then
+  shift
+  [[ ! -d \${INIT_LOCK:?} && -x \${INIT_COMMAND:?} ]] || exit 92
+  [[ \$0 == \${INIT_EXECUTABLE:?} ]] || exit 93
+  init_index=0
+  for init_arg in "\$@"; do
+    printf '%s' "\$init_arg" >"\$INIT_LOG.\$init_index"
+    init_index=\$((init_index + 1))
+  done
+  printf '%s\n' "\$init_index" >"\$INIT_LOG.count"
+  [[ \${INIT_FAIL:-0} -eq 0 ]] || exit 42
+  exit 0
+fi
+if [[ \${1:-} == --version ]]; then
+  printf '%s\n' '$binary_version'
+else
+  printf '%s\n' '$label'
+fi
 EOF
   chmod 0755 "$payload/bin/example-tool"
   printf 'readme %s\n' "$label" >"$payload/README.md"
@@ -192,6 +282,57 @@ export PATH
 
 version1=20260810-120000-1234abcd
 archive1=$(make_archive "$version1" linux-x86_64-musl first)
+
+default_init_root="$tmp/default-init"
+mkdir -p "$default_init_root/home"
+if HOME="$default_init_root/home" XDG_DATA_HOME="$default_init_root/data" \
+  /bin/bash "$consumer/install.sh" --archive "$archive1" \
+  --bin-dir "$default_init_root/bin" --man-dir "$default_init_root/man" \
+  --init >/dev/null 2>&1; then
+  fail "default installer accepted unavailable --init"
+fi
+
+init_root="$tmp/init-success"
+init_log="$tmp/init-success-log"
+init_control="$init_root/data/cgraf78/.example-tool-standalone"
+init_command="$init_root/bin/example-tool"
+mkdir -p "$init_root/home"
+HOME="$init_root/home" XDG_DATA_HOME="$init_root/data" \
+  INIT_LOG="$init_log" INIT_LOCK="$init_control/lock" \
+  INIT_COMMAND="$init_command" \
+  INIT_EXECUTABLE="$init_control/releases/$version1-linux-x86_64-musl/bin/example-tool" \
+  /bin/bash "$init_consumer/install.sh" --archive "$archive1" \
+  --bin-dir "$init_root/bin" --man-dir "$init_root/man" \
+  --init plain 'two words' '*' '' >/dev/null ||
+  fail "configured post-install init failed"
+[[ $(<"$init_log.count") == 4 && $(<"$init_log.0") == plain &&
+$(<"$init_log.1") == 'two words' && $(<"$init_log.2") == '*' &&
+! -s "$init_log.3" ]] ||
+  fail "post-install init did not preserve argv exactly"
+[[ -L "$init_control/current" && -x "$init_command" &&
+  ! -e "$init_control/lock" ]] ||
+  fail "post-install init ran before unlocked activation"
+
+init_failure_root="$tmp/init-failure"
+init_failure_log="$tmp/init-failure-log"
+init_failure_control="$init_failure_root/data/cgraf78/.example-tool-standalone"
+mkdir -p "$init_failure_root/home"
+set +e
+HOME="$init_failure_root/home" XDG_DATA_HOME="$init_failure_root/data" \
+  INIT_LOG="$init_failure_log" INIT_LOCK="$init_failure_control/lock" \
+  INIT_COMMAND="$init_failure_root/bin/example-tool" INIT_FAIL=1 \
+  INIT_EXECUTABLE="$init_failure_control/releases/$version1-linux-x86_64-musl/bin/example-tool" \
+  /bin/bash "$init_consumer/install.sh" --archive "$archive1" \
+  --bin-dir "$init_failure_root/bin" --man-dir "$init_failure_root/man" \
+  --init failing >/dev/null 2>&1
+init_failure_status=$?
+set -e
+[[ "$init_failure_status" -eq 42 ]] ||
+  fail "post-install init failure status was not preserved"
+[[ -L "$init_failure_control/current" &&
+  -x "$init_failure_root/bin/example-tool" &&
+  ! -e "$init_failure_control/lock" ]] ||
+  fail "post-install init failure rolled back the installed release"
 
 overlap_equal="$tmp/overlap-equal"
 mkdir -p "$overlap_equal/home"
@@ -397,6 +538,22 @@ bad_checksum="$tmp/bad.sha256"
 printf '%064d  %s\n' 0 "$(basename "$archive1")" >"$bad_checksum"
 isolated_install_fails "$archive1" "$bad_checksum" corrupt-checksum
 
+init_validation_root="$tmp/init-validation-failure"
+mkdir -p "$init_validation_root/home"
+if HOME="$init_validation_root/home" \
+  XDG_DATA_HOME="$init_validation_root/data" \
+  INIT_LOG="$tmp/init-validation-log" \
+  INIT_LOCK="$init_validation_root/data/cgraf78/.example-tool-standalone/lock" \
+  INIT_COMMAND="$init_validation_root/bin/example-tool" \
+  /bin/bash "$init_consumer/install.sh" --archive "$archive1" \
+  --checksum "$bad_checksum" --bin-dir "$init_validation_root/bin" \
+  --man-dir "$init_validation_root/man" --init must-not-run \
+  >/dev/null 2>&1; then
+  fail "invalid release unexpectedly reached post-install init"
+fi
+[[ ! -e "$tmp/init-validation-log.count" ]] ||
+  fail "failed pre-activation validation invoked post-install init"
+
 wrong_name_checksum="$tmp/wrong-name.sha256"
 printf '%s  %s\n' \
   "$(awk '{print $1}' "$archive1.sha256")" other-release.tar.gz \
@@ -414,6 +571,155 @@ schema_archive=$(make_archive "$schema_version" linux-x86_64-musl \
   schema example/example-tool 2)
 isolated_install_fails "$schema_archive" "$schema_archive.sha256" \
   metadata-schema
+
+binary_mismatch_version=20260810-142000-2468ace0
+binary_mismatch_archive=$(make_archive "$binary_mismatch_version" \
+  linux-x86_64-musl binary-mismatch example/example-tool 1 wrong-version)
+isolated_install_fails "$binary_mismatch_archive" \
+  "$binary_mismatch_archive.sha256" binary-identity-mismatch
+
+environment_version=20260810-142500-1357bdf0
+environment_archive=$(make_archive "$environment_version" \
+  linux-x86_64-musl environment example/example-tool 1 \
+  "$environment_version" environment)
+environment_root="$tmp/environment"
+mkdir -p "$environment_root/home" "$tmp/caller-cwd"
+(
+  cd "$tmp/caller-cwd"
+  HOME="$environment_root/home" XDG_DATA_HOME="$environment_root/data" \
+    CALLER_SECRET=must-not-reach-release-binary \
+    /bin/bash "$consumer/install.sh" --archive "$environment_archive" \
+    --bin-dir "$environment_root/bin" --man-dir "$environment_root/man" \
+    >/dev/null
+) || fail "release binary observed caller environment or working directory"
+
+hang_version=20260810-142600-2468bdf1
+hang_archive=$(make_archive "$hang_version" linux-x86_64-musl hang \
+  example/example-tool 1 "$hang_version" hang)
+hang_started=$SECONDS
+isolated_install_fails "$hang_archive" "$hang_archive.sha256" binary-hang
+[[ $((SECONDS - hang_started)) -le 8 ]] ||
+  fail "TERM-ignoring release binary exceeded its validation deadline"
+
+flood_version=20260810-142700-3579ace2
+flood_archive=$(make_archive "$flood_version" linux-x86_64-musl flood \
+  example/example-tool 1 "$flood_version" flood)
+flood_started=$SECONDS
+isolated_install_fails "$flood_archive" "$flood_archive.sha256" binary-flood
+[[ $((SECONDS - flood_started)) -le 8 ]] ||
+  fail "output-flooding release binary exceeded its validation deadline"
+
+descendant_pid_file="$tmp/forked-descendant.pid"
+fork_version=20260810-142800-4680bdf3
+fork_archive=$(make_archive "$fork_version" linux-x86_64-musl fork \
+  example/example-tool 1 "$fork_version" fork "$descendant_pid_file")
+isolated_install_fails "$fork_archive" "$fork_archive.sha256" binary-fork
+forked_pid=$(<"$descendant_pid_file")
+if kill -0 "$forked_pid" 2>/dev/null; then
+  kill -KILL "$forked_pid" 2>/dev/null || true
+  fail "release binary validation left a forked descendant alive"
+fi
+
+process_is_live() {
+  local pid=$1 state
+
+  kill -0 "$pid" 2>/dev/null || return 1
+  if [[ -r /proc/$pid/stat ]]; then
+    state=$(sed -n 's/^[^)]*) \([^ ]\).*/\1/p' "/proc/$pid/stat")
+    [[ "$state" != Z ]] || return 1
+  fi
+  return 0
+}
+
+assert_probe_stopped() {
+  local probe_pid=$1 descendant_pid=${2:-} attempt=0
+
+  while [[ "$attempt" -lt 100 ]]; do
+    if ! process_is_live "$probe_pid" &&
+      { [[ -z "$descendant_pid" ]] || ! process_is_live "$descendant_pid"; } &&
+      ! kill -0 -- "-$probe_pid" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.05
+    attempt=$((attempt + 1))
+  done
+  fail "interrupted installer left its owned probe process group alive"
+}
+
+interrupt_install() {
+  local behavior=$1 pid_file=$2 case_root=$3 archive installer_pid status
+  local probe_pid descendant_pid='' attempt=0
+
+  archive=$(make_archive "20260810-142900-5791ace4" \
+    linux-x86_64-musl "$behavior" example/example-tool 1 \
+    20260810-142900-5791ace4 "$behavior" "$pid_file")
+  mkdir -p "$case_root/home"
+  HOME="$case_root/home" XDG_DATA_HOME="$case_root/data" \
+    /bin/bash "$consumer/install.sh" --archive "$archive" \
+    --bin-dir "$case_root/bin" --man-dir "$case_root/man" \
+    >/dev/null 2>&1 &
+  installer_pid=$!
+  while [[ ! -s "$pid_file" && "$attempt" -lt 200 ]]; do
+    sleep 0.01
+    attempt=$((attempt + 1))
+  done
+  [[ -s "$pid_file" ]] || {
+    kill -KILL "$installer_pid" 2>/dev/null || true
+    wait "$installer_pid" 2>/dev/null || true
+    fail "interruption fixture did not reach the live probe"
+  }
+  read -r probe_pid descendant_pid <"$pid_file"
+  kill -TERM "$installer_pid"
+  set +e
+  wait "$installer_pid"
+  status=$?
+  set -e
+  [[ "$status" -eq 143 ]] ||
+    fail "interrupted installer returned $status instead of 143"
+  assert_probe_stopped "$probe_pid" "$descendant_pid"
+}
+
+interrupt_install interrupt "$tmp/interrupt-probe.pid" "$tmp/interrupt-probe"
+interrupt_install fork-interrupt "$tmp/interrupt-fork.pid" "$tmp/interrupt-fork"
+
+# Instrument a private rendered copy at the documented ownership marker. This
+# deterministically delivers TERM after the direct PID is globally published
+# but before process-group proof and barrier release, without a production test
+# environment switch.
+spawn_window_installer="$tmp/spawn-window-install.sh"
+spawn_window_pid_file="$tmp/spawn-window-probe.pid"
+awk -v pid_file="$spawn_window_pid_file" '
+  { print }
+  /probe direct child ownership published/ {
+    print "  printf \047%s\\n\047 \"$probe_pid\" >\"" pid_file "\""
+    print "  kill -TERM \"$$\""
+  }
+' "$consumer/install.sh" >"$spawn_window_installer"
+chmod 0755 "$spawn_window_installer"
+spawn_window_root="$tmp/spawn-window"
+mkdir -p "$spawn_window_root/home"
+set +e
+HOME="$spawn_window_root/home" XDG_DATA_HOME="$spawn_window_root/data" \
+  /bin/bash "$spawn_window_installer" --archive "$archive1" \
+  --bin-dir "$spawn_window_root/bin" --man-dir "$spawn_window_root/man" \
+  >/dev/null 2>&1
+spawn_window_status=$?
+set -e
+[[ "$spawn_window_status" -eq 143 ]] ||
+  fail "spawn-window interruption returned $spawn_window_status instead of 143"
+spawn_window_probe_pid=$(<"$spawn_window_pid_file")
+assert_probe_stopped "$spawn_window_probe_pid"
+
+commit_style_version=20260810-143000-abcdef12
+commit_style_archive=$(make_archive "$commit_style_version" \
+  linux-x86_64-musl commit-style example/example-tool 1 abcdef121111)
+commit_style_root="$tmp/commit-style"
+mkdir -p "$commit_style_root/home"
+HOME="$commit_style_root/home" XDG_DATA_HOME="$commit_style_root/data" \
+  /bin/bash "$commit_style_consumer/install.sh" \
+  --archive "$commit_style_archive" --bin-dir "$commit_style_root/bin" \
+  --man-dir "$commit_style_root/man" >/dev/null ||
+  fail "commit-style binary identity did not install"
 
 symlink_version=20260810-150000-deadbeef
 symlink_payload=$(mktemp -d "$tmp/symlink-payload.XXXXXX")
@@ -621,7 +927,9 @@ platform_install macos-aarch64 Darwin arm64 Darwin \
 android_version=20260810-180300-4444dddd
 android_archive=$(make_archive "$android_version" android-aarch64 android)
 android_root="$tmp/platform-android-aarch64"
-mkdir -p "$android_root/home" "$android_root/prefix"
+mkdir -p "$android_root/home" "$android_root/prefix/bin"
+cp /usr/bin/env "$android_root/prefix/bin/env"
+ln -s /bin/bash "$android_root/prefix/bin/bash"
 HOME="$android_root/home" XDG_DATA_HOME="$android_root/data" \
   PREFIX="$android_root/prefix" ANDROID_ROOT=/system \
   FAKE_UNAME_S=Linux FAKE_UNAME_M=aarch64 FAKE_UNAME_O=Android \
@@ -698,6 +1006,72 @@ esac
 EOF
 chmod 0755 "$fake_bin/curl"
 
+# A caller-provided archive is the explicit offline path. It has no attached
+# online attestation lookup, so it must remain usable with only its checksum
+# even when an otherwise discoverable gh command is unusable.
+cat >"$fake_bin/gh" <<'EOF'
+#!/bin/bash
+printf 'offline archive unexpectedly invoked gh\n' >&2
+exit 99
+EOF
+chmod 0755 "$fake_bin/gh"
+offline_attestation_root="$tmp/offline-attestation"
+mkdir -p "$offline_attestation_root/home"
+HOME="$offline_attestation_root/home" XDG_DATA_HOME="$offline_attestation_root/data" \
+  FAKE_UNAME_S=Linux FAKE_UNAME_M=x86_64 FAKE_UNAME_O=GNU/Linux \
+  PATH="$fake_bin:$PATH" \
+  /bin/bash "$consumer/install.sh" --archive "$archive1" \
+  --bin-dir "$offline_attestation_root/bin" \
+  --man-dir "$offline_attestation_root/man" >/dev/null ||
+  fail "offline archive required online attestation verification"
+
+# Online installation must not download bytes it cannot authenticate. Use a
+# deliberately minimal PATH to prove the missing-gh diagnostic is produced
+# before curl is invoked.
+no_gh_bin="$tmp/no-gh-bin"
+mkdir -p "$no_gh_bin"
+cat >"$no_gh_bin/uname" <<'EOF'
+#!/bin/bash
+case ${1:-} in
+  -s) printf '%s\n' Linux ;;
+  -m) printf '%s\n' x86_64 ;;
+  -o) printf '%s\n' GNU/Linux ;;
+  *) exit 2 ;;
+esac
+EOF
+chmod 0755 "$no_gh_bin/uname"
+cat >"$no_gh_bin/curl" <<'EOF'
+#!/bin/bash
+printf 'curl must not run without gh\n' >&2
+exit 98
+EOF
+chmod 0755 "$no_gh_bin/curl"
+set +e
+missing_gh_out=$(HOME="$tmp/missing-gh-home" \
+  FAKE_UNAME_S=Linux FAKE_UNAME_M=x86_64 FAKE_UNAME_O=GNU/Linux \
+  PATH="$no_gh_bin" /bin/bash "$consumer/install.sh" --version "$version1" \
+  --data-home "$tmp/missing-gh-data" --bin-dir "$tmp/missing-gh-bin" \
+  --man-dir "$tmp/missing-gh-man" 2>&1)
+missing_gh_status=$?
+set -e
+[[ "$missing_gh_status" -eq 1 ]] ||
+  fail "online install without gh did not fail"
+[[ "$missing_gh_out" == *'gh is required for online attestation verification'* ]] ||
+  fail "online install without gh did not explain the attestation requirement: $missing_gh_out"
+[[ "$missing_gh_out" != *'curl must not run without gh'* ]] ||
+  fail "online install downloaded release data before checking for gh"
+
+gh_log="$tmp/online-gh.log"
+cat >"$fake_bin/gh" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$FAKE_GH_LOG"
+[[ ${1:-} == attestation && ${2:-} == verify ]] || exit 97
+[[ -f ${3:-} ]] || exit 96
+[[ ${FAKE_GH_FAIL:-0} -eq 0 ]] || exit 95
+EOF
+chmod 0755 "$fake_bin/gh"
+
 online_root="$tmp/online"
 online_log="$tmp/online-curl.log"
 online_args_log="$tmp/online-curl-args.log"
@@ -705,6 +1079,7 @@ mkdir -p "$online_root/home"
 FAKE_CURL_ARCHIVE="$archive1" FAKE_CURL_CHECKSUM="$archive1.sha256" \
   FAKE_CURL_VERSION="$version1" FAKE_CURL_LOG="$online_log" \
   FAKE_CURL_ARGS_LOG="$online_args_log" \
+  FAKE_GH_LOG="$gh_log" \
   FAKE_UNAME_S=Linux FAKE_UNAME_M=x86_64 FAKE_UNAME_O=GNU/Linux \
   HOME="$online_root/home" PATH="$fake_bin:$PATH" \
   /bin/bash "$consumer/install.sh" \
@@ -718,8 +1093,33 @@ grep -Fxq "$online_base/$(basename "$archive1")" "$online_log" ||
   fail "online install requested the wrong archive URL"
 grep -Fxq "$online_base/$(basename "$archive1").sha256" "$online_log" ||
   fail "online install requested the wrong checksum URL"
+gh_args=$(cat "$gh_log")
+case "$gh_args" in
+  "attestation verify "*" --repo example/example-tool --signer-repo cgraf78/actions") ;;
+  *) fail "online install used the wrong attestation policy: $gh_args" ;;
+esac
 [[ $("$online_root/bin/example-tool") == first ]] ||
   fail "online install did not activate the downloaded archive"
+
+attestation_failure_root="$tmp/attestation-failure"
+mkdir -p "$attestation_failure_root/home"
+set +e
+FAKE_CURL_ARCHIVE="$archive1" FAKE_CURL_CHECKSUM="$archive1.sha256" \
+  FAKE_CURL_VERSION="$version1" FAKE_CURL_LOG="$tmp/failed-curl.log" \
+  FAKE_CURL_ARGS_LOG="$tmp/failed-curl-args.log" \
+  FAKE_GH_LOG="$tmp/failed-gh.log" FAKE_GH_FAIL=1 \
+  FAKE_UNAME_S=Linux FAKE_UNAME_M=x86_64 FAKE_UNAME_O=GNU/Linux \
+  HOME="$attestation_failure_root/home" PATH="$fake_bin:$PATH" \
+  /bin/bash "$consumer/install.sh" --version "$version1" \
+  --data-home "$attestation_failure_root/data" \
+  --bin-dir "$attestation_failure_root/bin" \
+  --man-dir "$attestation_failure_root/man" >/dev/null 2>&1
+attestation_failure_status=$?
+set -e
+[[ "$attestation_failure_status" -eq 1 ]] ||
+  fail "failed online attestation did not reject the release"
+[[ ! -e "$attestation_failure_root/bin/example-tool" ]] ||
+  fail "failed online attestation activated the release"
 
 curl_invocations=$(wc -l <"$online_args_log")
 [[ "$curl_invocations" -eq 3 ]] ||

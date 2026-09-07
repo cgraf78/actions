@@ -49,6 +49,9 @@ The renderer derives these values from existing release policy:
 - `RELEASE_SLUG`
 - `RELEASE_ASSET_NAME`
 - `RELEASE_BINARY` and `RELEASE_BINARY_DEST`
+- `RELEASE_BINARY_VERSION_STYLE` (`version` by default, or `commit`)
+- optional `RELEASE_INSTALL_INIT_SUBCOMMAND`, one safe argument enabling the
+  post-install `--init` interface
 - an optional `man/man1/$RELEASE_BINARY.1` link when that file is a required
   `RELEASE_PAYLOAD_FILES` entry
 
@@ -63,14 +66,17 @@ install.sh --archive PATH [--checksum PATH]
   --data-home PATH
   --bin-dir PATH
   --man-dir PATH
+  --init [ARGS...]  # configured consumers only; must be last
 ```
 
 Without `--version`, online installation follows the repository's GitHub
 `releases/latest` redirect, validates the resulting release tag, and downloads
-the matching archive and `.sha256` sidecar. Every request has bounded
-connection, total-transfer, low-speed, and retry windows; the three-request
-online path has a worst-case network budget below ten minutes. `--archive` is
-the first-class offline/test path; its checksum defaults to `PATH.sha256`.
+the matching archive and `.sha256` sidecar. Each of those three download
+requests has bounded connection, total-transfer, low-speed, and retry windows,
+with a combined worst-case budget below ten minutes. The subsequent GitHub CLI
+attestation lookup is a separate required trust check. `--archive` is the
+first-class offline/test path; its checksum defaults to `PATH.sha256` and does
+not perform an online attestation lookup.
 
 Linux and macOS default to:
 
@@ -124,12 +130,23 @@ abstraction, or automatic migration of another install method in v1. Those
 features would broaden destructive ownership decisions without helping the two
 initial standalone consumers.
 
+When a consumer configures `RELEASE_INSTALL_INIT_SUBCOMMAND`, `--init` consumes
+every remaining argument verbatim. Installation, atomic activation, and public
+link publication complete first. The installer then releases its lock, disables
+publication rollback, removes temporary state, and invokes the published
+release's exact verified binary path with the configured subcommand. It does
+not resolve through the mutable public `current` link. Initialization failure
+is returned to the caller without rolling back the installed release.
+Consumers without the policy continue to reject `--init` as an unknown option.
+
 ## Validation and trust boundary
 
 Before extraction or activation, the generated installer:
 
 - accepts only HTTPS GitHub redirects and downloads;
 - validates the exact tag, platform, asset basename, and checksum filename;
+- requires GitHub CLI and verifies downloaded archives against the release
+  repository and the `cgraf78/actions` signer repository;
 - snapshots a caller-provided archive into the private temporary directory
   before hashing, inspecting, or extracting it;
 - verifies SHA-256 with `sha256sum` or macOS `shasum`;
@@ -138,13 +155,27 @@ Before extraction or activation, the generated installer:
 - extracts only into a mode-0700 temporary directory under `umask 077`;
 - requires the configured executable and any declared manpage;
 - verifies embedded schema, repository, platform, tag/version, method, and commit
-  identity; and
+  identity;
+- executes the staged binary with `--version` and requires one bounded output
+  line identifying either the exact release version or, for `commit` style,
+  the first 12 characters of the metadata commit;
 - holds a per-install-root publication lock while staging and switching.
 
-The checksum sidecar detects corruption, truncation, and the wrong asset. It is
-published beside the archive and is not an independent signature: compromise
-of both a GitHub release asset and its checksum remains outside this v1 trust
-model.
+The checksum sidecar detects corruption, truncation, and the wrong asset.
+Online installs additionally use GitHub's artifact attestation verification to
+bind the archive to both its release repository and the shared trusted builder.
+The explicit local `--archive` path does not query GitHub for an attestation,
+so it remains usable for offline installation and locally built artifacts.
+It is therefore an explicit caller-trusted executable input. Its checksum
+protects against accidental corruption but does not establish publisher
+identity.
+
+The staged version probe runs from the private scratch directory with an empty,
+fixed environment containing only isolated HOME/XDG/TMPDIR paths, `LC_ALL`, and
+a platform system `PATH`. A five-second supervisor first proves ownership of a
+dedicated process group, applies a kernel file-size limit to captured output,
+then uses bounded group-wide TERM/KILL cleanup if the probe or a descendant
+hangs or floods output.
 
 The installer never writes product configuration, user state, credentials,
 site policy, enrollment data, private hostnames, or deployment topology. Those
