@@ -165,6 +165,18 @@ shell_platform_test_window=$((shell_platform_job_window - \
 contracts() {
   local workflow
 
+  check '(.on | has("workflow_call"))' dependabot-automerge.yml
+  check '(.permissions | length) == 0' dependabot-automerge.yml
+  check '.jobs.enable.if | contains("github.event_name == '\''pull_request_target'\''")' dependabot-automerge.yml
+  check '.jobs.enable.if | contains("github.event.pull_request.user.login == '\''dependabot[bot]'\''")' dependabot-automerge.yml
+  check '.jobs.enable.permissions.contents == "write"' dependabot-automerge.yml
+  check '.jobs.enable.permissions."pull-requests" == "write"' dependabot-automerge.yml
+  check '(.jobs.enable.permissions | length) == 2' dependabot-automerge.yml
+  check '.jobs.enable."timeout-minutes" == 5' dependabot-automerge.yml
+  check '[.jobs.enable.steps[] | select(.uses != null)] | length == 0' dependabot-automerge.yml
+  check '.jobs.enable.steps[] | select(.name == "Enable squash auto-merge").run | contains("gh pr merge \"$PR_NUMBER\" --repo \"$GITHUB_REPOSITORY\" --auto --squash")' dependabot-automerge.yml
+  check '.jobs.enable.steps[] | select(.name == "Enable squash auto-merge").run | contains("--admin") | not' dependabot-automerge.yml
+
   check '.on.workflow_call.inputs.project_name.required == true' mise-lock-refresh.yml
   check '.on.workflow_call.inputs.project_name.type == "string"' mise-lock-refresh.yml
   check '.on.workflow_call.inputs.mise_config_file.required == true' mise-lock-refresh.yml

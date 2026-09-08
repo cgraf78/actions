@@ -1,0 +1,40 @@
+name: Dependabot Auto-merge
+
+on:
+  workflow_call:
+
+permissions: {}
+
+concurrency:
+  group: dependabot-automerge-${{ github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  enable:
+    name: Enable auto-merge
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Enable squash auto-merge
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |-
+          set -euo pipefail
+
+          case "$PR_NUMBER" in
+            '' | *[!0-9]*)
+              echo "Dependabot pull request number is unavailable" >&2
+              exit 2
+              ;;
+          esac
+
+          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --auto --squash

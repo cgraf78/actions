@@ -6,6 +6,8 @@ local organization.
 
 ## Public Workflows
 
+- `dependabot-automerge.yml` enrolls bot-authored dependency updates in
+  protected squash auto-merge without executing pull-request code.
 - `mise-lock-refresh.yml` regenerates one caller lockfile and maintains a
   protected, auto-merging update pull request.
 - `shell-ci.yml` runs shell project tests across the shared platform matrix
