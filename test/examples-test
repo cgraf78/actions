@@ -16,6 +16,8 @@ fail() {
 for example in \
   README.md \
   dependabot.yml \
+  dependabot-automerge.yml \
+  dependabot-rust.yml \
   mise-lock-refresh.yml \
   retry-infrastructure.yml \
   rust-ci.yml \
@@ -29,6 +31,7 @@ done
 # Workflow syntax is the first contract. actionlint also checks reusable-call
 # keys, expression contexts, permissions placement, and workflow_run spelling.
 actionlint \
+  "$examples/dependabot-automerge.yml" \
   "$examples/mise-lock-refresh.yml" \
   "$examples/shell-ci.yml" \
   "$examples/rust-ci.yml" \
@@ -49,6 +52,15 @@ yq -e '
   .jobs.refresh.with.mise_lock_file == ".github/mise/mise.lock" and
   .jobs.refresh.secrets.deploy_key == "${{ secrets.MISE_REFRESH_DEPLOY_KEY }}"
 ' "$examples/mise-lock-refresh.yml" >/dev/null
+
+yq -e '
+  (.permissions | length) == 0 and
+  (.on.pull_request_target.types | join(",")) == "opened,reopened,synchronize,ready_for_review" and
+  .jobs.enable.if == "github.event.pull_request.user.login == '\''dependabot[bot]'\''" and
+  .jobs.enable.permissions.contents == "write" and
+  .jobs.enable.permissions."pull-requests" == "write" and
+  .jobs.enable.uses == "cgraf78/actions/.github/workflows/dependabot-automerge.yml@FULL_COMMIT_SHA"
+' "$examples/dependabot-automerge.yml" >/dev/null
 
 yq -e '
   .permissions.contents == "read" and (.permissions | length) == 1 and
@@ -90,6 +102,16 @@ yq -e '
   .updates[0].schedule.interval == "weekly"
 ' "$examples/dependabot.yml" >/dev/null
 
+yq -e '
+  .version == 2 and
+  ([.updates[] | select(
+    ."package-ecosystem" == "github-actions" and
+    ([.ignore[] | select(."dependency-name" == "cgraf78/actions")] | length) == 1
+  )] | length) == 1 and
+  ([.updates[] | select(."package-ecosystem" == "cargo")] | length) == 1 and
+  ([.updates[] | select(.schedule.interval != "weekly")] | length) == 0
+' "$examples/dependabot-rust.yml" >/dev/null
+
 # Commit a minimal provider fixture because consumer-ci/sync.sh deliberately
 # rejects dirty or uncommitted provider bytes. Its HEAD becomes the exact lock
 # value used by both example consumers below.
@@ -122,10 +144,13 @@ stage_consumer() {
     "$consumer/.github/workflows/retry-infrastructure.yml"
   cp "$examples/mise-lock-refresh.yml" \
     "$consumer/.github/workflows/update-mise-lock.yml"
-  cp "$examples/dependabot.yml" "$consumer/.github/dependabot.yml"
   if [[ "$kind" == shell ]]; then
+    cp "$examples/dependabot.yml" "$consumer/.github/dependabot.yml"
     cp "$examples/shellcheck-files.txt" "$consumer/.github/shellcheck-files.txt"
   else
+    cp "$examples/dependabot-automerge.yml" \
+      "$consumer/.github/workflows/dependabot-automerge.yml"
+    cp "$examples/dependabot-rust.yml" "$consumer/.github/dependabot.yml"
     cp "$examples/rust-release.yml" "$consumer/.github/workflows/release.yml"
     mkdir -p "$consumer/scripts"
     cp "$examples/release.conf" "$consumer/scripts/release.conf"

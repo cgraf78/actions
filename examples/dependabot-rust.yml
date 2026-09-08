@@ -1,0 +1,22 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: America/Los_Angeles
+    # Shared workflow pins are a generated family with the consumer lock and,
+    # for release consumers, vendored scripts. Advance them together through
+    # consumer-ci/sync.sh instead of accepting an incomplete one-line bump.
+    ignore:
+      - dependency-name: cgraf78/actions
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: America/Los_Angeles

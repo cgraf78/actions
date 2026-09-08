@@ -9,7 +9,8 @@ installer, generated metadata, signing, and smoke-test assertions.
 
 Callers must reference workflows by full 40-character commit SHA. Treat the
 workflow ref as a dependency: enable weekly GitHub Actions Dependabot updates,
-let each update run the caller's normal CI, and review it before merge. This keeps
+let each update run the caller's normal CI, and optionally enroll bot-authored
+updates in protected auto-merge through `dependabot-automerge.yml`. This keeps
 shared fixes moving across `cgraf78` repositories without changing the workflow
 code executed by an unchanged caller commit.
 
@@ -48,6 +49,28 @@ could accidentally bypass the check. A tracked
 to a source-distributed checkout bootstrap without requiring release assets. A
 Dependabot update to only a literal SHA therefore fails closed until a
 maintainer synchronizes the lock and derived bytes.
+
+## `dependabot-automerge.yml`
+
+`dependabot-automerge.yml` gives callers one narrowly scoped path for landing
+Dependabot version and security updates after their normal protected CI passes.
+The caller owns a `pull_request_target` trigger and must filter the pull-request
+author to `dependabot[bot]`. The reusable workflow repeats that author check,
+requires a nondraft pull request, and runs no checkout or pull-request code.
+
+The job uses only GitHub's structured pull-request number to request squash
+auto-merge. It never uses `--admin`, pushes a branch, approves a review, or
+bypasses repository rules. GitHub branch protection remains the authority that
+holds the PR until required checks pass. Callers must enable repository
+auto-merge and grant the reusable job `contents: write` plus
+`pull-requests: write`; keep every other workflow permission empty.
+
+An example caller is available at `examples/dependabot-automerge.yml`. Use
+`examples/dependabot-rust.yml` for a Rust repository that should receive both
+GitHub Actions and Cargo updates. The Rust example excludes `cgraf78/actions`
+because its lock, workflow refs, and optional vendored scripts must advance as
+one reviewed unit through `consumer-ci/sync.sh`; every Dependabot PR the
+configuration does create can then satisfy the consumer consistency gate.
 
 ## `mise-lock-refresh.yml`
 
