@@ -13,7 +13,19 @@ runs:
         wrapper="$wrapper_dir/adb"
         real_adb=${TERMUX_ADB_REAL:-}
         if [[ -z "$real_adb" ]]; then
-          real_adb=$(command -v adb)
+          # The emulator action adds platform-tools to PATH only after this
+          # wrapper must be installed, so resolve the runner SDK directly.
+          for sdk_root in "${ANDROID_SDK_ROOT:-}" "${ANDROID_HOME:-}"; do
+            [[ -n "$sdk_root" ]] || continue
+            candidate=$sdk_root/platform-tools/adb
+            if [[ -x "$candidate" ]]; then
+              real_adb=$candidate
+              break
+            fi
+          done
+        fi
+        if [[ -z "$real_adb" ]]; then
+          real_adb=$(command -v adb || true)
         fi
         if [[ ! -f "$helper" || -L "$helper" ||
           ! -x "$wrapper" || -L "$wrapper" ||

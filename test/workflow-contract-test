@@ -33,11 +33,12 @@ check_step_order() {
   local before=$1
   local after=$2
   local workflow=$3
+  local job=${4:-build}
   local before_index after_index
 
-  before_index=$(yq -r ".jobs.build.steps | to_entries | .[] | select(.value.name == \"$before\") | .key" \
+  before_index=$(yq -r ".jobs.$job.steps | to_entries | .[] | select(.value.name == \"$before\") | .key" \
     "$root/.github/workflows/$workflow")
-  after_index=$(yq -r ".jobs.build.steps | to_entries | .[] | select(.value.name == \"$after\") | .key" \
+  after_index=$(yq -r ".jobs.$job.steps | to_entries | .[] | select(.value.name == \"$after\") | .key" \
     "$root/.github/workflows/$workflow")
   if [[ -z $before_index || -z $after_index || $before_index -ge $after_index ]]; then
     printf 'workflow contract failed: %s: %s must precede %s\n' \
@@ -314,6 +315,8 @@ contracts() {
   check '.jobs.termux."timeout-minutes" == 50' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Run caller tests in Termux").with."emulator-boot-timeout" == 600' _termux-ci.yml
   check ".jobs.termux.steps[] | select(.name == \"Stage bounded Termux ADB helper\").uses == \"cgraf78/actions/.github/actions/termux-adb@$actions_lock\"" _termux-ci.yml
+  check_step_order 'Stage bounded Termux ADB helper' \
+    'Run caller tests in Termux' _termux-ci.yml termux
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("source \"$TERMUX_ADB_HELPER\"")' _termux-ci.yml
   check '[.jobs.termux.steps[] | select((.run? // "") | contains("$GITHUB_WORKSPACE/.github/scripts/termux-adb.sh"))] | length == 0' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("termux_wait_for_runtime 30 3 1")' _termux-ci.yml

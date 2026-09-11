@@ -254,11 +254,51 @@ assert_processes_gone "$ADB_PID_FILE" cancellation
 unset TERMUX_ADB_REAL
 action_script=$(yq -r '.runs.steps[0].run' \
   "$GITHUB_ACTION_PATH/action.yml")
+sdk_root=$tmp/android-sdk
+mkdir -p "$sdk_root/platform-tools"
+cp "$tmp/adb" "$sdk_root/platform-tools/adb"
+sdk_stage_env=$tmp/sdk-stage-env
+sdk_stage_path=$tmp/sdk-stage-path
+: >"$sdk_stage_env"
+: >"$sdk_stage_path"
+env -u ANDROID_HOME \
+  ANDROID_SDK_ROOT="$sdk_root" \
+  GITHUB_ENV="$sdk_stage_env" \
+  GITHUB_PATH="$sdk_stage_path" \
+  PATH=/usr/bin:/bin \
+  bash -c "$action_script"
+sdk_staged_real=$(sed -n 's/^TERMUX_ADB_REAL=//p' "$sdk_stage_env" | tail -n 1)
+[[ "$sdk_staged_real" == "$sdk_root/platform-tools/adb" ]] || {
+  printf 'termux adb test failed: composite did not resolve SDK adb before PATH setup\n' >&2
+  exit 1
+}
+
+home_sdk_root=$tmp/android-home
+mkdir -p "$home_sdk_root/platform-tools"
+cp "$tmp/adb" "$home_sdk_root/platform-tools/adb"
+home_stage_env=$tmp/home-stage-env
+home_stage_path=$tmp/home-stage-path
+: >"$home_stage_env"
+: >"$home_stage_path"
+env ANDROID_SDK_ROOT="$tmp/missing-sdk" \
+  ANDROID_HOME="$home_sdk_root" \
+  GITHUB_ENV="$home_stage_env" \
+  GITHUB_PATH="$home_stage_path" \
+  PATH=/usr/bin:/bin \
+  bash -c "$action_script"
+home_staged_real=$(sed -n 's/^TERMUX_ADB_REAL=//p' "$home_stage_env" | tail -n 1)
+[[ "$home_staged_real" == "$home_sdk_root/platform-tools/adb" ]] || {
+  printf 'termux adb test failed: composite did not fall back to ANDROID_HOME\n' >&2
+  exit 1
+}
+
 stage_env=$tmp/stage-env
 stage_path=$tmp/stage-path
 : >"$stage_env"
 : >"$stage_path"
-GITHUB_ENV=$stage_env GITHUB_PATH=$stage_path bash -c "$action_script"
+env -u ANDROID_HOME -u ANDROID_SDK_ROOT \
+  GITHUB_ENV="$stage_env" GITHUB_PATH="$stage_path" \
+  bash -c "$action_script"
 staged_real=$(sed -n 's/^TERMUX_ADB_REAL=//p' "$stage_env" | tail -n 1)
 staged_path=$(tail -n 1 "$stage_path")
 [[ "$staged_real" == "$tmp/adb" && "$staged_path" == "${adb_wrapper%/*}" ]] || {
