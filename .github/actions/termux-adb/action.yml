@@ -9,8 +9,30 @@ runs:
       run: |-
         set -euo pipefail
         helper="$GITHUB_ACTION_PATH/termux-adb.sh"
-        if [[ ! -f "$helper" || -L "$helper" ]]; then
-          echo "Termux ADB helper is missing or unsafe: $helper" >&2
+        wrapper_dir="$GITHUB_ACTION_PATH/bin"
+        wrapper="$wrapper_dir/adb"
+        real_adb=${TERMUX_ADB_REAL:-}
+        if [[ -z "$real_adb" ]]; then
+          # The emulator action adds platform-tools to PATH only after this
+          # wrapper must be installed, so resolve the runner SDK directly.
+          for sdk_root in "${ANDROID_SDK_ROOT:-}" "${ANDROID_HOME:-}"; do
+            [[ -n "$sdk_root" ]] || continue
+            candidate=$sdk_root/platform-tools/adb
+            if [[ -x "$candidate" ]]; then
+              real_adb=$candidate
+              break
+            fi
+          done
+        fi
+        if [[ -z "$real_adb" ]]; then
+          real_adb=$(command -v adb || true)
+        fi
+        if [[ ! -f "$helper" || -L "$helper" ||
+          ! -x "$wrapper" || -L "$wrapper" ||
+          ! -x "$real_adb" || "$real_adb" == "$wrapper" ]]; then
+          echo "Termux ADB support is missing or unsafe: $GITHUB_ACTION_PATH" >&2
           exit 1
         fi
-        printf 'TERMUX_ADB_HELPER=%s\n' "$helper" >>"$GITHUB_ENV"
+        printf 'TERMUX_ADB_HELPER=%s\nTERMUX_ADB_REAL=%s\n' \
+          "$helper" "$real_adb" >>"$GITHUB_ENV"
+        printf '%s\n' "$wrapper_dir" >>"$GITHUB_PATH"

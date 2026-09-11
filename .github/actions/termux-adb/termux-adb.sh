@@ -2,11 +2,25 @@
 
 # Keep every interaction with the emulator behind a supervisor. A disconnected
 # or wedged adb server must fail this phase before the outer Actions job limit.
-termux_adb() {
+_termux_adb_timeout_exec() {
   local timeout_seconds=$1
   shift
 
-  timeout --kill-after=5 "$timeout_seconds" adb "$@"
+  exec env LC_ALL=C timeout --kill-after=5 "$timeout_seconds" "$@"
+}
+
+_termux_adb_timeout() {
+  (
+    _termux_adb_timeout_exec "$@"
+  )
+}
+
+termux_adb() {
+  local timeout_seconds=$1
+  local adb_command=${TERMUX_ADB_REAL:-adb}
+  shift
+
+  _termux_adb_timeout "$timeout_seconds" "$adb_command" "$@"
 }
 
 termux_wait_for_runtime() {
