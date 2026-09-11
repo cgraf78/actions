@@ -3,6 +3,8 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+adb_wrapper=$root/.github/actions/termux-adb/bin/adb
+stall_markers=$root/.github/actions/shared/infra-stall-markers.sh
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -12,6 +14,19 @@ mkdir -p "$consumer_workspace"
 GITHUB_WORKSPACE=$consumer_workspace
 GITHUB_ACTION_PATH=$root/.github/actions/termux-adb
 export GITHUB_WORKSPACE GITHUB_ACTION_PATH
+
+assert_processes_gone() {
+  local pid_file=$1 context=$2 shell_pid child_pid adb_pid
+  read -r shell_pid child_pid <"$pid_file"
+  for adb_pid in "$shell_pid" "$child_pid"; do
+    if kill -0 "$adb_pid" 2>/dev/null; then
+      printf 'termux adb test failed: %s left process %s alive\n' \
+        "$context" "$adb_pid" >&2
+      exit 1
+    fi
+  done
+}
+
 [[ ! -e "$GITHUB_WORKSPACE/.github/scripts/termux-adb.sh" ]] || {
   printf 'termux adb test failed: consumer fixture unexpectedly has provider helper\n' >&2
   exit 1
@@ -26,12 +41,265 @@ printf '%s\n' "$*" >>"$ADB_CALLS"
 case ${ADB_BEHAVIOR:-success} in
   success) exit 0 ;;
   fail) exit 23 ;;
+  code124) exit 124 ;;
+  stdio) cat ;;
   hang) exec sleep 30 ;;
+  hard-hang)
+    trap '' TERM
+    sleep 30 &
+    child=$!
+    printf '%s %s\n' "$$" "$child" >"$ADB_PID_FILE"
+    wait "$child"
+    ;;
 esac
 EOF
 chmod +x "$tmp/adb"
 export PATH="$tmp:$PATH"
 export ADB_CALLS="$tmp/adb-calls"
+
+[[ -f "$stall_markers" && ! -L "$stall_markers" ]] || {
+  printf 'termux adb test failed: infrastructure marker definitions are unavailable\n' >&2
+  exit 1
+}
+# shellcheck source=.github/actions/shared/infra-stall-markers.sh
+source "$stall_markers"
+
+[[ -x "$adb_wrapper" ]] || {
+  printf 'termux adb test failed: bounded adb wrapper is unavailable\n' >&2
+  exit 1
+}
+
+set +e
+env -u TERMUX_ADB_REAL "$adb_wrapper" devices \
+  2>"$tmp/missing-real-stderr"
+rc=$?
+set -e
+if [[ "$rc" -eq 0 ]]; then
+  printf 'termux adb test failed: wrapper accepted a missing real adb\n' >&2
+  exit 1
+fi
+[[ "$rc" -eq 1 ]] || {
+  printf 'termux adb test failed: missing real adb returned %s\n' "$rc" >&2
+  exit 1
+}
+grep -Fq 'TERMUX_ADB_REAL is required' "$tmp/missing-real-stderr" || {
+  printf 'termux adb test failed: missing real adb diagnostic is absent\n' >&2
+  exit 1
+}
+for invalid_timeout in 0 -1 nope; do
+  : >"$ADB_CALLS"
+  set +e
+  TERMUX_ADB_REAL=$tmp/adb TERMUX_ADB_TIMEOUT_SECONDS=$invalid_timeout \
+    "$adb_wrapper" devices 2>"$tmp/invalid-timeout-stderr"
+  rc=$?
+  set -e
+  if [[ "$rc" -ne 2 ]]; then
+    printf 'termux adb test failed: invalid timeout %s returned %s\n' \
+      "$invalid_timeout" "$rc" >&2
+    exit 1
+  fi
+  grep -Fq "invalid Termux ADB timeout: $invalid_timeout" \
+    "$tmp/invalid-timeout-stderr" || {
+    printf 'termux adb test failed: invalid-timeout diagnostic is absent\n' >&2
+    exit 1
+  }
+  [[ ! -s "$ADB_CALLS" ]] || {
+    printf 'termux adb test failed: invalid timeout invoked adb\n' >&2
+    exit 1
+  }
+done
+
+export TERMUX_ADB_REAL=$tmp/adb
+export ADB_BEHAVIOR=success
+TERMUX_ADB_TIMEOUT_SECONDS=2 "$adb_wrapper" shell get-state
+grep -Fxq 'shell get-state' "$ADB_CALLS" || {
+  printf 'termux adb test failed: wrapper did not preserve adb arguments\n' >&2
+  exit 1
+}
+
+export ADB_BEHAVIOR=stdio
+stdio_output=$(printf 'stdin remains connected\n' |
+  TERMUX_ADB_TIMEOUT_SECONDS=2 "$adb_wrapper" shell ignored)
+[[ "$stdio_output" == 'stdin remains connected' ]] || {
+  printf 'termux adb test failed: wrapper did not preserve stdin/stdout\n' >&2
+  exit 1
+}
+
+export ADB_BEHAVIOR=fail
+if TERMUX_ADB_TIMEOUT_SECONDS=2 "$adb_wrapper" devices; then
+  printf 'termux adb test failed: wrapper hid adb failure\n' >&2
+  exit 1
+else
+  rc=$?
+fi
+[[ "$rc" -eq 23 ]] || {
+  printf 'termux adb test failed: wrapper returned %s instead of 23\n' "$rc" >&2
+  exit 1
+}
+
+export ADB_BEHAVIOR=hang
+started=$SECONDS
+if TERMUX_ADB_TIMEOUT_SECONDS=1 "$adb_wrapper" \
+  -s emulator-5554 shell input keyevent 82 \
+  2>"$tmp/wrapper-stderr"; then
+  printf 'termux adb test failed: wrapper allowed hung adb command\n' >&2
+  exit 1
+else
+  rc=$?
+fi
+elapsed=$((SECONDS - started))
+[[ "$rc" -eq 124 ]] || {
+  printf 'termux adb test failed: wrapper timeout returned %s\n' "$rc" >&2
+  exit 1
+}
+[[ "$elapsed" -lt 10 ]] || {
+  printf 'termux adb test failed: wrapper timeout took %ss\n' "$elapsed" >&2
+  exit 1
+}
+grep -Fq "$TERMUX_ADB_SETUP_TIMEOUT_MARKER" \
+  "$tmp/wrapper-stderr" || {
+  printf 'termux adb test failed: wrapper timeout marker is missing\n' >&2
+  exit 1
+}
+
+export ADB_BEHAVIOR=code124
+if TERMUX_ADB_TIMEOUT_SECONDS=2 "$adb_wrapper" \
+  -s emulator-5554 shell input keyevent 82 \
+  2>"$tmp/code124-stderr"; then
+  printf 'termux adb test failed: wrapper hid adb status 124\n' >&2
+  exit 1
+else
+  rc=$?
+fi
+[[ "$rc" -eq 124 ]] || {
+  printf 'termux adb test failed: wrapper changed adb status 124 to %s\n' "$rc" >&2
+  exit 1
+}
+if grep -Fq "$TERMUX_ADB_SETUP_TIMEOUT_MARKER" "$tmp/code124-stderr"; then
+  printf 'termux adb test failed: child status 124 was labeled a timeout\n' >&2
+  exit 1
+fi
+
+export ADB_BEHAVIOR=hard-hang
+export ADB_PID_FILE=$tmp/adb-pid
+started=$SECONDS
+if TERMUX_ADB_TIMEOUT_SECONDS=1 "$adb_wrapper" \
+  -s emulator-5554 shell input keyevent 82 \
+  2>"$tmp/hard-hang-stderr"; then
+  printf 'termux adb test failed: wrapper allowed TERM-resistant adb hang\n' >&2
+  exit 1
+else
+  rc=$?
+fi
+elapsed=$((SECONDS - started))
+[[ "$rc" -eq 124 ]] || {
+  printf 'termux adb test failed: hard timeout returned %s\n' "$rc" >&2
+  exit 1
+}
+[[ "$elapsed" -lt 10 ]] || {
+  printf 'termux adb test failed: hard timeout took %ss\n' "$elapsed" >&2
+  exit 1
+}
+grep -Fq "$TERMUX_ADB_SETUP_TIMEOUT_MARKER" "$tmp/hard-hang-stderr" || {
+  printf 'termux adb test failed: hard timeout marker is missing\n' >&2
+  exit 1
+}
+assert_processes_gone "$ADB_PID_FILE" 'hard timeout'
+
+export ADB_BEHAVIOR=hang
+if TERMUX_ADB_TIMEOUT_SECONDS=1 "$adb_wrapper" \
+  -s emulator-5554 shell getprop sys.boot_completed \
+  2>"$tmp/boot-probe-stderr"; then
+  printf 'termux adb test failed: wrapper allowed a hung boot probe\n' >&2
+  exit 1
+else
+  rc=$?
+fi
+[[ "$rc" -eq 124 ]] || {
+  printf 'termux adb test failed: boot-probe timeout returned %s\n' "$rc" >&2
+  exit 1
+}
+if grep -Fq "$TERMUX_ADB_SETUP_TIMEOUT_MARKER" "$tmp/boot-probe-stderr"; then
+  printf 'termux adb test failed: recoverable boot timeout got retry marker\n' >&2
+  exit 1
+fi
+
+export ADB_BEHAVIOR=hard-hang
+export ADB_PID_FILE=$tmp/cancelled-adb-pids
+TERMUX_ADB_TIMEOUT_SECONDS=30 "$adb_wrapper" \
+  -s emulator-5554 shell input keyevent 82 \
+  2>"$tmp/cancelled-wrapper-stderr" &
+wrapper_pid=$!
+for _ in {1..40}; do
+  [[ -s "$ADB_PID_FILE" ]] && break
+  sleep 0.05
+done
+[[ -s "$ADB_PID_FILE" ]] || {
+  printf 'termux adb test failed: cancellation fixture did not start\n' >&2
+  exit 1
+}
+kill -TERM "$wrapper_pid"
+if wait "$wrapper_pid"; then
+  printf 'termux adb test failed: cancelled wrapper exited successfully\n' >&2
+  exit 1
+else
+  rc=$?
+fi
+[[ "$rc" -eq 143 ]] || {
+  printf 'termux adb test failed: cancelled wrapper returned %s\n' "$rc" >&2
+  exit 1
+}
+assert_processes_gone "$ADB_PID_FILE" cancellation
+
+unset TERMUX_ADB_REAL
+action_script=$(yq -r '.runs.steps[0].run' \
+  "$GITHUB_ACTION_PATH/action.yml")
+stage_env=$tmp/stage-env
+stage_path=$tmp/stage-path
+: >"$stage_env"
+: >"$stage_path"
+GITHUB_ENV=$stage_env GITHUB_PATH=$stage_path bash -c "$action_script"
+staged_real=$(sed -n 's/^TERMUX_ADB_REAL=//p' "$stage_env" | tail -n 1)
+staged_path=$(tail -n 1 "$stage_path")
+[[ "$staged_real" == "$tmp/adb" && "$staged_path" == "${adb_wrapper%/*}" ]] || {
+  printf 'termux adb test failed: composite did not stage the wrapper\n' >&2
+  exit 1
+}
+export ADB_BEHAVIOR=success
+timeout_bin=$tmp/timeout-bin
+mkdir "$timeout_bin"
+cat >"$timeout_bin/timeout" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$TIMEOUT_CALLS"
+[[ "$1" == --kill-after=5 ]]
+shift
+[[ "$1" == 30 ]]
+shift
+exec "$@"
+EOF
+chmod +x "$timeout_bin/timeout"
+export TIMEOUT_CALLS=$tmp/timeout-calls
+TERMUX_ADB_REAL=$staged_real PATH="$timeout_bin:$staged_path:$PATH" \
+  adb shell get-serialno
+grep -Fxq 'shell get-serialno' "$ADB_CALLS" || {
+  printf 'termux adb test failed: staged PATH did not invoke the real adb\n' >&2
+  exit 1
+}
+grep -Fq -- '--kill-after=5 30 bash -c' "$TIMEOUT_CALLS" || {
+  printf 'termux adb test failed: staged wrapper did not use the default deadline\n' >&2
+  exit 1
+}
+TERMUX_ADB_REAL=$staged_real PATH="$staged_path:$PATH" \
+  GITHUB_ENV=$stage_env GITHUB_PATH=$stage_path bash -c "$action_script"
+restaged_real=$(sed -n 's/^TERMUX_ADB_REAL=//p' "$stage_env" | tail -n 1)
+[[ "$restaged_real" == "$tmp/adb" ]] || {
+  printf 'termux adb test failed: repeated staging captured its own wrapper\n' >&2
+  exit 1
+}
+
+unset TERMUX_ADB_REAL ADB_PID_FILE
+export ADB_BEHAVIOR=success
 
 termux_adb 2 shell getprop ro.build.version.sdk
 grep -Fxq 'shell getprop ro.build.version.sdk' "$ADB_CALLS" || {

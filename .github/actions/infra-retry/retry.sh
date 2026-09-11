@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+# shellcheck source=.github/actions/shared/infra-stall-markers.sh
+source "${BASH_SOURCE[0]%/*}/../shared/infra-stall-markers.sh"
+
 notice() {
   printf 'infra-retry: %s\n' "$*"
 }
@@ -96,10 +99,11 @@ is_retryable_shellcheck_download() {
 is_retryable_bounded_stall() {
   local log=$1
 
-  # The shared and Termux retry helpers print these owned tokens only for
-  # bounded package stalls. Classification therefore does not depend on any
-  # package manager's human-readable wording.
-  grep -Eq 'infra-stall: (Termux )?package command exhausted bounded retries' "$log"
+  # Provider-owned wrappers print these tokens only when their supervisor
+  # deadline expires. Classification therefore does not depend on third-party
+  # package-manager or Android-emulator wording.
+  grep -Eq 'infra-stall: (Termux )?package command exhausted bounded retries' \
+    "$log" || grep -Fq "$TERMUX_ADB_SETUP_TIMEOUT_MARKER" "$log"
 }
 
 is_retryable_step_timeout() {

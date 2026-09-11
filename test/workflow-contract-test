@@ -321,6 +321,10 @@ contracts() {
   check_file '.runs.using == "composite"' .github/actions/termux-adb/action.yml
   check_file '.runs.steps[0].run | contains("$GITHUB_ACTION_PATH/termux-adb.sh")' .github/actions/termux-adb/action.yml
   check_file '.runs.steps[0].run | contains("TERMUX_ADB_HELPER=%s")' .github/actions/termux-adb/action.yml
+  check_file '.runs.steps[0].run | contains("TERMUX_ADB_REAL=%s")' .github/actions/termux-adb/action.yml
+  check_file '.runs.steps[0].run | contains("${TERMUX_ADB_REAL:-}")' .github/actions/termux-adb/action.yml
+  check_file '.runs.steps[0].run | contains("$GITHUB_ACTION_PATH/bin")' .github/actions/termux-adb/action.yml
+  check_file '.runs.steps[0].run | contains("$GITHUB_PATH")' .github/actions/termux-adb/action.yml
 
   check '.jobs.termux.steps[] | select(.name == "Stage exact Dot bootstrap payload").if == "inputs.setup == '\''dotfiles'\''"' _termux-ci.yml
   check ".jobs.termux.steps[] | select(.name == \"Stage exact Dot bootstrap payload\").uses == \"cgraf78/actions/.github/actions/dotfiles-bootstrap@$actions_lock\"" _termux-ci.yml
