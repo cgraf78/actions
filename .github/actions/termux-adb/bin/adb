@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+: "${TERMUX_ADB_REAL:?TERMUX_ADB_REAL is required}"
+timeout_seconds=${TERMUX_ADB_TIMEOUT_SECONDS:-30}
+[[ "$timeout_seconds" =~ ^[1-9][0-9]*$ ]] || {
+  printf 'invalid Termux ADB timeout: %s\n' "$timeout_seconds" >&2
+  exit 2
+}
+
+action_root=$(cd -- "${BASH_SOURCE[0]%/*}/.." && pwd -P)
+# shellcheck source=.github/actions/termux-adb/termux-adb.sh
+source "$action_root/termux-adb.sh"
+# shellcheck source=.github/actions/shared/infra-stall-markers.sh
+source "$action_root/../shared/infra-stall-markers.sh"
+
+status_file=$(mktemp)
+supervisor_pid=
+# shellcheck disable=SC2329  # Invoked by the EXIT trap below.
+cleanup() {
+  rm -f "$status_file"
+}
+# shellcheck disable=SC2329  # Invoked by the signal traps below.
+cancel() {
+  local exit_code=$1
+  trap - HUP INT TERM
+  if [[ -n "$supervisor_pid" ]]; then
+    kill -KILL -- "-$supervisor_pid" 2>/dev/null ||
+      kill -KILL "$supervisor_pid" 2>/dev/null || true
+    wait "$supervisor_pid" 2>/dev/null || true
+  fi
+  exit "$exit_code"
+}
+is_uncaught_setup_call() {
+  # The pinned emulator runner does not catch failure from this post-boot
+  # input command. Its boot probes and cleanup calls have their own recovery,
+  # so marking those would let an old marker mask a later test failure.
+  case "$*" in
+    -s\ emulator-*\ shell\ input\ keyevent\ 82)
+      return 0
+      ;;
+  esac
+  return 1
+}
+trap cleanup EXIT
+trap 'cancel 129' HUP
+trap 'cancel 130' INT
+trap 'cancel 143' TERM
+
+# Record a completed child's status out of band. GNU timeout reserves 124 for
+# its own deadline, but adb can legitimately return the same status. The file
+# distinguishes those paths without parsing display text from either process.
+# shellcheck disable=SC2016  # The child script expands only its own arguments.
+_termux_adb_timeout_exec "$timeout_seconds" bash -c '
+  status_file=$1
+  shift
+  trap "exit 200" HUP INT TERM
+  set +e
+  "$@"
+  rc=$?
+  printf "%s\n" "$rc" >"$status_file"
+  exit "$rc"
+' termux-adb-status "$status_file" "$TERMUX_ADB_REAL" "$@" <&0 &
+supervisor_pid=$!
+if wait "$supervisor_pid"; then
+  rc=0
+else
+  rc=$?
+fi
+supervisor_pid=
+
+if [[ -s "$status_file" ]]; then
+  read -r child_rc <"$status_file"
+  [[ "$child_rc" =~ ^[0-9]+$ ]] || {
+    printf 'invalid Termux ADB child status: %s\n' "$child_rc" >&2
+    exit 2
+  }
+  exit "$child_rc"
+fi
+
+if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
+  if is_uncaught_setup_call "$@"; then
+    printf '%s\n' "$TERMUX_ADB_SETUP_TIMEOUT_MARKER" >&2
+  fi
+  exit 124
+fi
+exit "$rc"

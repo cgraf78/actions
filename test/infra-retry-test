@@ -4,6 +4,8 @@ set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 retry="$root/.github/actions/infra-retry/retry.sh"
+# shellcheck source=.github/actions/shared/infra-stall-markers.sh
+source "$root/.github/actions/shared/infra-stall-markers.sh"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -95,6 +97,7 @@ EOF
 mkdir -p \
   "$tmp/infra-logs" \
   "$tmp/termux-logs" \
+  "$tmp/termux-adb-logs" \
   "$tmp/shellcheck-http-logs" \
   "$tmp/shellcheck-connection-logs" \
   "$tmp/shellcheck-checksum-logs" \
@@ -188,6 +191,41 @@ EOF
 run_case termux-package "$tmp/termux-package-jobs.json" "$tmp/termux-logs"
 grep -Fq 'rerun-failed-jobs' "$tmp/termux-package/gh-calls" ||
   fail "bounded Termux package failure was not rerun"
+
+write_jobs "$tmp/termux-adb-jobs.json" \
+  '37:rust / Termux runtime / Runtime / Android / Termux x86_64:failure' \
+  '38:rust / Termux runtime / Required:failure' \
+  '39:rust / Required:failure'
+printf '%s\n%s\n' \
+  "$TERMUX_ADB_SETUP_TIMEOUT_MARKER" \
+  'Error: Process completed with exit code 124.' \
+  >"$tmp/termux-adb-logs/37.log"
+
+run_case termux-adb "$tmp/termux-adb-jobs.json" "$tmp/termux-adb-logs"
+grep -Fq 'rerun-failed-jobs' "$tmp/termux-adb/gh-calls" ||
+  fail "bounded Termux ADB failure was not rerun"
+
+cat >"$tmp/termux-adb-logs/37.log" <<'EOF'
+The adb subprocess returned status 124 without a supervisor timeout.
+Error: Process completed with exit code 124.
+EOF
+run_case termux-adb-child-124 \
+  "$tmp/termux-adb-jobs.json" "$tmp/termux-adb-logs"
+if grep -Fq 'rerun-failed-jobs' "$tmp/termux-adb-child-124/gh-calls"; then
+  fail "ordinary adb status 124 was infrastructure-rerun"
+fi
+
+cat >"$tmp/termux-adb-logs/37.log" <<'EOF'
+timeout: sending signal TERM to command '/usr/bin/adb'
+The repository test suite failed after emulator startup.
+Error: Process completed with exit code 1.
+EOF
+run_case termux-adb-recovered-probe \
+  "$tmp/termux-adb-jobs.json" "$tmp/termux-adb-logs"
+if grep -Fq 'rerun-failed-jobs' \
+  "$tmp/termux-adb-recovered-probe/gh-calls"; then
+  fail "recovered adb timeout masked a repository test failure"
+fi
 
 cat >"$tmp/termux-logs/19.log" <<'EOF'
 E: Unable to correct problems, you have held broken packages.

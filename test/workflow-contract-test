@@ -33,11 +33,12 @@ check_step_order() {
   local before=$1
   local after=$2
   local workflow=$3
+  local job=${4:-build}
   local before_index after_index
 
-  before_index=$(yq -r ".jobs.build.steps | to_entries | .[] | select(.value.name == \"$before\") | .key" \
+  before_index=$(yq -r ".jobs.$job.steps | to_entries | .[] | select(.value.name == \"$before\") | .key" \
     "$root/.github/workflows/$workflow")
-  after_index=$(yq -r ".jobs.build.steps | to_entries | .[] | select(.value.name == \"$after\") | .key" \
+  after_index=$(yq -r ".jobs.$job.steps | to_entries | .[] | select(.value.name == \"$after\") | .key" \
     "$root/.github/workflows/$workflow")
   if [[ -z $before_index || -z $after_index || $before_index -ge $after_index ]]; then
     printf 'workflow contract failed: %s: %s must precede %s\n' \
@@ -164,6 +165,18 @@ shell_platform_test_window=$((shell_platform_job_window - \
 # shellcheck disable=SC2016
 contracts() {
   local workflow
+
+  check '(.on | has("workflow_call"))' dependabot-automerge.yml
+  check '(.permissions | length) == 0' dependabot-automerge.yml
+  check '.jobs.enable.if | contains("github.event_name == '\''pull_request_target'\''")' dependabot-automerge.yml
+  check '.jobs.enable.if | contains("github.event.pull_request.user.login == '\''dependabot[bot]'\''")' dependabot-automerge.yml
+  check '.jobs.enable.permissions.contents == "write"' dependabot-automerge.yml
+  check '.jobs.enable.permissions."pull-requests" == "write"' dependabot-automerge.yml
+  check '(.jobs.enable.permissions | length) == 2' dependabot-automerge.yml
+  check '.jobs.enable."timeout-minutes" == 5' dependabot-automerge.yml
+  check '[.jobs.enable.steps[] | select(.uses != null)] | length == 0' dependabot-automerge.yml
+  check '.jobs.enable.steps[] | select(.name == "Enable squash auto-merge").run | contains("gh pr merge \"$PR_NUMBER\" --repo \"$GITHUB_REPOSITORY\" --auto --squash")' dependabot-automerge.yml
+  check '.jobs.enable.steps[] | select(.name == "Enable squash auto-merge").run | contains("--admin") | not' dependabot-automerge.yml
 
   check '.on.workflow_call.inputs.project_name.required == true' mise-lock-refresh.yml
   check '.on.workflow_call.inputs.project_name.type == "string"' mise-lock-refresh.yml
@@ -302,6 +315,8 @@ contracts() {
   check '.jobs.termux."timeout-minutes" == 50' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Run caller tests in Termux").with."emulator-boot-timeout" == 600' _termux-ci.yml
   check ".jobs.termux.steps[] | select(.name == \"Stage bounded Termux ADB helper\").uses == \"cgraf78/actions/.github/actions/termux-adb@$actions_lock\"" _termux-ci.yml
+  check_step_order 'Stage bounded Termux ADB helper' \
+    'Run caller tests in Termux' _termux-ci.yml termux
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("source \"$TERMUX_ADB_HELPER\"")' _termux-ci.yml
   check '[.jobs.termux.steps[] | select((.run? // "") | contains("$GITHUB_WORKSPACE/.github/scripts/termux-adb.sh"))] | length == 0' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("termux_wait_for_runtime 30 3 1")' _termux-ci.yml
@@ -309,6 +324,10 @@ contracts() {
   check_file '.runs.using == "composite"' .github/actions/termux-adb/action.yml
   check_file '.runs.steps[0].run | contains("$GITHUB_ACTION_PATH/termux-adb.sh")' .github/actions/termux-adb/action.yml
   check_file '.runs.steps[0].run | contains("TERMUX_ADB_HELPER=%s")' .github/actions/termux-adb/action.yml
+  check_file '.runs.steps[0].run | contains("TERMUX_ADB_REAL=%s")' .github/actions/termux-adb/action.yml
+  check_file '.runs.steps[0].run | contains("${TERMUX_ADB_REAL:-}")' .github/actions/termux-adb/action.yml
+  check_file '.runs.steps[0].run | contains("$GITHUB_ACTION_PATH/bin")' .github/actions/termux-adb/action.yml
+  check_file '.runs.steps[0].run | contains("$GITHUB_PATH")' .github/actions/termux-adb/action.yml
 
   check '.jobs.termux.steps[] | select(.name == "Stage exact Dot bootstrap payload").if == "inputs.setup == '\''dotfiles'\''"' _termux-ci.yml
   check ".jobs.termux.steps[] | select(.name == \"Stage exact Dot bootstrap payload\").uses == \"cgraf78/actions/.github/actions/dotfiles-bootstrap@$actions_lock\"" _termux-ci.yml

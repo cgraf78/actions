@@ -13,6 +13,16 @@ repository-relative config and lock paths. The example expects a
 only to the consumer repository. The caller owns the weekly schedule; the
 shared workflow owns lock resolution, the update PR, and protected auto-merge.
 
+## Dependabot auto-merge
+
+Copy `examples/dependabot-automerge.yml` to
+`.github/workflows/dependabot-automerge.yml`. Enable repository auto-merge and
+require the ordinary test workflow on the default branch. The caller responds
+only to Dependabot-authored pull requests, and the shared workflow enables
+squash auto-merge without checking out or executing the proposed dependency
+code. Branch protection remains the authority that decides when the PR is
+green enough to land.
+
 ## Shell repository
 
 Copy the following files into a shell-tool repository and adapt the test path
@@ -36,8 +46,9 @@ Copy and adapt:
 ```text
 examples/rust-ci.yml               -> .github/workflows/test.yml
 examples/rust-release.yml          -> .github/workflows/release.yml
+examples/dependabot-automerge.yml  -> .github/workflows/dependabot-automerge.yml
 examples/retry-infrastructure.yml  -> .github/workflows/retry-infrastructure.yml
-examples/dependabot.yml             -> .github/dependabot.yml
+examples/dependabot-rust.yml        -> .github/dependabot.yml
 examples/release.conf               -> scripts/release.conf
 ```
 

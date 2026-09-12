@@ -1,5 +1,7 @@
 # actions
 
+![Tests](https://github.com/cgraf78/actions/actions/workflows/test.yml/badge.svg?branch=main)
+
 Reusable GitHub Actions workflows and action helpers for `cgraf78` repos.
 
 Public CI workflows expose a stable `Required` job for branch protection.
