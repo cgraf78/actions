@@ -52,6 +52,24 @@ The renderer derives these values from existing release policy:
 - an optional `man/man1/$RELEASE_BINARY.1` link when that file is a required
   `RELEASE_PAYLOAD_FILES` entry
 
+Two optional keys extend the generated installer. When unset they render as
+empty strings and the related behavior stays inert, so existing consumers
+render equivalent installers:
+
+- `RELEASE_BINARY_VERSION_STYLE` (`version` or `commit`): after activation,
+  probe the installed binary's `--version` output in an isolated environment
+  (owned process group, five-second deadline, 1 KiB output cap) and require it
+  to identify the release: the full version for `version`, the twelve-character
+  commit prefix for `commit`. Empty skips the identity match while still
+  requiring one newline-terminated line of at most 1024 bytes.
+- `RELEASE_INSTALL_INIT_SUBCOMMAND` (a safe subcommand name): enables a
+  trailing `--init [ARGS...]` installer option that runs
+  `<binary> <subcommand> [ARGS...]` after a complete install. Initialization
+  is a consumer command, not part of installation's atomic publication
+  transaction: the installer releases its lock and scratch state first, so an
+  init failure cannot roll back a complete install. Empty rejects `--init` as
+  an unknown option.
+
 No second installer-specific layout manifest is needed.
 
 ## User interface
@@ -63,7 +81,11 @@ install.sh --archive PATH [--checksum PATH]
   --data-home PATH
   --bin-dir PATH
   --man-dir PATH
+  --init [ARGS...]  run initialization after install (must be last option)
 ```
+
+The `--init` line appears only when the consumer sets
+`RELEASE_INSTALL_INIT_SUBCOMMAND`.
 
 Without `--version`, online installation follows the repository's GitHub
 `releases/latest` redirect, validates the resulting release tag, and downloads

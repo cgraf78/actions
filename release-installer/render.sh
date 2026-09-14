@@ -52,6 +52,8 @@ RELEASE_REPO=
 RELEASE_ASSET_NAME=
 RELEASE_BINARY=
 RELEASE_BINARY_DEST=
+RELEASE_BINARY_VERSION_STYLE=
+RELEASE_INSTALL_INIT_SUBCOMMAND=
 RELEASE_PAYLOAD_FILES=()
 
 # shellcheck source=/dev/null
@@ -82,6 +84,16 @@ done
 
 : "${RELEASE_REPO:=cgraf78/$RELEASE_SLUG}"
 : "${RELEASE_BINARY_DEST:=$RELEASE_BINARY}"
+: "${RELEASE_BINARY_VERSION_STYLE:=}"
+: "${RELEASE_INSTALL_INIT_SUBCOMMAND:=}"
+case "$RELEASE_BINARY_VERSION_STYLE" in
+  '' | version | commit) ;;
+  *) die "RELEASE_BINARY_VERSION_STYLE must be empty, version, or commit" ;;
+esac
+if [[ -n "$RELEASE_INSTALL_INIT_SUBCOMMAND" &&
+  "$RELEASE_INSTALL_INIT_SUBCOMMAND" == *[!A-Za-z0-9._-]* ]]; then
+  die "RELEASE_INSTALL_INIT_SUBCOMMAND must be a safe subcommand name"
+fi
 [[ "$RELEASE_REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] ||
   die "RELEASE_REPO must be an owner/repository name"
 case "$RELEASE_BINARY_DEST" in
@@ -112,6 +124,8 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   line=${line//@RELEASE_ASSET_NAME@/$RELEASE_ASSET_NAME}
   line=${line//@RELEASE_BINARY@/$RELEASE_BINARY}
   line=${line//@RELEASE_BINARY_DEST@/$RELEASE_BINARY_DEST}
+  line=${line//@RELEASE_BINARY_VERSION_STYLE@/$RELEASE_BINARY_VERSION_STYLE}
+  line=${line//@RELEASE_INSTALL_INIT_SUBCOMMAND@/$RELEASE_INSTALL_INIT_SUBCOMMAND}
   line=${line//@RELEASE_MANPAGE_PATH@/$manpage_path}
   printf '%s\n' "$line" >>"$tmp"
 done <"$template"
