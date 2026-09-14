@@ -193,7 +193,7 @@ contracts() {
   check '.jobs.resolve.permissions.contents == "read"' mise-lock-refresh.yml
   check '(.jobs.resolve.permissions | length) == 1' mise-lock-refresh.yml
   check '.jobs.resolve."timeout-minutes" == 20' mise-lock-refresh.yml
-  check '.jobs.resolve.steps[] | select(.name == "Install Mise").uses == "jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518"' mise-lock-refresh.yml
+  check '.jobs.resolve.steps[] | select(.name == "Install Mise").uses == "jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c"' mise-lock-refresh.yml
   check '.jobs.resolve.steps[] | select(.name == "Install Mise").with.version == "${{ inputs.mise_version }}"' mise-lock-refresh.yml
   check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").env.MISE_CONFIG_FILE == "${{ inputs.mise_config_file }}"' mise-lock-refresh.yml
   check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").env.MISE_LOCK_FILE == "${{ inputs.mise_lock_file }}"' mise-lock-refresh.yml
