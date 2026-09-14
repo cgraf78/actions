@@ -36,6 +36,7 @@ program	release-scripts/release.sh
 program	release-scripts/smoke-release.sh
 program	release-scripts/sync.sh
 program	test/consumer-sync-test
+program	test/check-uses-pins.sh
 program	test/checkout-installer-bash32-test
 program	test/checkout-installer-development-test
 program	test/checkout-installer-network-test
@@ -57,4 +58,5 @@ program	test/self-pin-retention-test
 program	test/shell-ci-prereqs-test
 program	test/shellcheck-action-test
 program	test/termux-adb-test
+program	test/uses-pin-policy-test
 program	test/workflow-contract-test
