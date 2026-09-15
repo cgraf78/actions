@@ -166,6 +166,12 @@ shell_platform_test_window=$((shell_platform_job_window - \
 contracts() {
   local workflow
 
+  # Third-party pins stay consistent but never absolute: Dependabot bumps
+  # every site of one action in a single PR, so per-site SHAs would break
+  # every bump. Agreement plus immutable SHAs is the enforced invariant;
+  # version review happens on the bump PR itself.
+  "$root/test/check-uses-pins.sh" "$root"
+
   check '(.on | has("workflow_call"))' dependabot-automerge.yml
   check '(.permissions | length) == 0' dependabot-automerge.yml
   check '.jobs.enable.if | contains("github.event_name == '\''pull_request_target'\''")' dependabot-automerge.yml
@@ -193,7 +199,7 @@ contracts() {
   check '.jobs.resolve.permissions.contents == "read"' mise-lock-refresh.yml
   check '(.jobs.resolve.permissions | length) == 1' mise-lock-refresh.yml
   check '.jobs.resolve."timeout-minutes" == 20' mise-lock-refresh.yml
-  check '.jobs.resolve.steps[] | select(.name == "Install Mise").uses == "jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c"' mise-lock-refresh.yml
+  check '.jobs.resolve.steps[] | select(.name == "Install Mise").uses | test("^jdx/mise-action@[0-9a-f]{40}$")' mise-lock-refresh.yml
   check '.jobs.resolve.steps[] | select(.name == "Install Mise").with.version == "${{ inputs.mise_version }}"' mise-lock-refresh.yml
   check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").env.MISE_CONFIG_FILE == "${{ inputs.mise_config_file }}"' mise-lock-refresh.yml
   check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").env.MISE_LOCK_FILE == "${{ inputs.mise_lock_file }}"' mise-lock-refresh.yml
@@ -202,7 +208,7 @@ contracts() {
   check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").run | contains("git diff --name-only -z HEAD")' mise-lock-refresh.yml
   check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").run | contains("verification changed repository history during Mise lock refresh")' mise-lock-refresh.yml
   check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").run | contains("git diff --cached --binary --full-index")' mise-lock-refresh.yml
-  check '.jobs.resolve.steps[] | select(.name == "Upload validated lock patch").uses == "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"' mise-lock-refresh.yml
+  check '.jobs.resolve.steps[] | select(.name == "Upload validated lock patch").uses | test("^actions/upload-artifact@[0-9a-f]{40}$")' mise-lock-refresh.yml
   check '.jobs.publish.needs == "resolve"' mise-lock-refresh.yml
   check '.jobs.publish.if == "needs.resolve.outputs.changed == '\''true'\''"' mise-lock-refresh.yml
   check '.jobs.publish.permissions.contents == "write"' mise-lock-refresh.yml
@@ -210,7 +216,7 @@ contracts() {
   check '.jobs.publish.steps[] | select(.name == "Require the repository-scoped deploy key").env.DEPLOY_KEY == "${{ secrets.deploy_key }}"' mise-lock-refresh.yml
   check '.jobs.publish.steps[] | select(.name == "Checkout exact refresh base").with."ssh-key" == "${{ secrets.deploy_key }}"' mise-lock-refresh.yml
   check '.jobs.publish.steps[] | select(.name == "Checkout exact refresh base").with."persist-credentials" == true' mise-lock-refresh.yml
-  check '.jobs.publish.steps[] | select(.name == "Download validated lock patch").uses == "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"' mise-lock-refresh.yml
+  check '.jobs.publish.steps[] | select(.name == "Download validated lock patch").uses | test("^actions/download-artifact@[0-9a-f]{40}$")' mise-lock-refresh.yml
   check '.jobs.publish.steps[] | select(.name == "Publish update and enable auto-merge").run | contains("gh pr create")' mise-lock-refresh.yml
   check '.jobs.publish.steps[] | select(.name == "Publish update and enable auto-merge").run | contains("git commit --amend")' mise-lock-refresh.yml
   check '.jobs.publish.steps[] | select(.name == "Publish update and enable auto-merge").run | contains("--force-with-lease=$remote_ref:$published_sha")' mise-lock-refresh.yml
@@ -294,7 +300,7 @@ contracts() {
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env | has("DOT_INIT_SKIP_PROVIDER") | not' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Install pinned Mise").if == "(inputs.setup == '\''checkrun'\'' || inputs.setup == '\''dotfiles'\'') && matrix.name != '\''Alpine'\''"' _shell-platforms.yml
   check '[.jobs.platform.steps[] | select((.uses // "") | contains("actions/cache@"))] | length == 2' _shell-platforms.yml
-  check '[.jobs.platform.steps[] | select(.uses == "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9")] | length == 2' _shell-platforms.yml
+  check '[.jobs.platform.steps[] | select((.uses // "") | test("^actions/cache@[0-9a-f]{40}$"))] | length == 2' _shell-platforms.yml
 
   check '.jobs.required.name == "Required"' termux-ci.yml
   check '.jobs.required.if == "${{ always() }}"' termux-ci.yml
@@ -441,7 +447,7 @@ contracts() {
   check '.jobs.rustsec.if == "inputs.audit-command != '"'"''"'"'"' rust-ci.yml
   check '.jobs.rustsec.env.CARGO_AUDIT_VERSION == "0.22.2"' rust-ci.yml
   check '[.jobs.rustsec.steps[] | select((.uses // "") | test("^actions/cache/(restore|save)@"))] | length == 2' rust-ci.yml
-  check '.jobs.rustsec.steps[] | select(.name == "Restore pinned cargo-audit").uses == "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Restore pinned cargo-audit").uses | test("^actions/cache/restore@[0-9a-f]{40}$")' rust-ci.yml
   check '.jobs.rustsec.steps[] | select(.name == "Restore pinned cargo-audit").id == "cargo-audit-cache"' rust-ci.yml
   check '.jobs.rustsec.steps[] | select(.name == "Restore pinned cargo-audit")."continue-on-error" == true' rust-ci.yml
   check '.jobs.rustsec.steps[] | select(.name == "Restore pinned cargo-audit").with.path == "~/.cargo/bin/cargo-audit"' rust-ci.yml
@@ -454,7 +460,7 @@ contracts() {
   check '.jobs.rustsec.steps[] | select(.name == "Verify cargo-audit").run | contains("actual=$(\"$HOME/.cargo/bin/cargo-audit\" --version)")' rust-ci.yml
   check '.jobs.rustsec.steps[] | select(.name == "Verify cargo-audit").run | contains("if [[ \"$actual\" != \"$expected\" ]]; then")' rust-ci.yml
   check '.jobs.rustsec.steps[] | select(.name == "Verify cargo-audit").run | contains("exit 1")' rust-ci.yml
-  check '.jobs.rustsec.steps[] | select(.name == "Save pinned cargo-audit").uses == "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"' rust-ci.yml
+  check '.jobs.rustsec.steps[] | select(.name == "Save pinned cargo-audit").uses | test("^actions/cache/save@[0-9a-f]{40}$")' rust-ci.yml
   check '.jobs.rustsec.steps[] | select(.name == "Save pinned cargo-audit").if == "steps.cargo-audit-cache.outputs.cache-hit != '\''true'\'' && (github.event_name == '\''push'\'' || github.event_name == '\''schedule'\'' || github.event_name == '\''workflow_dispatch'\'') && github.ref == format('\''refs/heads/{0}'\'', github.event.repository.default_branch)"' rust-ci.yml
   check '.jobs.rustsec.steps[] | select(.name == "Save pinned cargo-audit")."continue-on-error" == true' rust-ci.yml
   check '.jobs.rustsec.steps[] | select(.name == "Save pinned cargo-audit").with.path == "~/.cargo/bin/cargo-audit"' rust-ci.yml
@@ -493,7 +499,7 @@ contracts() {
   check '.jobs.build.steps[] | select(.name == "Upload release assets").with."github-token" == "${{ github.token }}"' rust-release.yml
   check '.jobs.build.steps[] | select(.name == "Upload release assets").with.tag == "${{ github.ref_name }}"' rust-release.yml
   check '.jobs.build.steps[] | select(.name == "Attest release assets").if == "matrix.enabled"' rust-release.yml
-  check '.jobs.build.steps[] | select(.name == "Attest release assets").uses == "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6"' rust-release.yml
+  check '.jobs.build.steps[] | select(.name == "Attest release assets").uses | test("^actions/attest@[0-9a-f]{40}$")' rust-release.yml
   check '.jobs.build.steps[] | select(.name == "Attest release assets").with."subject-path" == "${{ steps.release-assets.outputs.asset-paths }}"' rust-release.yml
   check_step_order 'Package archive' 'Select release assets' rust-release.yml
   check_step_order 'Smoke install' 'Select release assets' rust-release.yml
@@ -532,6 +538,7 @@ contracts() {
   check '.jobs.shell-smoke.with.test-command | contains("python3 -c '\''import tomllib'\''")' test.yml
   check '.jobs.shell-smoke.with.shellcheck-inventory-path == ".github/shellcheck-files.txt"' test.yml
   check '.jobs.quality.steps[] | select(.name == "Test shared ShellCheck inventory action").run == "test/shellcheck-action-test"' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Test third-party uses pin policy").run == "test/uses-pin-policy-test"' test.yml
   check '.jobs.quality.steps[] | select(.name == "Test consumer synchronization").run == "test/consumer-sync-test"' test.yml
   check '.jobs.quality.steps[] | select(.name == "Test generated release installer").run == "test/release-installer-test"' test.yml
   check '.jobs.quality.steps[] | select(.name == "Test generated checkout installer").run == "test/checkout-installer-test"' test.yml
