@@ -84,17 +84,18 @@ done
 
 : "${RELEASE_REPO:=cgraf78/$RELEASE_SLUG}"
 : "${RELEASE_BINARY_DEST:=$RELEASE_BINARY}"
-: "${RELEASE_BINARY_VERSION_STYLE:=version}"
-[[ "$RELEASE_REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] ||
-  die "RELEASE_REPO must be an owner/repository name"
+: "${RELEASE_BINARY_VERSION_STYLE:=}"
+: "${RELEASE_INSTALL_INIT_SUBCOMMAND:=}"
 case "$RELEASE_BINARY_VERSION_STYLE" in
-  version | commit) ;;
-  *) die "RELEASE_BINARY_VERSION_STYLE must be version or commit" ;;
+  '' | version | commit) ;;
+  *) die "RELEASE_BINARY_VERSION_STYLE must be empty, version, or commit" ;;
 esac
 if [[ -n "$RELEASE_INSTALL_INIT_SUBCOMMAND" &&
   "$RELEASE_INSTALL_INIT_SUBCOMMAND" == *[!A-Za-z0-9._-]* ]]; then
-  die "RELEASE_INSTALL_INIT_SUBCOMMAND must be one safe argument"
+  die "RELEASE_INSTALL_INIT_SUBCOMMAND must be a safe subcommand name"
 fi
+[[ "$RELEASE_REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] ||
+  die "RELEASE_REPO must be an owner/repository name"
 case "$RELEASE_BINARY_DEST" in
   '' | . | .. | /* | ./* | */./* | */. | *[!A-Za-z0-9._/-]* | *//* | ../* | */../* | */..)
     die "RELEASE_BINARY_DEST must be a safe relative archive path"

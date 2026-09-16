@@ -291,6 +291,10 @@ jobs:
         shell: bash
         run: test/workflow-contract-test
 
+      - name: Test third-party uses pin policy
+        shell: bash
+        run: test/uses-pin-policy-test
+
       - name: Test bounded Termux ADB commands
         shell: bash
         run: test/termux-adb-test

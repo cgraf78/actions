@@ -49,11 +49,29 @@ The renderer derives these values from existing release policy:
 - `RELEASE_SLUG`
 - `RELEASE_ASSET_NAME`
 - `RELEASE_BINARY` and `RELEASE_BINARY_DEST`
-- `RELEASE_BINARY_VERSION_STYLE` (`version` by default, or `commit`)
+- `RELEASE_BINARY_VERSION_STYLE` (empty to skip the match, `version`, or `commit`)
 - optional `RELEASE_INSTALL_INIT_SUBCOMMAND`, one safe argument enabling the
   post-install `--init` interface
 - an optional `man/man1/$RELEASE_BINARY.1` link when that file is a required
   `RELEASE_PAYLOAD_FILES` entry
+
+Two optional keys extend the generated installer. When unset they render as
+empty strings and the related behavior stays inert, so existing consumers
+render equivalent installers:
+
+- `RELEASE_BINARY_VERSION_STYLE` (`version` or `commit`): after activation,
+  probe the installed binary's `--version` output in an isolated environment
+  (owned process group, five-second deadline, 1 KiB output cap) and require it
+  to identify the release: the full version for `version`, the twelve-character
+  commit prefix for `commit`. Empty skips the identity match while still
+  requiring one newline-terminated line of at most 1024 bytes.
+- `RELEASE_INSTALL_INIT_SUBCOMMAND` (a safe subcommand name): enables a
+  trailing `--init [ARGS...]` installer option that runs
+  `<binary> <subcommand> [ARGS...]` after a complete install. Initialization
+  is a consumer command, not part of installation's atomic publication
+  transaction: the installer releases its lock and scratch state first, so an
+  init failure cannot roll back a complete install. Empty rejects `--init` as
+  an unknown option.
 
 No second installer-specific layout manifest is needed.
 
@@ -66,8 +84,11 @@ install.sh --archive PATH [--checksum PATH]
   --data-home PATH
   --bin-dir PATH
   --man-dir PATH
-  --init [ARGS...]  # configured consumers only; must be last
+  --init [ARGS...]  run initialization after install (must be last option)
 ```
+
+The `--init` line appears only when the consumer sets
+`RELEASE_INSTALL_INIT_SUBCOMMAND`.
 
 Without `--version`, online installation follows the repository's GitHub
 `releases/latest` redirect, validates the resulting release tag, and downloads
@@ -157,7 +178,8 @@ Before extraction or activation, the generated installer:
 - verifies embedded schema, repository, platform, tag/version, method, and commit
   identity;
 - executes the staged binary with `--version` and requires one bounded output
-  line identifying either the exact release version or, for `commit` style,
+  line; when `RELEASE_BINARY_VERSION_STYLE` is configured, the line must
+  identify either the exact release version or, for `commit` style,
   the first 12 characters of the metadata commit;
 - holds a per-install-root publication lock while staging and switching.
 

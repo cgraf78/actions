@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+checker="$root/test/check-uses-pins.sh"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() {
+  printf 'uses-pin-policy-test: %s\n' "$1" >&2
+  exit 1
+}
+
+sha_a=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+sha_b=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+
+make_fixture() {
+  local name=$1
+  local dir="$tmp/$name"
+  mkdir -p "$dir/.github/workflows" "$dir/.github/actions/example"
+  printf '%s' "$dir"
+}
+
+expect_pass() {
+  local label=$1 dir=$2
+  if ! "$checker" "$dir" >/dev/null 2>&1; then
+    fail "$label: expected pass"
+  fi
+}
+
+expect_fail() {
+  local label=$1 dir=$2 pattern=$3
+  local output
+  if output=$("$checker" "$dir" 2>&1); then
+    fail "$label: expected failure"
+  fi
+  grep -Fq "$pattern" <<<"$output" || fail "$label: missing <$pattern> in: $output"
+}
+
+# Consistent pins across workflows and composite actions pass.
+dir=$(make_fixture consistent)
+cat >"$dir/.github/workflows/ci.yml" <<EOF
+jobs:
+  build:
+    steps:
+      - uses: actions/checkout@$sha_a
+      - uses: jdx/mise-action@$sha_b
+EOF
+cat >"$dir/.github/workflows/other.yml" <<EOF
+jobs:
+  build:
+    steps:
+      - uses: actions/checkout@$sha_a
+EOF
+cat >"$dir/.github/actions/example/action.yml" <<EOF
+runs:
+  using: composite
+  steps:
+    - uses: jdx/mise-action@$sha_b
+EOF
+expect_pass consistent "$dir"
+
+# Two SHAs for one action fail and name the action.
+dir=$(make_fixture desync)
+cat >"$dir/.github/workflows/ci.yml" <<EOF
+jobs:
+  build:
+    steps:
+      - uses: actions/checkout@$sha_a
+EOF
+cat >"$dir/.github/workflows/other.yml" <<EOF
+jobs:
+  build:
+    steps:
+      - uses: actions/checkout@$sha_b
+EOF
+expect_fail desync "$dir" "actions/checkout"
+
+# A floating tag instead of an immutable SHA fails.
+dir=$(make_fixture float)
+cat >"$dir/.github/workflows/ci.yml" <<EOF
+jobs:
+  build:
+    steps:
+      - uses: actions/checkout@v7
+EOF
+expect_fail float "$dir" "actions/checkout@v7"
+
+# Subpath uses of one repository share a single pin.
+dir=$(make_fixture subpath)
+cat >"$dir/.github/workflows/ci.yml" <<EOF
+jobs:
+  build:
+    steps:
+      - uses: actions/cache@$sha_a
+      - uses: actions/cache/restore@$sha_a
+      - uses: actions/cache/save@$sha_a
+EOF
+expect_pass subpath "$dir"
+
+dir=$(make_fixture subpath-desync)
+cat >"$dir/.github/workflows/ci.yml" <<EOF
+jobs:
+  build:
+    steps:
+      - uses: actions/cache@$sha_a
+      - uses: actions/cache/restore@$sha_b
+EOF
+expect_fail subpath-desync "$dir" "actions/cache"
+
+# Local and self references are not third-party pins.
+dir=$(make_fixture ignored)
+cat >"$dir/.github/workflows/ci.yml" <<EOF
+jobs:
+  build:
+    uses: ./.github/workflows/reusable.yml
+    steps:
+      - uses: ./../actions/example
+      - uses: cgraf78/actions/.github/actions/example@custom-ref
+EOF
+expect_pass ignored "$dir"
+
+# A lone third-party pin passes on shape alone.
+dir=$(make_fixture single)
+cat >"$dir/.github/workflows/ci.yml" <<EOF
+jobs:
+  build:
+    steps:
+      - uses: actions/attest@$sha_a
+EOF
+expect_pass single "$dir"
+
+printf 'uses-pin-policy-test: ok\n'
