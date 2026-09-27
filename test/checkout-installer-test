@@ -1896,16 +1896,22 @@ lock_path="$lock_parent/.example-tool.install.lock"
 [[ ! -e "$lock_parent/$lock_target" && ! -L "$lock_parent/$lock_target" ]] ||
   fail "v1 checkout lock left its owner directory after release"
 
+# A writer that must wait out another live writer's complete managed checkout
+# install needs a budget above that install's duration, and a loaded macOS
+# runner can take longer than five seconds to clone the local fixture. Keep
+# these waits bounded without treating correct serialization as a lock failure.
+serialized_writer_lock_timeout=30
+
 lock_fresh_managed="$tmp/lock-fresh/example-tool"
 CHECKOUT_TEST_LOG="$tmp/lock-fresh-one.log" \
-  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=5 \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS="$serialized_writer_lock_timeout" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$lock_fresh_managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
   "$active_bash" -s <"$lock_source/install.sh" \
   >"$tmp/lock-fresh-one.out" 2>&1 &
 lock_fresh_one_pid=$!
 CHECKOUT_TEST_LOG="$tmp/lock-fresh-two.log" \
-  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=5 \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS="$serialized_writer_lock_timeout" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$lock_fresh_managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
   "$active_bash" -s <"$lock_source/install.sh" \
@@ -1974,7 +1980,7 @@ rmdir "$lock_blocked_transaction"
 
 lock_wait_output="$tmp/lock-wait.out"
 CHECKOUT_TEST_LOG="$tmp/lock-wait.log" \
-  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS=5 \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS="$serialized_writer_lock_timeout" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$lock_managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
   "$active_bash" -s <"$lock_source/install.sh" \
@@ -2861,20 +2867,17 @@ compgen -G "$lock_detach_parent/.example-tool.install.lock.claim.*.*/owner/canon
   fail "killed post-detachment claimant did not preserve its tombstone"
 
 # These two recovery processes each perform a complete managed checkout update
-# after the detached claim has been reclaimed.  The second must wait for the
-# first live generation, and macOS can take longer than the former five-second
-# test ceiling to clone the local fixture.  Keep the race bounded without
-# treating correct serialization as a lock failure.
-lock_detach_timeout=30
+# after the detached claim has been reclaimed, so the second must wait for the
+# first live generation.
 CHECKOUT_TEST_LOG="$tmp/lock-detach-recover-one.log" \
-  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS="$lock_detach_timeout" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS="$serialized_writer_lock_timeout" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$lock_detach_managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
   "$active_bash" -s <"$lock_source/install.sh" \
   >"$tmp/lock-detach-recover-one.out" 2>&1 &
 lock_detach_one_pid=$!
 CHECKOUT_TEST_LOG="$tmp/lock-detach-recover-two.log" \
-  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS="$lock_detach_timeout" \
+  CGRAF78_CHECKOUT_INSTALL_LOCK_TIMEOUT_SECS="$serialized_writer_lock_timeout" \
   CGRAF78_CHECKOUT_INSTALL_DIR="$lock_detach_managed" \
   CGRAF78_CHECKOUT_INSTALL_REPO_URL="file://$lock_remote" \
   "$active_bash" -s <"$lock_source/install.sh" \
