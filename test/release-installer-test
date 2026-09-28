@@ -1120,51 +1120,96 @@ HOME="$offline_attestation_root/home" XDG_DATA_HOME="$offline_attestation_root/d
   --man-dir "$offline_attestation_root/man" >/dev/null ||
   fail "offline archive required online attestation verification"
 
-# Online installation must not download bytes it cannot authenticate. Use a
-# deliberately minimal PATH to prove the missing-gh diagnostic is produced
-# before curl is invoked.
+# A host without GitHub CLI cannot verify provenance. By default the install
+# proceeds on the published checksum and says so, keeping fresh-host
+# `curl | bash` installs working; --require-attestation must instead fail
+# before any download. The PATH is a farm of every system tool except gh
+# (CI runners ship /usr/bin/gh), with the fake curl and uname in front.
 no_gh_bin="$tmp/no-gh-bin"
 mkdir -p "$no_gh_bin"
-cat >"$no_gh_bin/uname" <<'EOF'
-#!/bin/bash
-case ${1:-} in
-  -s) printf '%s\n' Linux ;;
-  -m) printf '%s\n' x86_64 ;;
-  -o) printf '%s\n' GNU/Linux ;;
-  *) exit 2 ;;
-esac
-EOF
-chmod 0755 "$no_gh_bin/uname"
-cat >"$no_gh_bin/curl" <<'EOF'
-#!/bin/bash
-printf 'curl must not run without gh\n' >&2
-exit 98
-EOF
-chmod 0755 "$no_gh_bin/curl"
-set +e
-missing_gh_out=$(HOME="$tmp/missing-gh-home" \
+for system_dir in /usr/local/bin /usr/bin /bin; do
+  [[ -d "$system_dir" ]] || continue
+  for tool in "$system_dir"/*; do
+    name=${tool##*/}
+    [[ "$name" != gh && ! -e "$no_gh_bin/$name" && -x "$tool" ]] || continue
+    ln -s "$tool" "$no_gh_bin/$name"
+  done
+done
+rm -f "$no_gh_bin/curl" "$no_gh_bin/uname"
+ln -s "$fake_bin/curl" "$no_gh_bin/curl"
+ln -s "$fake_bin/uname" "$no_gh_bin/uname"
+[[ ! -e "$no_gh_bin/gh" ]] || fail "no-gh PATH farm still contains gh"
+
+missing_gh_root="$tmp/missing-gh"
+mkdir -p "$missing_gh_root/home"
+missing_gh_out=$(FAKE_CURL_ARCHIVE="$archive1" \
+  FAKE_CURL_CHECKSUM="$archive1.sha256" FAKE_CURL_VERSION="$version1" \
+  FAKE_CURL_LOG="$tmp/missing-gh-curl.log" \
+  FAKE_CURL_ARGS_LOG="$tmp/missing-gh-curl-args.log" \
   FAKE_UNAME_S=Linux FAKE_UNAME_M=x86_64 FAKE_UNAME_O=GNU/Linux \
-  PATH="$no_gh_bin" /bin/bash "$consumer/install.sh" --version "$version1" \
-  --data-home "$tmp/missing-gh-data" --bin-dir "$tmp/missing-gh-bin" \
-  --man-dir "$tmp/missing-gh-man" 2>&1)
-missing_gh_status=$?
+  HOME="$missing_gh_root/home" PATH="$no_gh_bin" \
+  /bin/bash "$consumer/install.sh" --version "$version1" \
+  --data-home "$missing_gh_root/data" --bin-dir "$missing_gh_root/bin" \
+  --man-dir "$missing_gh_root/man" 2>&1 >/dev/null) ||
+  fail "online install without gh did not fall back to the checksum: $missing_gh_out"
+[[ "$missing_gh_out" == *'provenance not verified'* ]] ||
+  fail "checksum-only install did not say provenance was unverified: $missing_gh_out"
+[[ $("$missing_gh_root/bin/example-tool") == first ]] ||
+  fail "checksum-only install did not activate the downloaded archive"
+
+strict_no_gh_root="$tmp/strict-no-gh"
+mkdir -p "$strict_no_gh_root/home"
+set +e
+strict_no_gh_out=$(FAKE_CURL_ARCHIVE="$archive1" \
+  FAKE_CURL_CHECKSUM="$archive1.sha256" FAKE_CURL_VERSION="$version1" \
+  FAKE_CURL_LOG="$tmp/strict-no-gh-curl.log" \
+  FAKE_CURL_ARGS_LOG="$tmp/strict-no-gh-curl-args.log" \
+  FAKE_UNAME_S=Linux FAKE_UNAME_M=x86_64 FAKE_UNAME_O=GNU/Linux \
+  HOME="$strict_no_gh_root/home" PATH="$no_gh_bin" \
+  /bin/bash "$consumer/install.sh" --require-attestation \
+  --version "$version1" --data-home "$strict_no_gh_root/data" \
+  --bin-dir "$strict_no_gh_root/bin" --man-dir "$strict_no_gh_root/man" 2>&1)
+strict_no_gh_status=$?
 set -e
-[[ "$missing_gh_status" -eq 1 ]] ||
-  fail "online install without gh did not fail"
-[[ "$missing_gh_out" == *'gh is required for online attestation verification'* ]] ||
-  fail "online install without gh did not explain the attestation requirement: $missing_gh_out"
-[[ "$missing_gh_out" != *'curl must not run without gh'* ]] ||
-  fail "online install downloaded release data before checking for gh"
+[[ "$strict_no_gh_status" -eq 1 ]] ||
+  fail "--require-attestation without gh did not fail"
+[[ "$strict_no_gh_out" == *'gh auth login'* ]] ||
+  fail "--require-attestation without gh did not explain how to verify: $strict_no_gh_out"
+[[ ! -s "$tmp/strict-no-gh-curl.log" ]] ||
+  fail "--require-attestation downloaded release data before checking for gh"
+
+set +e
+strict_archive_out=$(HOME="$tmp/strict-archive-home" \
+  FAKE_UNAME_S=Linux FAKE_UNAME_M=x86_64 FAKE_UNAME_O=GNU/Linux \
+  PATH="$fake_bin:$PATH" /bin/bash "$consumer/install.sh" \
+  --require-attestation --archive "$archive1" 2>&1)
+strict_archive_status=$?
+set -e
+[[ "$strict_archive_status" -ne 0 &&
+  "$strict_archive_out" == *'applies only to online installs'* ]] ||
+  fail "--require-attestation was accepted with an offline --archive"
 
 cat >"$fake_bin/gh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 : "${FAKE_GH_LOG:=/dev/null}"
 printf '%s\n' "$*" >>"$FAKE_GH_LOG"
+if [[ "${1:-} ${2:-} ${3:-}" == "attestation verify --help" ]]; then
+  # gh older than 2.49 has no attestation command at all.
+  [[ "${FAKE_GH_ATTESTATION:-present}" == present ]] || exit 1
+  exit 0
+fi
+if [[ "${1:-} ${2:-}" == "auth token" ]]; then
+  # Logged in unless a case asks for a host without a github.com credential.
+  [[ "${FAKE_GH_AUTH:-ok}" == ok ]] || exit 1
+  printf 'fake-token\n'
+  exit 0
+fi
 if [[ "${1:-} ${2:-}" != "attestation verify" ]]; then
   printf 'unexpected gh invocation: %s\n' "$*" >&2
   exit 1
 fi
+printf 'GH_HOST=%s\n' "${GH_HOST:-}" >>"$FAKE_GH_LOG"
 [[ "${FAKE_GH_ATTESTATION_RESULT:-pass}" == pass ]] || exit 1
 exit 0
 EOF
@@ -1179,13 +1224,21 @@ FAKE_CURL_ARCHIVE="$archive1" FAKE_CURL_CHECKSUM="$archive1.sha256" \
   FAKE_CURL_VERSION="$version1" FAKE_CURL_LOG="$online_log" \
   FAKE_CURL_ARGS_LOG="$online_args_log" FAKE_GH_LOG="$online_gh_log" \
   FAKE_UNAME_S=Linux FAKE_UNAME_M=x86_64 FAKE_UNAME_O=GNU/Linux \
+  GH_HOST=ghes.example.invalid \
   HOME="$online_root/home" PATH="$fake_bin:$PATH" \
   /bin/bash "$consumer/install.sh" \
   --data-home "$online_root/data" --bin-dir "$online_root/bin" \
-  --man-dir "$online_root/man" >/dev/null ||
+  --man-dir "$online_root/man" >/dev/null 2>"$tmp/online-stderr" ||
   fail "online latest-release install failed"
+if grep -Fq 'provenance not verified' "$tmp/online-stderr"; then
+  fail "verified online install claimed provenance was unverified"
+fi
 grep -Fq "attestation verify" "$online_gh_log" ||
   fail "online install did not verify artifact attestation"
+grep -Fxq 'auth token --hostname github.com' "$online_gh_log" ||
+  fail "credential probe was not scoped to github.com"
+grep -Fxq 'GH_HOST=github.com' "$online_gh_log" ||
+  fail "attestation verification did not pin github.com"
 grep -Fq -- "--repo example/example-tool" "$online_gh_log" ||
   fail "attestation verification omitted the release repository"
 grep -Fq -- "--signer-repo cgraf78/actions" "$online_gh_log" ||
@@ -1210,6 +1263,64 @@ set -e
   fail "online install accepted a failed attestation verification"
 [[ "$attest_fail_out" == *'attestation verification failed'* ]] ||
   fail "failed attestation did not report the verification failure"
+# GitHub CLI present but without a github.com credential behaves like a host
+# without gh: checksum-only by default, and no verify attempt that would fail
+# for reasons unrelated to the release.
+logged_out_root="$tmp/online-logged-out"
+mkdir -p "$logged_out_root/home"
+logged_out_out=$(FAKE_CURL_ARCHIVE="$archive1" \
+  FAKE_CURL_CHECKSUM="$archive1.sha256" FAKE_CURL_VERSION="$version1" \
+  FAKE_CURL_LOG="$tmp/logged-out-curl.log" \
+  FAKE_CURL_ARGS_LOG="$tmp/logged-out-curl-args.log" \
+  FAKE_GH_LOG="$tmp/logged-out-gh.log" FAKE_GH_AUTH=none \
+  FAKE_UNAME_S=Linux FAKE_UNAME_M=x86_64 FAKE_UNAME_O=GNU/Linux \
+  HOME="$logged_out_root/home" PATH="$fake_bin:$PATH" \
+  /bin/bash "$consumer/install.sh" \
+  --data-home "$logged_out_root/data" --bin-dir "$logged_out_root/bin" \
+  --man-dir "$logged_out_root/man" 2>&1 >/dev/null) ||
+  fail "logged-out gh blocked a checksum-verified install: $logged_out_out"
+[[ "$logged_out_out" == *'provenance not verified'* ]] ||
+  fail "logged-out install did not say provenance was unverified"
+if grep -Fxq 'GH_HOST=github.com' "$tmp/logged-out-gh.log"; then
+  fail "logged-out install attempted attestation verification"
+fi
+set +e
+FAKE_CURL_ARCHIVE="$archive1" FAKE_CURL_CHECKSUM="$archive1.sha256" \
+  FAKE_CURL_VERSION="$version1" FAKE_CURL_LOG="$tmp/logged-out-strict-curl.log" \
+  FAKE_CURL_ARGS_LOG="$tmp/logged-out-strict-curl-args.log" \
+  FAKE_GH_LOG="$tmp/logged-out-strict-gh.log" FAKE_GH_AUTH=none \
+  FAKE_UNAME_S=Linux FAKE_UNAME_M=x86_64 FAKE_UNAME_O=GNU/Linux \
+  HOME="$logged_out_root/home" PATH="$fake_bin:$PATH" \
+  /bin/bash "$consumer/install.sh" --require-attestation \
+  --data-home "$logged_out_root/data2" --bin-dir "$logged_out_root/bin2" \
+  --man-dir "$logged_out_root/man2" >/dev/null 2>&1
+logged_out_strict_status=$?
+set -e
+[[ "$logged_out_strict_status" -eq 1 ]] ||
+  fail "--require-attestation accepted a logged-out gh"
+[[ ! -s "$tmp/logged-out-strict-curl.log" ]] ||
+  fail "--require-attestation downloaded release data with a logged-out gh"
+
+# A logged-in gh older than 2.49 cannot verify: it must be treated like a host
+# without gh, not fail the install as though the artifact were bad.
+old_gh_root="$tmp/online-old-gh"
+mkdir -p "$old_gh_root/home"
+old_gh_out=$(FAKE_CURL_ARCHIVE="$archive1" \
+  FAKE_CURL_CHECKSUM="$archive1.sha256" FAKE_CURL_VERSION="$version1" \
+  FAKE_CURL_LOG="$tmp/old-gh-curl.log" \
+  FAKE_CURL_ARGS_LOG="$tmp/old-gh-curl-args.log" \
+  FAKE_GH_LOG="$tmp/old-gh.log" FAKE_GH_ATTESTATION=missing \
+  FAKE_UNAME_S=Linux FAKE_UNAME_M=x86_64 FAKE_UNAME_O=GNU/Linux \
+  HOME="$old_gh_root/home" PATH="$fake_bin:$PATH" \
+  /bin/bash "$consumer/install.sh" \
+  --data-home "$old_gh_root/data" --bin-dir "$old_gh_root/bin" \
+  --man-dir "$old_gh_root/man" 2>&1 >/dev/null) ||
+  fail "gh without attestation support blocked a checksum-verified install: $old_gh_out"
+[[ "$old_gh_out" == *'too old'* ]] ||
+  fail "old-gh install did not explain why provenance was unverified: $old_gh_out"
+if grep -Fxq 'GH_HOST=github.com' "$tmp/old-gh.log"; then
+  fail "old-gh install attempted attestation verification"
+fi
 grep -Fxq 'https://github.com/example/example-tool/releases/latest' \
   "$online_log" || fail "online install did not resolve the latest release"
 online_base="https://github.com/example/example-tool/releases/download/$version1"
@@ -1217,7 +1328,7 @@ grep -Fxq "$online_base/$(basename "$archive1")" "$online_log" ||
   fail "online install requested the wrong archive URL"
 grep -Fxq "$online_base/$(basename "$archive1").sha256" "$online_log" ||
   fail "online install requested the wrong checksum URL"
-gh_args=$(cat "$online_gh_log")
+gh_args=$(grep -F 'attestation verify' "$online_gh_log")
 case "$gh_args" in
   "attestation verify "*" --repo example/example-tool --signer-repo cgraf78/actions") ;;
   *) fail "online install used the wrong attestation policy: $gh_args" ;;

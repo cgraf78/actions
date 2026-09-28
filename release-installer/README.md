@@ -94,8 +94,11 @@ Without `--version`, online installation follows the repository's GitHub
 `releases/latest` redirect, validates the resulting release tag, and downloads
 the matching archive and `.sha256` sidecar. Each of those three download
 requests has bounded connection, total-transfer, low-speed, and retry windows,
-with a combined worst-case budget below ten minutes. The subsequent GitHub CLI
-attestation lookup is a separate required trust check. `--archive` is the
+with a combined worst-case budget below ten minutes. When GitHub CLI is 2.49
+or newer and holds a github.com credential, the subsequent attestation lookup
+is a required trust check. Otherwise the install proceeds on the checksum and
+prints that provenance was not verified; `--require-attestation` turns that
+case into a failure before anything is downloaded. `--archive` is the
 first-class offline/test path; its checksum defaults to `PATH.sha256` and does
 not perform an online attestation lookup.
 
@@ -166,8 +169,9 @@ Before extraction or activation, the generated installer:
 
 - accepts only HTTPS GitHub redirects and downloads;
 - validates the exact tag, platform, asset basename, and checksum filename;
-- requires GitHub CLI and verifies downloaded archives against the release
-  repository and the `cgraf78/actions` signer repository;
+- verifies downloaded archives against the release repository and the
+  `cgraf78/actions` signer repository whenever GitHub CLI 2.49+ is installed
+  and logged in to github.com (or always, with `--require-attestation`);
 - snapshots a caller-provided archive into the private temporary directory
   before hashing, inspecting, or extracting it;
 - verifies SHA-256 with `sha256sum` or macOS `shasum`;
@@ -184,8 +188,20 @@ Before extraction or activation, the generated installer:
 - holds a per-install-root publication lock while staging and switching.
 
 The checksum sidecar detects corruption, truncation, and the wrong asset.
-Online installs additionally use GitHub's artifact attestation verification to
-bind the archive to both its release repository and the shared trusted builder.
+Online installs on a verifying host additionally use GitHub's artifact
+attestation verification to bind the archive to both its release repository and
+the shared trusted builder.
+
+Verification needs GitHub CLI 2.49 or newer with a github.com credential, which
+a fresh host usually lacks: GitHub CLI typically arrives through the very tools
+being installed. So that `curl ... | bash` installs keep working there, a host
+that cannot verify installs on the checksum alone and says so on stderr. That
+checksum comes from the same release as the archive, so it detects corruption
+but not a replaced release; hosts that need publisher identity should pass
+`--require-attestation`. The fallback depends only on the host, never on the
+release: once GitHub CLI can verify, an archive without a valid attestation is
+rejected, so a tampered asset cannot avoid verification by omitting one.
+
 The explicit local `--archive` path does not query GitHub for an attestation,
 so it remains usable for offline installation and locally built artifacts.
 It is therefore an explicit caller-trusted executable input. Its checksum
