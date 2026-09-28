@@ -55,10 +55,12 @@ jobs:
   termux:
     name: Android / Termux x86_64
     runs-on: ubuntu-24.04
-    # Inner limits reserve at most 600s for boot and 2025s for sequential ADB
-    # work, including the 1200s caller command. Keep at least five minutes of
-    # outer headroom for checkout, downloads, host setup, and runner overhead.
-    timeout-minutes: 50
+    # Inner limits reserve at most 600s for boot and 2269s for sequential ADB
+    # work, including the 1200s caller command, the bounded package-service
+    # wait (about 119s), and two 120s install attempts. Keep at least five
+    # minutes of outer headroom for checkout, downloads, host setup, and runner
+    # overhead.
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -325,8 +327,16 @@ jobs:
             cat <<'SCRIPT'
           source "$TERMUX_ADB_HELPER"
           apk="$RUNNER_TEMP/termux.apk"
+          echo "Waiting for the package manager service"
+          if ! termux_wait_for_package_service 20 5 1; then
+            echo "Package manager service did not become ready" >&2
+            exit 1
+          fi
           echo "Installing Termux APK"
-          termux_adb 120 install -r "$apk"
+          if ! termux_install_apk 2 120 5 "$apk"; then
+            echo "Termux APK install failed after bounded retries" >&2
+            exit 1
+          fi
           echo "Launching Termux"
           termux_adb 30 shell am start -n com.termux/.app.TermuxActivity
 
