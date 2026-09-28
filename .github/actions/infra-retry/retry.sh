@@ -103,7 +103,8 @@ is_retryable_bounded_stall() {
   # deadline expires. Classification therefore does not depend on third-party
   # package-manager or Android-emulator wording.
   grep -Eq 'infra-stall: (Termux )?package command exhausted bounded retries' \
-    "$log" || grep -Fq "$TERMUX_ADB_SETUP_TIMEOUT_MARKER" "$log"
+    "$log" || grep -Fq "$TERMUX_ADB_SETUP_TIMEOUT_MARKER" "$log" ||
+    grep -Fq "$TERMUX_PACKAGE_SERVICE_MARKER" "$log"
 }
 
 is_retryable_step_timeout() {

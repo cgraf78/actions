@@ -40,6 +40,13 @@ set -euo pipefail
 printf '%s\n' "$*" >>"$ADB_CALLS"
 case ${ADB_BEHAVIOR:-success} in
   success) exit 0 ;;
+  fail-then-succeed)
+    # Fail until ADB_FAILURES attempts have been made, then succeed.
+    count=$(($(cat "$ADB_ATTEMPTS" 2>/dev/null || echo 0) + 1))
+    printf '%s\n' "$count" >"$ADB_ATTEMPTS"
+    ((count > ADB_FAILURES)) || exit 23
+    exit 0
+    ;;
   fail) exit 23 ;;
   code124) exit 124 ;;
   stdio) cat ;;
@@ -385,6 +392,66 @@ if termux_wait_for_runtime 3 1 0; then
 fi
 [[ "$(wc -l <"$ADB_CALLS")" -eq 3 ]] || {
   printf 'termux adb test failed: readiness probe did not stop after three attempts\n' >&2
+  exit 1
+}
+
+# Package-service readiness: bounded polling, success once the query answers.
+: >"$ADB_CALLS"
+export ADB_BEHAVIOR=fail
+if termux_wait_for_package_service 3 1 0 2>"$tmp/pm-stderr"; then
+  printf 'termux adb test failed: unavailable package service became ready\n' >&2
+  exit 1
+fi
+grep -Fxq "$TERMUX_PACKAGE_SERVICE_MARKER" "$tmp/pm-stderr" || {
+  printf 'termux adb test failed: package service exhaustion omitted the infra marker\n' >&2
+  exit 1
+}
+[[ "$(wc -l <"$ADB_CALLS")" -eq 3 ]] || {
+  printf 'termux adb test failed: package service probe did not stop after three attempts\n' >&2
+  exit 1
+}
+grep -Fxq 'shell pm path android' "$ADB_CALLS" || {
+  printf 'termux adb test failed: package service probe did not query the package manager\n' >&2
+  exit 1
+}
+: >"$ADB_CALLS"
+export ADB_BEHAVIOR=fail-then-succeed ADB_ATTEMPTS="$tmp/pm-attempts" ADB_FAILURES=2
+termux_wait_for_package_service 5 1 0 || {
+  printf 'termux adb test failed: package service ready after two failures was not accepted\n' >&2
+  exit 1
+}
+[[ "$(wc -l <"$ADB_CALLS")" -eq 3 ]] || {
+  printf 'termux adb test failed: package service probe continued after success\n' >&2
+  exit 1
+}
+
+# APK install: idempotent `install -r`, retried on exit status up to a bound.
+: >"$ADB_CALLS"
+export ADB_BEHAVIOR=fail-then-succeed ADB_ATTEMPTS="$tmp/install-attempts" ADB_FAILURES=1
+termux_install_apk 3 1 0 "$tmp/termux.apk" 2>"$tmp/install-ok-stderr" || {
+  printf 'termux adb test failed: install after one transient failure was not accepted\n' >&2
+  exit 1
+}
+if grep -Fq "$TERMUX_PACKAGE_SERVICE_MARKER" "$tmp/install-ok-stderr"; then
+  printf 'termux adb test failed: recovered install printed the infra marker\n' >&2
+  exit 1
+fi
+[[ "$(grep -Fxc "install -r $tmp/termux.apk" "$ADB_CALLS")" -eq 2 ]] || {
+  printf 'termux adb test failed: install was not retried exactly once\n' >&2
+  exit 1
+}
+: >"$ADB_CALLS"
+export ADB_BEHAVIOR=fail
+if termux_install_apk 3 1 0 "$tmp/termux.apk" 2>"$tmp/install-stderr"; then
+  printf 'termux adb test failed: permanently failing install succeeded\n' >&2
+  exit 1
+fi
+grep -Fxq "$TERMUX_PACKAGE_SERVICE_MARKER" "$tmp/install-stderr" || {
+  printf 'termux adb test failed: install exhaustion omitted the infra marker\n' >&2
+  exit 1
+}
+[[ "$(wc -l <"$ADB_CALLS")" -eq 3 ]] || {
+  printf 'termux adb test failed: install did not stop after three attempts\n' >&2
   exit 1
 }
 
