@@ -78,7 +78,7 @@ No second installer-specific layout manifest is needed.
 ## User interface
 
 ```text
-install.sh [--version TAG]
+install.sh [--version TAG] [--require-attestation]
 install.sh --archive PATH [--checksum PATH]
 
   --data-home PATH
@@ -229,6 +229,20 @@ online URL orchestration at the HTTP boundary, and the complete-root contract.
 The same suite runs in Ubuntu Quality and through `bash32-ci.yml` under macOS'
 stock `/bin/bash`.
 
-`test/consumer-sync-test` and `test/examples-test` cover generation and drift
-verification through real temporary Git repositories. `--check` is intended for
-that verifier path and never rewrites a consumer.
+`test/release-installer-termux-test` runs the generated installer on a real
+Termux host, where the version probe's isolation, process-group supervision,
+and output limit differ from Linux. The shell smoke's Termux job runs it with
+`--require-termux`.
+
+`test/consumer-installer-canary` renders this checkout's template into fresh
+clones of each listed consumer that has a standalone installer contract test
+(currently `grafhome-ca` and `hive-memory`) and runs that test, so a template change that breaks a consumer fails
+here instead of at the consumer's next repin. Ubuntu Quality runs it end to
+end; the Termux job prepares the clones on the runner and runs them on the
+device.
+
+`test/consumer-sync-test` covers generation and drift verification through real
+temporary Git repositories in CI. The local-only `test/examples-test` applies
+the same lifecycle to the copyable examples; CI does not run it.
+`render.sh --check` is intended for the drift-verification path and never
+rewrites a consumer.

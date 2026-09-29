@@ -25,7 +25,8 @@ CHECKOUT_INSTALLER_REPO=cgraf78/example-tool
 `CHECKOUT_INSTALLER_DELEGATE` defaults to `support/install-checkout.sh`.
 `CHECKOUT_INSTALLER_DEFAULT_DESTINATION` defaults to `xdg`, preserving the
 historical `${XDG_DATA_HOME:-$HOME/.local/share}/cgraf78/checkouts/<repository>`
-layout. A consumer managed by Shdeps may opt into:
+layout; a relative `XDG_DATA_HOME` is ignored in favor of `$HOME/.local/share`,
+per the XDG specification. A consumer managed by Shdeps may opt into:
 
 ```bash
 CHECKOUT_INSTALLER_DEFAULT_DESTINATION=shdeps
@@ -173,6 +174,9 @@ maintained branch into the generated destination policy:
 xdg:    ${XDG_DATA_HOME:-$HOME/.local/share}/cgraf78/checkouts/<repository>
 shdeps: ${SHDEPS_INSTALL_DIR:-$HOME/.local/share}/<owner>/<repository>
 ```
+
+The `xdg` policy honors `XDG_DATA_HOME` only when it is an absolute path; an
+unset, empty, or relative value selects `$HOME/.local/share`.
 
 Network Git operations are bounded independently of Git's transport-specific
 stall behavior. Each clone receives 300 seconds, then its dedicated process

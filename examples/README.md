@@ -81,8 +81,8 @@ entry aligned with the primary workflow's displayed name, and do not make the
 controller a required check. It retries only the provider's narrow allowlist of
 pre-application infrastructure failures once.
 
-Repo tests run `actionlint` over every workflow, assert the security-sensitive
-permissions and required inputs, stage both templates as real Git consumers,
-run the production synchronizer, and run the production verifier. This keeps
-the examples coupled to the actual adoption path rather than to a parallel
-documentation-only parser.
+The local `test/examples-test` suite (not run in CI) runs `actionlint` over
+every example workflow, asserts the security-sensitive permissions and required
+inputs, stages both templates as real Git consumers, and runs the production
+synchronizer and verifier. This keeps the examples coupled to the actual
+adoption path rather than to a parallel documentation-only parser.

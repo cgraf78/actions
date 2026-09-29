@@ -15,8 +15,13 @@ this repo and by other `cgraf78` repositories.
   `dtolnay/rust-toolchain`.
 - `musl-build-prereqs` installs the musl linker toolchain, and optionally adds
   the Rust musl target, for repos whose crates link C code.
-- `upload-release-assets` reconciles that selected set against remote SHA-256
-  digests and retries bounded uploads without preserving different remote bytes.
+- `upload-release-assets` uploads the asset paths that `rust-release.yml`
+  selected and attested, reconciles them against remote SHA-256 digests, and
+  retries bounded uploads without preserving different remote bytes.
+- `infra-retry` reruns a completed workflow's failed jobs once when every
+  failed leaf job matches an allowlisted infrastructure failure signature.
+- `termux-adb` stages the bounded `adb` wrapper and helper used by the Termux
+  emulator worker.
 - `dotfiles-bootstrap` installs Dot and locked Mise tools, runs doctor when the
   full dependency provider converges, or stages and installs one exact
   standalone Dot payload for sandbox CI.
@@ -35,6 +40,10 @@ consumer appears.
 `package-manager/lib.sh` is an internal source library, not a standalone
 action. The Rust, musl, and shell prerequisite actions source it so mirror
 timeouts and retry classification have one owner.
+
+`shared/infra-stall-markers.sh` is likewise a sourced library, not an action.
+It owns the stable infrastructure-stall markers that `termux-adb` emits and
+`infra-retry` classifies, so producer and classifier cannot drift apart.
 
 `dotfiles-bootstrap` defaults to `mode: full`. `mode: stage` publishes a
 private, self-contained payload at `stage-directory`; `mode: install-staged`
