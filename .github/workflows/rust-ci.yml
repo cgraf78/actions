@@ -53,6 +53,11 @@ on:
         required: false
         type: string
         default: cargo test --locked
+      test-shards:
+        description: Optional JSON array of {"name", "command"} test shards. When set, every platform runs one parallel job per shard instead of test-command.
+        required: false
+        type: string
+        default: ""
       fmt-command:
         description: Formatting command for the Ubuntu quality gate. Empty disables it.
         required: false
@@ -146,6 +151,7 @@ jobs:
       profiles: ${{ inputs.profiles }}
       setup-command: ${{ inputs.setup-command }}
       test-command: ${{ inputs.test-command }}
+      test-shards: ${{ inputs.test-shards }}
 
   quality:
     name: Quality / Ubuntu

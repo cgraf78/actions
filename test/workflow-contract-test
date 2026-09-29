@@ -85,6 +85,67 @@ check_platform_matrices() {
   done
 }
 
+# Rust test shards cross every platform with caller-named commands. Execute the
+# inline selection script directly so both the unsharded pass-through (every
+# existing caller) and the strict validation are behavior-tested, not just
+# pattern-matched.
+check_rust_test_shards() {
+  local workflow script tmp platforms output matrix shards invalid rc
+
+  workflow=$root/.github/workflows/_rust-platforms.yml
+  script=$(yq -r '.jobs.select-platforms.steps[] | select(.id == "shards").run' "$workflow")
+  tmp=$(mktemp -d)
+  trap 'rm -rf -- "$tmp"' RETURN
+  platforms='{"include":[{"name":"macOS","runner":"macos-latest"},{"name":"Debian","runner":"ubuntu-latest","container":"debian:stable"}]}'
+
+  output=$tmp/unsharded
+  PLATFORM_MATRIX=$platforms TEST_SHARDS='' GITHUB_OUTPUT=$output bash -c "$script"
+  matrix=$(sed -n 's/^matrix=//p' "$output")
+  [[ "$matrix" == "$platforms" ]] || {
+    printf 'workflow contract failed: unsharded Rust matrix changed: %s\n' "$matrix" >&2
+    return 1
+  }
+
+  output=$tmp/sharded
+  shards='[{"name":"cargo","command":"cargo test --locked"},{"name":"acceptance","command":"cargo build --locked\nbash tests/run"}]'
+  PLATFORM_MATRIX=$platforms TEST_SHARDS=$shards GITHUB_OUTPUT=$output bash -c "$script"
+  matrix=$(sed -n 's/^matrix=//p' "$output")
+  jq -e '.include == [
+      {"name":"macOS","runner":"macos-latest","shard":"cargo","shard-command":"cargo test --locked"},
+      {"name":"macOS","runner":"macos-latest","shard":"acceptance","shard-command":"cargo build --locked\nbash tests/run"},
+      {"name":"Debian","runner":"ubuntu-latest","container":"debian:stable","shard":"cargo","shard-command":"cargo test --locked"},
+      {"name":"Debian","runner":"ubuntu-latest","container":"debian:stable","shard":"acceptance","shard-command":"cargo build --locked\nbash tests/run"}
+    ]' <<<"$matrix" >/dev/null || {
+    printf 'workflow contract failed: sharded Rust matrix is wrong: %s\n' "$matrix" >&2
+    return 1
+  }
+
+  # Each malformed list must fail before emitting a matrix: silently running
+  # fewer shards would drop coverage while still reporting success.
+  for invalid in \
+    '{}' \
+    '[]' \
+    '"cargo test"' \
+    '[{"name":"a"}]' \
+    '[{"command":"true"}]' \
+    '[{"name":"a","command":"   "}]' \
+    '[{"name":"a","command":"true","extra":1}]' \
+    '[{"name":"a","command":"true"},{"name":"a","command":"false"}]' \
+    '[{"name":"a/b","command":"true"}]' \
+    '[{"name":"","command":"true"}]' \
+    'not json'; do
+    output=$tmp/invalid
+    : >"$output"
+    rc=0
+    PLATFORM_MATRIX=$platforms TEST_SHARDS=$invalid GITHUB_OUTPUT=$output \
+      bash -c "$script" 2>/dev/null || rc=$?
+    if [[ $rc -eq 0 || -s $output ]]; then
+      printf 'workflow contract failed: invalid test-shards accepted: %s\n' "$invalid" >&2
+      return 1
+    fi
+  done
+}
+
 # The live Termux job reserves 20 minutes for caller code. Prove the explicit
 # emulator boot and every sequential ADB window still leave five minutes for
 # checkout, APK download, host preparation, and runner overhead under the cap.
@@ -416,6 +477,12 @@ contracts() {
   check '.on.workflow_call.inputs.termux-command.required == true' rust-ci.yml
   check '.on.workflow_call.inputs.profiles.default == ""' rust-ci.yml
   check '.jobs.platforms.with.profiles == "${{ inputs.profiles }}"' rust-ci.yml
+  check '.on.workflow_call.inputs.test-shards.default == ""' rust-ci.yml
+  check '.jobs.platforms.with.test-shards == "${{ inputs.test-shards }}"' rust-ci.yml
+  check '.on.workflow_call.inputs.test-shards.default == ""' _rust-platforms.yml
+  check '.jobs.select-platforms.outputs.matrix == "${{ steps.shards.outputs.matrix }}"' _rust-platforms.yml
+  check '.jobs.platform.name == "${{ matrix.shard && format('"'"'{0} / {1}'"'"', matrix.name, matrix.shard) || matrix.name }}"' _rust-platforms.yml
+  check '.jobs.platform.steps[] | select(.name == "Run Rust tests").env.TEST_COMMAND == "${{ matrix.shard && matrix['"'"'shard-command'"'"'] || inputs.test-command }}"' _rust-platforms.yml
   check '.on.workflow_call.inputs.termux-profiles.default == "runtime"' rust-ci.yml
   check '.jobs.termux.with.profiles == "${{ inputs.termux-profiles }}"' rust-ci.yml
   check '.on.workflow_call.inputs.profiles.default == ""' _rust-platforms.yml
@@ -643,4 +710,5 @@ contracts() {
 
 contracts
 check_platform_matrices
+check_rust_test_shards
 printf 'workflow-contract-test: ok\n'

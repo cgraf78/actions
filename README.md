@@ -154,7 +154,12 @@ Repos with a declared MSRV can set `msrv-toolchain`; the shared quality gate
 runs the locked all-targets/all-features check last so it cannot change the
 compiler used by the stable checks. Repos that need generated files, extra
 tooling, or a nested crate path can use `setup-command` and
-`working-directory` without forking the shared workflow. Binary repos can use
+`working-directory` without forking the shared workflow. Repos whose platform
+jobs are bounded by several long serial suites can replace `test-command` with
+`test-shards`, a JSON array of `{"name": ..., "command": ...}` objects; every
+platform then runs one job per shard (named `<platform> / <shard>`), so the
+slowest shard rather than the sum sets the critical path. Each shard runs on a
+fresh runner, so it must build whatever it needs. Binary repos can use
 `build-command`, `package-smoke-musl-target`, and `package-smoke-command` to
 validate release artifacts while keeping package layout and smoke assertions in
 the product repository. Native-code crates can additionally opt into
