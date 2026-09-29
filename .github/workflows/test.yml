@@ -87,7 +87,11 @@ jobs:
     with:
       matrix-set: auto
       working-directory: test/fixtures/rust-smoke
-      test-command: cargo test --locked
+      # Exercise the sharded platform path live: each platform must run both
+      # named shards as separate jobs.
+      test-shards: >-
+        [{"name": "test", "command": "cargo test --locked"},
+         {"name": "release build", "command": "cargo build --release --locked"}]
       android-package-smoke-command: |
         cargo build --locked --target "$RUST_TARGET"
         binary="target/$RUST_TARGET/debug/actions-rust-smoke"

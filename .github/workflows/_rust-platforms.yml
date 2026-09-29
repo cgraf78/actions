@@ -38,6 +38,11 @@ on:
         required: false
         type: string
         default: cargo test --locked
+      test-shards:
+        description: Optional JSON array of {"name", "command"} test shards run as separate jobs on every platform instead of test-command.
+        required: false
+        type: string
+        default: ""
     secrets:
       DEPENDENCY_GH_TOKEN:
         description: Optional GitHub token exposed to caller commands as GH_TOKEN and GITHUB_TOKEN for private dependency downloads or rate-limit avoidance.
@@ -53,7 +58,7 @@ jobs:
   select-platforms:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.platforms.outputs.matrix }}
+      matrix: ${{ steps.shards.outputs.matrix }}
     steps:
       - name: Select platform matrix
         id: platforms
@@ -64,6 +69,45 @@ jobs:
         with:
           matrix-set: ${{ inputs.matrix-set }}
 
+      - name: Apply test shards
+        id: shards
+        shell: bash
+        env:
+          PLATFORM_MATRIX: ${{ steps.platforms.outputs.matrix }}
+          TEST_SHARDS: ${{ inputs.test-shards }}
+        # A serial test command bounds each platform job by the sum of its
+        # suites. Crossing every platform with caller-named shards runs them
+        # as parallel jobs instead, so the slowest shard sets the critical
+        # path. Without shards the platform matrix passes through unchanged,
+        # preserving existing job names and behavior for every other caller.
+        # Validate strictly: a malformed list must fail loudly rather than
+        # silently dropping coverage.
+        run: |-
+          set -euo pipefail
+
+          if [[ -z "$TEST_SHARDS" ]]; then
+            echo "matrix=$PLATFORM_MATRIX" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! jq -e '
+            type == "array" and length > 0 and
+            all(.[]; type == "object" and
+              (keys | sort) == ["command", "name"] and
+              (.name | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9 ._-]*$")) and
+              (.command | type == "string" and test("\\S"))) and
+            ([.[].name] | unique | length) == length
+          ' <<<"$TEST_SHARDS" >/dev/null; then
+            echo 'test-shards must be a non-empty JSON array of objects with a unique name and a non-blank command' >&2
+            exit 2
+          fi
+
+          matrix=$(jq -c --argjson shards "$TEST_SHARDS" \
+            '{include: [.include[] as $platform | $shards[] |
+              $platform + {shard: .name, "shard-command": .command}]}' \
+            <<<"$PLATFORM_MATRIX")
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
   platform:
     needs: select-platforms
     runs-on: ${{ matrix.runner }}
@@ -72,7 +116,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.select-platforms.outputs.matrix) }}
 
-    name: ${{ matrix.name }}
+    name: ${{ matrix.shard && format('{0} / {1}', matrix.name, matrix.shard) || matrix.name }}
     steps:
       - name: Install OS prerequisites
         uses: cgraf78/actions/.github/actions/rust-ci-prereqs@174377e0076cc4e8dc15eee38d450f4abe827b3e
@@ -130,7 +174,7 @@ jobs:
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
           MATRIX_NAME: ${{ matrix.name }}
-          TEST_COMMAND: ${{ inputs.test-command }}
+          TEST_COMMAND: ${{ matrix.shard && matrix['shard-command'] || inputs.test-command }}
           WORKING_DIRECTORY: ${{ inputs.working-directory }}
         # Keep the caller in charge of the exact cargo invocation while avoiding
         # GitHub expression interpolation in the shell script body.
