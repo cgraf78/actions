@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# Run downstream installer contract tests against this checkout's template.
+#
+# Consumers commit a rendered install.sh plus their own tests of it. A template
+# change can pass every suite here and still break those tests, which then
+# surfaces only when each consumer repins. Rendering the current template into
+# fresh clones of the consumers' main branches and running their installer
+# tests moves that failure to the change that caused it. When a template change
+# intentionally breaks a consumer test, land a consumer-side fix that works with
+# both installers first.
+#
+# `prepare DIR` clones and renders (needs network); `run DIR` only executes,
+# so the Termux job can prepare on the runner and run on the device. `all`
+# does both in a private directory.
+
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
+# repository:test-path for each consumer with a standalone installer contract
+# test. Paths are relative to the consumer checkout.
+consumers=(
+  grafhome-ca:tests/shell/install-test
+  hive-memory:tests/shell/install-test
+)
+
+usage() {
+  printf '%s\n' 'usage: consumer-installer-canary prepare DIR | run DIR | all' >&2
+  exit 2
+}
+
+# Clone a consumer's main branch. A network blip must not fail an unrelated
+# template change, and a stalled fetch must not hang the job until its own
+# timeout, so abort transfers that stay below 1 KB/s for 30s (git's portable
+# stall bound; `timeout` is absent on stock macOS) and retry once.
+clone() {
+  local repo=$1 target=$2 attempt
+
+  for attempt in 1 2; do
+    rm -rf "$target"
+    if GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=30 \
+      git clone --quiet --depth 1 "https://github.com/cgraf78/$repo.git" \
+      "$target"; then
+      return 0
+    fi
+    printf 'consumer-installer-canary: clone of %s failed (attempt %s)\n' \
+      "$repo" "$attempt" >&2
+    [[ "$attempt" -eq 2 ]] || sleep 5
+  done
+  return 1
+}
+
+prepare() {
+  local dir=$1 entry repo
+
+  mkdir -p "$dir"
+  for entry in "${consumers[@]}"; do
+    repo=${entry%%:*}
+    clone "$repo" "$dir/$repo"
+    "$root/release-installer/render.sh" "$dir/$repo" >/dev/null
+    printf 'consumer-installer-canary: prepared %s at %s\n' \
+      "$repo" "$(git -C "$dir/$repo" rev-parse --short HEAD)"
+  done
+}
+
+run() {
+  local dir=$1 entry repo test failed=()
+
+  for entry in "${consumers[@]}"; do
+    repo=${entry%%:*}
+    test=${entry#*:}
+    [[ -f "$dir/$repo/$test" ]] || {
+      printf 'consumer-installer-canary: %s is not prepared in %s\n' "$repo" "$dir" >&2
+      exit 1
+    }
+    printf '=== %s: %s ===\n' "$repo" "$test"
+    # Run from the consumer root, as its own CI does; some tests locate the
+    # repository through `git rev-parse --show-toplevel`.
+    if ! (cd "$dir/$repo" && bash "$test"); then
+      failed+=("$repo")
+    fi
+  done
+  if ((${#failed[@]} > 0)); then
+    printf 'consumer-installer-canary: failed for %s\n' "${failed[*]}" >&2
+    exit 1
+  fi
+}
+
+case $#:${1:-} in
+  2:prepare) prepare "$2" ;;
+  2:run) run "$2" ;;
+  1:all)
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    prepare "$tmp"
+    run "$tmp"
+    ;;
+  *) usage ;;
+esac

@@ -36,6 +36,7 @@ program	release-scripts/release.sh
 program	release-scripts/smoke-release.sh
 program	release-scripts/sync.sh
 program	test/consumer-sync-test
+program	test/consumer-installer-canary
 program	test/check-uses-pins.sh
 program	test/checkout-installer-bash32-test
 program	test/checkout-installer-development-test
@@ -50,6 +51,8 @@ program	test/musl-prereqs-test
 program	test/package-manager-test
 program	test/rust-prereqs-test
 program	test/release-installer-test
+program	test/release-installer-fixture.sh
+program	test/release-installer-termux-test
 program	test/release-asset-upload-test
 program	test/release-asset-selection-test
 program	test/release-gh-commands-test

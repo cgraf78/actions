@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+# Real-Termux contract for the generated release installer.
+#
+# release-installer-test covers Android only through a synthetic identity and
+# the Linux host's tools. This suite runs the installer on an actual Termux
+# host, with Termux's bash, coreutils, tar, and kernel, so the version probe's
+# `$PREFIX/bin/env -i` isolation, process-group supervision, and output limit
+# are exercised where Android really differs. Releases publish only
+# android-aarch64 while the CI emulator is x86_64, so only `uname -m` is faked;
+# everything else is the real host.
+#
+# Off Termux the suite skips, so it is safe in a shared test command; pass
+# --require-termux where the host must be Termux so a detection regression
+# cannot silently turn the suite into a no-op.
+
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
+fail() {
+  printf 'release-installer-termux-test: %s\n' "$1" >&2
+  exit 1
+}
+
+require_termux=false
+case $#:${1:-} in
+  0:) ;;
+  1:--require-termux) require_termux=true ;;
+  *) fail "usage: release-installer-termux-test [--require-termux]" ;;
+esac
+
+if [[ "$(uname -o 2>/dev/null)" != Android || -z "${PREFIX:-}" ||
+! -x "$PREFIX/bin/env" || ! -x "$PREFIX/bin/bash" ]]; then
+  "$require_termux" && fail "not a Termux host (uname -o, PREFIX/bin/env, PREFIX/bin/bash)"
+  printf '%s\n' 'release-installer-termux-test: skipped (not a Termux host)'
+  exit 0
+fi
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+# shellcheck source=test/release-installer-fixture.sh
+. "$root/test/release-installer-fixture.sh"
+
+# The probe runs the binary under `env -i`, which drops the LD_PRELOAD shim
+# Termux uses to rewrite `/usr/bin/env` interpreter lines. Native release
+# binaries need no interpreter; the script fixture needs an absolute one.
+fixture_shebang="#!$PREFIX/bin/bash"
+
+consumer="$tmp/consumer"
+mkdir -p "$consumer/scripts"
+write_fixture_config "$consumer"
+# Consumers pin the probe to the release commit; exercise the same parsing.
+printf '%s\n' 'RELEASE_BINARY_VERSION_STYLE=commit' \
+  >>"$consumer/scripts/release.conf"
+"$root/release-installer/render.sh" "$consumer" >/dev/null ||
+  fail "renderer did not generate the Termux fixture installer"
+
+real_uname=$(command -v uname)
+fake_bin="$tmp/fake-bin"
+mkdir -p "$fake_bin"
+cat >"$fake_bin/uname" <<EOF
+$fixture_shebang
+if [ "\${1:-}" = -m ]; then echo aarch64; exit 0; fi
+exec '$real_uname' "\$@"
+EOF
+chmod 0755 "$fake_bin/uname"
+
+home="$tmp/home"
+data_home="$tmp/data"
+bin_dir="$tmp/bin"
+man_dir="$tmp/man"
+mkdir -p "$home"
+
+# Install into private destinations; the real PREFIX still selects the
+# android-aarch64 release and supplies the probe's env and PATH.
+install_archive() {
+  HOME="$home" XDG_DATA_HOME="$data_home" PATH="$fake_bin:$PATH" \
+    "$PREFIX/bin/bash" "$consumer/install.sh" --archive "$1" \
+    --bin-dir "$bin_dir" --man-dir "$man_dir"
+}
+
+# A --version answer matching the archive's commit prefix, else the label.
+version_impl() {
+  local version=$1 label=$2 prefix
+
+  prefix=${version##*-}1111
+  # shellcheck disable=SC2016 # Emit literal script text for the fixture.
+  printf 'if [ "${1:-}" = --version ]; then echo "example-tool %s"; exit 0; fi\n' \
+    "$prefix"
+  printf "printf '%%s\\\\n' '%s'\n" "$label"
+}
+
+v1=20260810-190000-5555eeee
+archive_v1=$(make_archive "$v1" android-aarch64 first example/example-tool 1 \
+  "$(version_impl "$v1" first)")
+install_archive "$archive_v1" >/dev/null ||
+  fail "real Termux did not install an android-aarch64 release"
+[[ $("$bin_dir/example-tool") == first ]] ||
+  fail "installed command did not run the first release"
+[[ -L "$man_dir/example-tool.1" ]] ||
+  fail "real Termux install did not link the manual page"
+
+v2=20260810-190100-6666ffff
+archive_v2=$(make_archive "$v2" android-aarch64 second example/example-tool 1 \
+  "$(version_impl "$v2" second)")
+install_archive "$archive_v2" >/dev/null ||
+  fail "real Termux did not activate an update"
+[[ $("$bin_dir/example-tool") == second ]] ||
+  fail "updated command did not run the second release"
+
+# A probe that ignores TERM must be stopped by process-group supervision on
+# the real kernel, fail the install within its bounded deadline, leave no
+# survivor, and keep the last good release active.
+hang_pid_file="$tmp/hang.pid"
+v3=20260810-190200-7777aaaa
+archive_hang=$(make_archive "$v3" android-aarch64 hang example/example-tool 1 \
+  "if [ \"\${1:-}\" = --version ]; then echo \$\$ >'$hang_pid_file'; trap '' TERM; while :; do sleep 1; done; fi")
+started=$SECONDS
+if install_archive "$archive_hang" >/dev/null 2>"$tmp/hang.err"; then
+  fail "a hanging --version probe was accepted"
+fi
+grep -Fq 'exceeded its deadline' "$tmp/hang.err" ||
+  fail "hanging probe failed for an unexpected reason: $(cat "$tmp/hang.err")"
+((SECONDS - started < 30)) ||
+  fail "hanging probe was not stopped within its bounded deadline"
+[[ -s "$hang_pid_file" ]] || fail "hanging probe never started"
+if kill -0 "$(cat "$hang_pid_file")" 2>/dev/null; then
+  fail "hanging probe survived the failed install"
+fi
+[[ $("$bin_dir/example-tool") == second ]] ||
+  fail "failed hanging-probe install changed the active release"
+
+# A probe that floods stdout must hit the file-size limit rather than fill
+# storage, and the install must fail without activating it.
+v4=20260810-190300-8888bbbb
+archive_noisy=$(make_archive "$v4" android-aarch64 noisy example/example-tool 1 \
+  "if [ \"\${1:-}\" = --version ]; then while :; do printf '%01024d' 0; done; fi")
+if install_archive "$archive_noisy" >/dev/null 2>&1; then
+  fail "a flooding --version probe was accepted"
+fi
+[[ $("$bin_dir/example-tool") == second ]] ||
+  fail "failed flooding-probe install changed the active release"
+
+printf '%s\n' 'release-installer-termux-test: ok'
