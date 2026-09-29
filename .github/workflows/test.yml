@@ -340,6 +340,7 @@ jobs:
         run: test/release-installer-test
 
       - name: Test consumer installer contracts against this template
+        timeout-minutes: 5
         shell: bash
         run: test/consumer-installer-canary all
 

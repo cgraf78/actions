@@ -29,15 +29,34 @@ usage() {
   exit 2
 }
 
+# Clone a consumer's main branch. A network blip must not fail an unrelated
+# template change, and a stalled fetch must not hang the job until its own
+# timeout, so abort transfers that stay below 1 KB/s for 30s (git's portable
+# stall bound; `timeout` is absent on stock macOS) and retry once.
+clone() {
+  local repo=$1 target=$2 attempt
+
+  for attempt in 1 2; do
+    rm -rf "$target"
+    if GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=30 \
+      git clone --quiet --depth 1 "https://github.com/cgraf78/$repo.git" \
+      "$target"; then
+      return 0
+    fi
+    printf 'consumer-installer-canary: clone of %s failed (attempt %s)\n' \
+      "$repo" "$attempt" >&2
+    [[ "$attempt" -eq 2 ]] || sleep 5
+  done
+  return 1
+}
+
 prepare() {
   local dir=$1 entry repo
 
   mkdir -p "$dir"
   for entry in "${consumers[@]}"; do
     repo=${entry%%:*}
-    rm -rf "${dir:?}/$repo"
-    git clone --quiet --depth 1 "https://github.com/cgraf78/$repo.git" \
-      "$dir/$repo"
+    clone "$repo" "$dir/$repo"
     "$root/release-installer/render.sh" "$dir/$repo" >/dev/null
     printf 'consumer-installer-canary: prepared %s at %s\n' \
       "$repo" "$(git -C "$dir/$repo" rev-parse --short HEAD)"
