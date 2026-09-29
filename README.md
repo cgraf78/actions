@@ -18,10 +18,11 @@ that same commit. See
 [`consumer-ci/README.md`](consumer-ci/README.md) for the update and verification
 contract.
 
-[`examples/`](examples/) contains tested, copyable Mise refresh, shell CI, Rust
+[`examples/`](examples/) contains copyable Mise refresh, shell CI, Rust
 CI/release, infrastructure retry, Dependabot, ShellCheck inventory, and
-release-policy templates. The examples are staged as real consumer repositories
-in tests and must pass the production synchronizer and verifier.
+release-policy templates. The local `test/examples-test` suite stages them as
+real consumer repositories that must pass the production synchronizer and
+verifier; CI does not run it, so run it before changing an example.
 
 ## Workflows
 
@@ -107,6 +108,12 @@ explicit dependency token still takes precedence for private repositories.
 aggregate without repeating static lint across the runtime matrix.
 `shellcheck-exclude-codes` optionally applies a validated repository-wide
 suppression list only to that shared lint invocation.
+Every call also runs a mandatory Android/Termux job. `termux-command` overrides
+`test-command` there when needed, and `termux-profiles` overrides Android
+prerequisites without changing conventional platforms; empty reuses
+`profiles`, then falls back to `runtime`. Start with `base` when tests need Git
+or curl, or `runtime` for lightweight commands that only need Bash and
+`termux-exec`, then add capability profiles such as `shellcheck`.
 
 ### `bash32-ci.yml`
 
@@ -165,15 +172,16 @@ validate release artifacts while keeping package layout and smoke assertions in
 the product repository. Native-code crates can additionally opt into
 `package-smoke-install-musl-tools`; pure-Rust crates should not pay for that
 host package. `package-smoke-setup-command` remains available for unrelated
-product prerequisites. `termux-command` overrides the mandatory Shell
-Android runtime command when needed. Shell callers can use `termux-profiles` to
-override Android prerequisites without changing conventional platforms. Start
-with `base` when tests need Git or curl, or `runtime` for lightweight commands
-that only need Bash and `termux-exec`, then add capability profiles such as
-`shellcheck`. Rust callers can pair it with `termux-host-command` to cross-build
-an x86_64 Android artifact on Ubuntu and then execute that artifact under
-Android/Bionic in Termux. This complements the release's exact-architecture
-AArch64 cross-build rather than replacing it.
+product prerequisites. `profiles` installs named `shell-ci-prereqs` profiles
+on conventional platform jobs for repos with shell or other integration tests.
+`termux-command` is required and runs inside the official Termux app on the
+mandatory Android runtime job. Its prerequisites come only from
+`termux-profiles`, which defaults to the lightweight `runtime` set (Bash and
+`termux-exec`) and never falls back to `profiles`; use `base` when the command
+needs Git or curl, then add capability profiles. Pair it with
+`termux-host-command` to cross-build an x86_64 Android artifact on Ubuntu and
+then execute that artifact under Android/Bionic in Termux. This complements the
+release's exact-architecture AArch64 cross-build rather than replacing it.
 
 ### `termux-ci.yml`
 
@@ -271,6 +279,10 @@ stays in the consumer's `support/install-checkout.sh`.
 The public workflows delegate to internal workers, while steps shared by more
 than one worker are split into first-party composite actions:
 
+- `.github/workflows/mise-lock-refresh.yml` owns the caller-scheduled Mise
+  lockfile refresh and its auto-merging update pull request.
+- `.github/workflows/dependabot-automerge.yml` enables protected squash
+  auto-merge for Dependabot pull requests without running their code.
 - `.github/workflows/shell-ci.yml` owns shell CI event policy. This is the
   public workflow shell-tool repos call.
 - `.github/workflows/bash32-ci.yml` owns the opt-in macOS system Bash smoke
@@ -290,11 +302,16 @@ than one worker are split into first-party composite actions:
 - `.github/workflows/rust-release.yml` owns standard Rust binary release
   mechanics: draft creation, the release asset matrix, provenance attestations,
   uploads, and publishing.
+- `.github/workflows/retry-infrastructure.yml` is this repository's own
+  `workflow_run` controller that retries infrastructure failures in `Tests`
+  through `infra-retry`; it is not a reusable workflow.
 - `.github/actions/platform-matrix/` owns the shared OS matrix. Shell CI uses it
   today; Rust CI uses it too; future C++ or other language-specific reusable
   workflows should consume the same action instead of copying platform JSON.
 - `.github/actions/rust-ci-prereqs/` owns Rust-CI pre-checkout OS package
   installation for cargo builds on each platform.
+- `.github/actions/android-rust-toolchain/` configures the runner's Android NDK
+  for aarch64 and x86_64 Android Rust cross-builds.
 - `.github/actions/musl-build-prereqs/` owns the musl linker toolchain install
   shared by Rust CI package smoke and Rust release packaging.
 - `.github/actions/package-manager/` owns the bounded package transport,
@@ -308,6 +325,16 @@ than one worker are split into first-party composite actions:
 - `.github/actions/dotfiles-bootstrap/` owns Dot bootstrap, locked Mise tools,
   full-provider doctor checks, and cutover-locked payload staging and sandbox
   installation.
+- `.github/actions/upload-release-assets/` uploads the release's selected,
+  attested asset paths idempotently with digest verification and bounded
+  retries.
+- `.github/actions/infra-retry/` reruns failed jobs once when every failure
+  matches an allowlisted infrastructure signature.
+- `.github/actions/termux-adb/` stages the bounded `adb` wrapper used by the
+  Termux emulator worker.
+- `.github/actions/shared/` holds sourced helpers shared by two actions,
+  currently the infrastructure-stall markers `termux-adb` emits and
+  `infra-retry` classifies.
 - `.github/actions/verify-release-scripts/` fails a consumer whose vendored
   release scripts no longer match `release-scripts/`.
 - `.github/actions/verify-consumer-sync/` enforces one consumer lock across all

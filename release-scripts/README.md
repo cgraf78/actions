@@ -1,8 +1,7 @@
 # Shared release scripts
 
 Single source of truth for the release identity, packaging, and smoke-test
-logic used by `cgraf78` Rust repositories (`hive-memory`, `shdeps`,
-`grafhome-ca`).
+logic used by `cgraf78` Rust repositories that publish release archives.
 
 Consumers vendor these files verbatim into their own `scripts/` directory and
 describe only what genuinely differs between projects in `scripts/release.conf`.
@@ -15,7 +14,7 @@ argue against pulling this code over the network on the release path.
 
 Vendoring keeps the release path self-contained while the
 `verify-consumer-sync` action makes the copies a derived artifact rather than
-three independently maintained forks: any divergence fails the consumer's CI
+independently maintained forks: any divergence fails the consumer's CI
 with the resync command. The managed manifest also detects scripts removed or
 renamed upstream; comparing only current filenames would leave an obsolete
 executable behind forever. A submodule would avoid the duplicated
@@ -29,7 +28,7 @@ checkout step for release-critical tooling.
 | `release-lib.sh` | All shared logic. Sourced, not executed. |
 | `release-version.sh` | Prints the computed release version. |
 | `release-tag.sh` | Prints the release version, validated as asset-name safe. |
-| `release.sh` | Local release cutter: validates state, creates and pushes the tag. |
+| `release.sh` | Local release cutter: validates state and creates the tag; pushes only with `--push`. |
 | `package-release.sh` | Builds the archive and checksum for one Rust target. |
 | `smoke-release.sh` | Extracts and validates a packaged archive. |
 | `.release-scripts.manifest` | Consumer-generated list of files owned by the sync contract; it is not a source file here. |
@@ -50,6 +49,27 @@ Resolution order, highest priority first:
 3. `<PREFIX>_BUILD_TIMESTAMP`, else the commit's UTC committer date, else now.
 
 `<PREFIX>` is `RELEASE_ENV_PREFIX` from `release.conf`.
+
+## Cutting a release
+
+`scripts/release.sh` must run from a clean checkout of the release branch whose
+`HEAD` matches the freshly fetched remote branch. It computes the tag for that
+commit and refuses if the remote tag or GitHub release already exists.
+
+```text
+scripts/release.sh [--push] [--dry-run]
+```
+
+- With no options, it creates the lightweight tag locally and publishes
+  nothing.
+- `--push` also pushes the branch and then the tag, which triggers the
+  consumer's tag-driven release workflow. If the push fails, a tag created by
+  that run is deleted so a retry is not blocked.
+- `--dry-run` performs the same validation and prints the tag and the actions
+  it would take without creating or pushing anything.
+
+`<PREFIX>_RELEASE_REMOTE` (default `origin`) and `<PREFIX>_RELEASE_BRANCH`
+(default `main`) select the remote and branch.
 
 ## Consumer setup
 

@@ -285,7 +285,7 @@ body and gives the caller one explicit boundary for custom behavior.
 
 ### Matrix Sets
 
-Public CI workflows accept `matrix-set`:
+`shell-ci.yml` and `rust-ci.yml` accept `matrix-set`:
 
 | Value  | Behavior                                                                                            |
 | ------ | --------------------------------------------------------------------------------------------------- |
@@ -495,7 +495,10 @@ Ubuntu quality gate.
 | `matrix-set`                  | `auto`                                                              | Platform matrix policy. See [Matrix Sets](#matrix-sets).                                                            |
 | `working-directory`           | `.`                                                                 | Directory where command hooks run.                                                                                  |
 | `setup-command`               | `""`                                                                | Optional caller-owned setup command run before tests and quality commands.                                          |
+| `profiles`                    | `""`                                                                | Comma-separated `shell-ci-prereqs` profiles installed before tests on conventional platform jobs. Not used by Termux. |
+| `termux-profiles`             | `runtime`                                                           | Termux prerequisite profiles. Independent of `profiles`; there is no fallback between them.                          |
 | `test-command`                | `cargo test --locked`                                               | Caller-owned test command run on every selected platform.                                                           |
+| `test-shards`                 | `""`                                                                | Optional JSON array of `{"name": ..., "command": ...}` objects. When set, each platform runs one job per shard instead of `test-command`. |
 | `fmt-command`                 | `cargo fmt --check`                                                 | Ubuntu quality formatting command. Empty disables the step.                                                         |
 | `clippy-command`              | `cargo clippy --locked --all-targets --all-features -- -D warnings` | Ubuntu quality lint command. Empty disables the step.                                                               |
 | `build-command`               | `cargo build --release --locked`                                    | Ubuntu quality build command. Empty disables the step.                                                              |
@@ -720,8 +723,8 @@ non-fail-fast matrix, successful legs may already have uploaded their attested
 assets; a workflow retry reconciles that partial draft instead of promising
 transactional rollback.
 
-Their *logic* does not have to be written three times. `release-scripts/` in
-this repo holds the shared implementation of release identity, packaging, and
+Release script logic does not have to be rewritten in every consumer.
+`release-scripts/` in this repo holds the shared implementation of release identity, packaging, and
 smoke validation; consumers vendor it into `scripts/` and declare only the
 per-project payload in `scripts/release.conf`. See
 [`release-scripts/README.md`](../release-scripts/README.md).
