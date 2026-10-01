@@ -105,6 +105,17 @@ retry_pkg() {
     _delay=$((_attempt * 5))
     echo "package command failed (attempt $_attempt/$PKG_RETRIES, exit $_rc); retrying in ${_delay}s..." >&2
     sleep "$_delay"
+    # A bounded-timeout kill can interrupt dpkg mid-unpack. Without recovery
+    # the next install attempt then fails with exit 100 ("dpkg was
+    # interrupted") even though the package set is fine, turning a transient
+    # stall into a permanent failure. dpkg --configure -a completes the
+    # interrupted configuration and is a no-op on a healthy system.
+    case "$*" in
+      *apt-get*install* | *apt*' install'*)
+        # shellcheck disable=SC2086
+        bounded $SUDO dpkg --configure -a || true
+        ;;
+    esac
     _attempt=$((_attempt + 1))
   done
 }
