@@ -377,6 +377,19 @@ control_root="$data_home/cgraf78/.example-tool-standalone"
   fail "install omitted the archive binary or its executable mode"
 [[ -f "$control_root/owner" ]] ||
   fail "install did not mark its private control root"
+# Shdeps adopts exactly this shape when it later manages the same repository
+# (see "Shdeps handoff" in release-installer/README.md). Changing any of these
+# facts silently strands such hosts behind Shdeps' fail-closed refusal, so they
+# are a tested cross-repository contract rather than incidental details.
+[[ $(readlink "$stable_root") == .example-tool-standalone/current ]] ||
+  fail "stable root link no longer matches the Shdeps handoff contract"
+[[ $(readlink "$control_root/current") =~ ^releases/[^/]+$ ]] ||
+  fail "active release link no longer matches the Shdeps handoff contract"
+[[ $(cat "$control_root/owner") == 'cgraf78/actions release-installer v1' &&
+$(wc -c <"$control_root/owner" | tr -d ' ') == 37 ]] ||
+  fail "owner marker no longer matches the Shdeps handoff contract"
+[[ ! -e "$control_root/lock" ]] ||
+  fail "completed install left the lock Shdeps treats as an active installer"
 
 command_link="$home/.local/bin/example-tool"
 man_link="$data_home/man/man1/example-tool.1"
