@@ -163,6 +163,36 @@ not resolve through the mutable public `current` link. Initialization failure
 is returned to the caller without rolling back the installed release.
 Consumers without the policy continue to reject `--init` as an unknown option.
 
+### Shdeps handoff
+
+`$DATA_HOME/cgraf78/<slug>` is also the archive root Shdeps owns for a
+`cgraf78/<slug>` `github:release` dependency (with default directories). A host
+bootstrapped with this installer and later managed by Shdeps is therefore
+adopted by Shdeps, not migrated by this installer: on its next update, even
+when the installed release is current, Shdeps verifies that the root is exactly
+this layout and replaces the stable root link with its own marked directory,
+atomically where the filesystem can swap two paths and otherwise (always on
+Android/Termux) with the public command pinned to the active release first. The
+private control directory is left behind, inert. Rerunning this installer on an
+adopted host refuses, as for any Shdeps-owned tree.
+
+Shdeps accepts the layout only on this evidence, so these facts are a
+cross-repository contract. `test/release-installer-test` asserts the first four
+(including that a pre-existing `lock` makes the installer refuse); the
+installer's own metadata validation enforces the last:
+
+- the stable root is a link whose target is exactly `.<slug>-standalone/current`;
+- `owner` is a regular file containing exactly
+  `cgraf78/actions release-installer v1` and a newline;
+- `current` links to exactly `releases/<one path component>`;
+- `lock` exists only while an installer run is publishing;
+- the active release carries `.<slug>-install.json` with schema `1`, method
+  `release`, and `repo` equal to the Shdeps dependency name. Adoption therefore
+  applies to consumers whose `RELEASE_REPO` is `cgraf78/<slug>` (the default).
+
+Changing any of them needs a matching Shdeps change first, or adopted hosts
+fall back to Shdeps' fail-closed "release asset format changed" refusal.
+
 ## Validation and trust boundary
 
 Before extraction or activation, the generated installer:
