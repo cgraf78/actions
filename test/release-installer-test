@@ -390,6 +390,24 @@ $(wc -c <"$control_root/owner" | tr -d ' ') == 37 ]] ||
   fail "owner marker no longer matches the Shdeps handoff contract"
 [[ ! -e "$control_root/lock" ]] ||
   fail "completed install left the lock Shdeps treats as an active installer"
+# The lock is the other half of that contract: Shdeps refuses to interpret a
+# tree while `lock` exists because the installer refuses to publish around it.
+# Renaming or dropping the lock directory must fail here, not silently let a
+# concurrent Shdeps adoption race an installer publication.
+locked_current=$(readlink "$control_root/current")
+mkdir "$control_root/lock"
+if locked_out=$(HOME="$home" XDG_DATA_HOME="$data_home" \
+  /bin/bash "$consumer/install.sh" \
+  --archive "$archive1" --checksum "$archive1.sha256" 2>&1); then
+  fail "install ignored a pre-existing installer lock"
+fi
+[[ "$locked_out" == *"another installer is active"* ]] ||
+  fail "locked install failed for the wrong reason: $locked_out"
+[[ -d "$control_root/lock" &&
+  $(readlink "$control_root/current") == "$locked_current" &&
+  $(readlink "$stable_root") == .example-tool-standalone/current ]] ||
+  fail "locked install changed the lock, active release, or stable root"
+rmdir "$control_root/lock"
 
 command_link="$home/.local/bin/example-tool"
 man_link="$data_home/man/man1/example-tool.1"

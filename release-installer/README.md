@@ -168,16 +168,17 @@ Consumers without the policy continue to reject `--init` as an unknown option.
 `$DATA_HOME/cgraf78/<slug>` is also the archive root Shdeps owns for a
 `cgraf78/<slug>` `github:release` dependency (with default directories). A host
 bootstrapped with this installer and later managed by Shdeps is therefore
-adopted by Shdeps, not migrated by this installer: on its next real update
-Shdeps verifies that the root is exactly this layout and replaces the stable
-root link with its own marked directory, atomically where the filesystem can
-swap two paths and otherwise with the public command pinned to the active
-release first. The private control directory is left behind, inert. Rerunning
+adopted by Shdeps, not migrated by this installer: on its next update, even
+when the installed release is current, Shdeps verifies that the root is exactly
+this layout and replaces the stable root link with its own marked directory,
+atomically where the filesystem can swap two paths and otherwise (always on
+Android/Termux) with the public command pinned to the active release first. The private control directory is left behind, inert. Rerunning
 this installer on an adopted host refuses, as for any Shdeps-owned tree.
 
 Shdeps accepts the layout only on this evidence, so these facts are a
-cross-repository contract. `test/release-installer-test` asserts the first four;
-the installer's own metadata validation enforces the last:
+cross-repository contract. `test/release-installer-test` asserts the first four
+(including that a pre-existing `lock` makes the installer refuse); the
+installer's own metadata validation enforces the last:
 
 - the stable root is a link whose target is exactly `.<slug>-standalone/current`;
 - `owner` is a regular file containing exactly
