@@ -172,8 +172,9 @@ adopted by Shdeps, not migrated by this installer: on its next update, even
 when the installed release is current, Shdeps verifies that the root is exactly
 this layout and replaces the stable root link with its own marked directory,
 atomically where the filesystem can swap two paths and otherwise (always on
-Android/Termux) with the public command pinned to the active release first. The private control directory is left behind, inert. Rerunning
-this installer on an adopted host refuses, as for any Shdeps-owned tree.
+Android/Termux) with the public command pinned to the active release first. The
+private control directory is left behind, inert. Rerunning this installer on an
+adopted host refuses, as for any Shdeps-owned tree.
 
 Shdeps accepts the layout only on this evidence, so these facts are a
 cross-repository contract. `test/release-installer-test` asserts the first four
