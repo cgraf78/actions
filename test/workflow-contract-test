@@ -381,6 +381,7 @@ contracts() {
   check '.on.workflow_call.inputs."dotfiles-shdeps-update-policy".type == "string"' _termux-ci.yml
   check '.jobs.termux."timeout-minutes" == 55' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Run caller tests in Termux").with."emulator-boot-timeout" == 600' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Run caller tests in Termux").with."emulator-options" | split(" ") | any_c(. == "-no-metrics")' _termux-ci.yml
   check ".jobs.termux.steps[] | select(.name == \"Stage bounded Termux ADB helper\").uses == \"cgraf78/actions/.github/actions/termux-adb@$actions_lock\"" _termux-ci.yml
   check_step_order 'Stage bounded Termux ADB helper' \
     'Run caller tests in Termux' _termux-ci.yml termux
@@ -442,6 +443,7 @@ contracts() {
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("timeout -k 5 120")' _termux-ci.yml
   check '.jobs.platform.steps[] | select(.name == "Set up Checkrun dev tools").run | contains("--connect-timeout 10 --max-time 120")' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Set up Checkrun dev tools").run | contains("rustup-init.sh")' _shell-platforms.yml
+  check '.jobs.platform.steps[] | select(.name == "Set up Checkrun dev tools").run | contains("RUSTUP_INIT_SKIP_SUDO_CHECK=yes")' _shell-platforms.yml
 
   check '.jobs.required.name == "Required"' rust-ci.yml
   check '.jobs.required.if == "${{ always() }}"' rust-ci.yml
@@ -486,6 +488,7 @@ contracts() {
   check '.on.workflow_call.inputs.termux-profiles.default == "runtime"' rust-ci.yml
   check '.jobs.termux.with.profiles == "${{ inputs.termux-profiles }}"' rust-ci.yml
   check '.on.workflow_call.inputs.profiles.default == ""' _rust-platforms.yml
+  check '.jobs.platform.steps[] | select(.name == "Install Rust").env.RUSTUP_INIT_SKIP_SUDO_CHECK == "yes"' _rust-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Install test prerequisites").with.profiles == "${{ inputs.profiles }}"' _rust-platforms.yml
   check '.jobs.android-package.if == null' rust-ci.yml
   check '.jobs.termux.if == null' rust-ci.yml
@@ -708,7 +711,32 @@ contracts() {
   }
 }
 
+# actions/checkout runs `git init` and then switches to the requested ref, so
+# the initial branch name is never used, yet Git prints a 13-line hint about it
+# in every job. Each checkout this repository owns or publishes as a template
+# must name that branch for its own step only, leaving caller tests on the
+# image's Git defaults.
+check_checkout_initial_branch() {
+  local file count
+
+  for file in "$root"/.github/workflows/*.yml "$root"/examples/*.yml; do
+    count=$(yq '[.. | select(tag == "!!map" and has("uses")) |
+      select(.uses | test("^actions/checkout@"))] | length' "$file")
+    [[ $count -gt 0 ]] || continue
+    yq -e '[.. | select(tag == "!!map" and has("uses")) |
+      select(.uses | test("^actions/checkout@"))] |
+      all_c(.env.GIT_CONFIG_COUNT == "1" and
+        .env.GIT_CONFIG_KEY_0 == "init.defaultBranch" and
+        .env.GIT_CONFIG_VALUE_0 == "main")' "$file" >/dev/null || {
+      printf 'workflow contract failed: %s: checkout must set init.defaultBranch for its step\n' \
+        "${file#"$root"/}" >&2
+      return 1
+    }
+  done
+}
+
 contracts
 check_platform_matrices
 check_rust_test_shards
+check_checkout_initial_branch
 printf 'workflow-contract-test: ok\n'

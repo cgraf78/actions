@@ -13,9 +13,9 @@ case "$MATRIX_NAME" in
     ;;
   Debian | Ubuntu | WSL)
     # shellcheck disable=SC2086
-    retry_pkg $SUDO apt-get $APT_NET_OPTS update
+    retry_pkg $SUDO $APT_GET $APT_NET_OPTS update
     # shellcheck disable=SC2086
-    retry_pkg $SUDO apt-get $APT_NET_OPTS install -y \
+    retry_pkg $SUDO $APT_GET $APT_NET_OPTS install -y \
       bash \
       build-essential \
       ca-certificates \
@@ -26,13 +26,14 @@ case "$MATRIX_NAME" in
   Arch)
     pacman-key --init
     pacman-key --populate
-    retry_pkg pacman -Syu --noconfirm \
+    # shellcheck disable=SC2046,SC2086
+    retry_pkg pacman -Syu $PACMAN_SYNC_OPTS $(pacman_missing \
       base-devel \
       bash \
       ca-certificates \
       curl \
       git \
-      pkgconf
+      pkgconf)
     ;;
   CentOS* | Fedora)
     # shellcheck disable=SC2086

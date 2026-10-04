@@ -32,8 +32,9 @@ bounded() {
   return "$BOUNDED_STATUS"
 }
 
-# Recovery calls `bounded $SUDO dpkg --configure -a`; SUDO= keeps the call
-# in-process so the real dpkg never runs in this test.
+# Recovery calls `bounded $SUDO env DEBIAN_FRONTEND=noninteractive dpkg
+# --configure -a`; SUDO= keeps the call in-process and the `bounded` stub
+# only logs it, so the real dpkg never runs in this test.
 # shellcheck disable=SC2034
 SUDO=
 : >"$tmp/bounded.calls"
@@ -86,7 +87,10 @@ else
   status=$?
 fi
 [[ $status -eq 124 ]]
-[[ $(grep -c -- 'dpkg --configure -a' "$tmp/bounded.calls") -eq 1 ]]
+# Recovery shares the noninteractive frontend with installs, so configuring
+# packages in a container prints no debconf fallback warnings.
+[[ $(grep -c -- '^env DEBIAN_FRONTEND=noninteractive dpkg --configure -a$' \
+  "$tmp/bounded.calls") -eq 1 ]]
 
 # apt-get update never touches dpkg, so no recovery runs for it.
 : >"$tmp/bounded.calls"

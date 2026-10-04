@@ -134,6 +134,11 @@ jobs:
           profiles: ${{ inputs.profiles }}
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Name checkout's throwaway initial branch so Git skips its hint.
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: init.defaultBranch
+          GIT_CONFIG_VALUE_0: main
         with:
           persist-credentials: false
 
@@ -150,6 +155,14 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        # GitHub runs container jobs as root with HOME=/github/home while
+        # root's passwd entry says /root. rustup-init reads that as a possible
+        # `sudo` mistake and prints three `error:` lines, but it only warns
+        # under the action's `-y`. The install deliberately follows $HOME,
+        # which also holds the CARGO_HOME the action exports, so skip just
+        # that check instead of moving HOME and every later Rust path.
+        env:
+          RUSTUP_INIT_SKIP_SUDO_CHECK: "yes"
         with:
           toolchain: ${{ inputs.rust-toolchain }}
 

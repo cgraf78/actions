@@ -15,6 +15,25 @@ APT_NET_OPTS="-o Acquire::http::Timeout=$PKG_NETWORK_TIMEOUT -o Acquire::https::
 DNF_NET_OPTS="--setopt=timeout=$PKG_NETWORK_TIMEOUT --setopt=retries=$PKG_RETRIES"
 # shellcheck disable=SC2034
 APK_NET_OPTS="--timeout $PKG_NETWORK_TIMEOUT"
+# Container images set neither TERM nor a debconf frontend, so every package
+# configuration walks debconf's Dialog -> Readline -> Teletype fallback and
+# prints each failure; hosted Ubuntu runners print none of this. Select the
+# noninteractive frontend through `env` so it survives a `sudo` prefix that
+# resets the environment.
+# shellcheck disable=SC2034
+APT_GET="env DEBIAN_FRONTEND=noninteractive apt-get"
+
+# Hosted images already carry some requested packages, and Homebrew prints an
+# "already installed and up-to-date" warning for each one. `--quiet` drops that
+# warning along with caveats and other advisory notes; missing or outdated
+# formulae still install, and real failures keep their exit status.
+# shellcheck disable=SC2034
+BREW_INSTALL_OPTS="--quiet"
+# `--needed` stops pacman reinstalling packages that are already current. It
+# still warns "up to date -- skipping" for each such target, so callers also
+# name only missing targets through pacman_missing.
+# shellcheck disable=SC2034
+PACMAN_SYNC_OPTS="--noconfirm --needed"
 
 if command -v sudo >/dev/null 2>&1; then
   SUDO=sudo
@@ -47,6 +66,26 @@ configure_ubuntu_archive_mirror() {
   fi
   printf 'package manager: using %s instead of Azure mirrorlist\n' \
     "$_archive_mirror" >&2
+}
+
+# Print the requested pacman targets that no installed package satisfies, one
+# per line. The caller's `pacman -Syu` still upgrades everything already
+# installed, so naming only missing targets changes no package outcome; it only
+# avoids pacman's per-target "up to date" warning. Any other query status
+# prints the full request so the install still runs and reports the problem.
+# Status 127 is also the shell's "command not found"; then the following
+# `pacman -Syu` fails the same way, so nothing is hidden.
+pacman_missing() {
+  if _missing=$(pacman -T "$@"); then
+    return 0
+  else
+    _rc=$?
+  fi
+  if [ "$_rc" -eq 127 ]; then
+    printf '%s\n' "$_missing"
+  else
+    printf '%s\n' "$@"
+  fi
 }
 
 bounded() {
@@ -113,7 +152,7 @@ retry_pkg() {
     case "$*" in
       *apt-get*install* | *apt*' install'*)
         # shellcheck disable=SC2086
-        bounded $SUDO dpkg --configure -a || true
+        bounded $SUDO env DEBIAN_FRONTEND=noninteractive dpkg --configure -a || true
         ;;
     esac
     _attempt=$((_attempt + 1))

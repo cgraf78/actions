@@ -49,6 +49,11 @@ jobs:
     steps:
       - name: Checkout exact default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Name checkout's throwaway initial branch so Git skips its hint.
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: init.defaultBranch
+          GIT_CONFIG_VALUE_0: main
         with:
           persist-credentials: false
           ref: ${{ github.event.repository.default_branch }}
@@ -175,6 +180,11 @@ jobs:
 
       - name: Checkout exact refresh base
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Name checkout's throwaway initial branch so Git skips its hint.
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: init.defaultBranch
+          GIT_CONFIG_VALUE_0: main
         with:
           # The repository-only key makes the post-PR push a real synchronize
           # event, attaching protected pull_request checks to the final commit.

@@ -99,6 +99,11 @@ jobs:
           setup: ${{ inputs.setup }}
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Name checkout's throwaway initial branch so Git skips its hint.
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: init.defaultBranch
+          GIT_CONFIG_VALUE_0: main
         with:
           # Avoid persisting read-only CI credentials into .git/config where
           # repo tests or helper scripts could accidentally reuse them.
@@ -202,7 +207,11 @@ jobs:
             --speed-limit 1024 --speed-time 30 \
             --retry 2 --retry-all-errors --retry-delay 1 \
             https://sh.rustup.rs --output "$rustup_init"
-          sh "$rustup_init" -y --profile minimal --component rustfmt
+          # Container jobs run as root with HOME=/github/home, which rustup
+          # reports as a possible `sudo` mistake in three `error:` lines even
+          # though `-y` proceeds. Installing under $HOME is intended here.
+          RUSTUP_INIT_SKIP_SUDO_CHECK=yes \
+            sh "$rustup_init" -y --profile minimal --component rustfmt
 
           {
             echo "$HOME/.local/bin"

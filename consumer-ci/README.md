@@ -69,6 +69,11 @@ jobs:
       # GitHub cannot read the lock before resolving `uses:`, so this action
       # proves every cgraf78/actions literal still matches the reviewed lock.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Name checkout's throwaway initial branch so Git skips its hint.
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: init.defaultBranch
+          GIT_CONFIG_VALUE_0: main
         with:
           persist-credentials: false
       - uses: cgraf78/actions/.github/actions/verify-consumer-sync@FULL_COMMIT_SHA
