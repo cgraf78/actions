@@ -19,9 +19,9 @@ if [ "${RUNNER_OS:-Linux}" != "Linux" ]; then
 fi
 
 # shellcheck disable=SC2086
-retry_pkg $SUDO apt-get $APT_NET_OPTS update
+retry_pkg $SUDO $APT_GET $APT_NET_OPTS update
 # shellcheck disable=SC2086
-retry_pkg $SUDO apt-get $APT_NET_OPTS install -y --no-install-recommends musl-tools
+retry_pkg $SUDO $APT_GET $APT_NET_OPTS install -y --no-install-recommends musl-tools
 
 # Direct action callers may ask this helper to add a target as well as the host
 # linker. The reusable CI and release workflows normally install their targets

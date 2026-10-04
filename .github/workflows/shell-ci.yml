@@ -112,19 +112,24 @@ jobs:
         # Keep this in step with the platform prerequisite cap. The shared
         # retry controller recognizes this named network-bootstrap timeout.
         timeout-minutes: 20
-        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@d828348e1b0db5172c4fcaed84b72ec2c6f54121
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@0a0f6e217f3cd5ea4d68b44af88f47cfa9ef8e53
         with:
           matrix-name: Ubuntu
           profiles: base,shellcheck
           setup: none
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Name checkout's throwaway initial branch so Git skips its hint.
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: init.defaultBranch
+          GIT_CONFIG_VALUE_0: main
         with:
           # Do not leave the read-only workflow token in caller Git config.
           persist-credentials: false
 
       - name: Validate and lint shell inventory
-        uses: cgraf78/actions/.github/actions/shellcheck-inventory@d828348e1b0db5172c4fcaed84b72ec2c6f54121
+        uses: cgraf78/actions/.github/actions/shellcheck-inventory@0a0f6e217f3cd5ea4d68b44af88f47cfa9ef8e53
         with:
           inventory-path: ${{ inputs.shellcheck-inventory-path }}
           exclude-codes: ${{ inputs.shellcheck-exclude-codes }}

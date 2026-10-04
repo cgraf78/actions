@@ -65,7 +65,7 @@ jobs:
         # This action is the shared OS policy used by shell, Rust, and future
         # language-specific CI workflows. Rust owns only the language setup and
         # commands below.
-        uses: cgraf78/actions/.github/actions/platform-matrix@d828348e1b0db5172c4fcaed84b72ec2c6f54121
+        uses: cgraf78/actions/.github/actions/platform-matrix@0a0f6e217f3cd5ea4d68b44af88f47cfa9ef8e53
         with:
           matrix-set: ${{ inputs.matrix-set }}
 
@@ -119,7 +119,7 @@ jobs:
     name: ${{ matrix.shard && format('{0} / {1}', matrix.name, matrix.shard) || matrix.name }}
     steps:
       - name: Install OS prerequisites
-        uses: cgraf78/actions/.github/actions/rust-ci-prereqs@d828348e1b0db5172c4fcaed84b72ec2c6f54121
+        uses: cgraf78/actions/.github/actions/rust-ci-prereqs@0a0f6e217f3cd5ea4d68b44af88f47cfa9ef8e53
         with:
           matrix-name: ${{ matrix.name }}
 
@@ -128,12 +128,17 @@ jobs:
       # shell-ci instead of making each consumer duplicate an OS matrix.
       - name: Install test prerequisites
         if: inputs.profiles != ''
-        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@d828348e1b0db5172c4fcaed84b72ec2c6f54121
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@0a0f6e217f3cd5ea4d68b44af88f47cfa9ef8e53
         with:
           matrix-name: ${{ matrix.name }}
           profiles: ${{ inputs.profiles }}
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Name checkout's throwaway initial branch so Git skips its hint.
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: init.defaultBranch
+          GIT_CONFIG_VALUE_0: main
         with:
           persist-credentials: false
 
@@ -150,6 +155,14 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        # GitHub runs container jobs as root with HOME=/github/home while
+        # root's passwd entry says /root. rustup-init reads that as a possible
+        # `sudo` mistake and prints three `error:` lines, but it only warns
+        # under the action's `-y`. The install deliberately follows $HOME,
+        # which also holds the CARGO_HOME the action exports, so skip just
+        # that check instead of moving HOME and every later Rust path.
+        env:
+          RUSTUP_INIT_SKIP_SUDO_CHECK: "yes"
         with:
           toolchain: ${{ inputs.rust-toolchain }}
 

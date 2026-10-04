@@ -164,13 +164,38 @@ mock_bin=$(mktemp -d)
 trap 'rm -rf "$mock_bin"' EXIT HUP INT TERM
 command_log=$mock_bin/commands.log
 export command_log
-for command in apt-get dnf apk; do
+for command in apt-get dnf apk brew pacman-key; do
   cat >"$mock_bin/$command" <<'MOCK'
 #!/bin/sh
 printf '%s %s\n' "${0##*/}" "$*" >>"$command_log"
 MOCK
   chmod +x "$mock_bin/$command"
 done
+
+# `pacman -T` prints the unsatisfied targets and exits 127. Fixtures name the
+# already-installed targets in MOCK_PACMAN_INSTALLED and can force any other
+# query failure with MOCK_PACMAN_QUERY_STATUS.
+cat >"$mock_bin/pacman" <<'MOCK'
+#!/bin/sh
+if [ "$1" = -T ]; then
+  shift
+  [ -z "${MOCK_PACMAN_QUERY_STATUS:-}" ] || exit "$MOCK_PACMAN_QUERY_STATUS"
+  missing=0
+  for target in "$@"; do
+    case " ${MOCK_PACMAN_INSTALLED:-} " in
+      *" $target "*) ;;
+      *)
+        printf '%s\n' "$target"
+        missing=1
+        ;;
+    esac
+  done
+  [ "$missing" -eq 0 ] || exit 127
+  exit 0
+fi
+printf '%s %s\n' "${0##*/}" "$*" >>"$command_log"
+MOCK
+chmod +x "$mock_bin/pacman"
 
 # lib.sh chooses the sudo command prefix when it is sourced. Keep the fixture
 # portable between a passwordless CI sudo and a local sudo that prompts, while
@@ -247,7 +272,7 @@ assert_eq 'python3 - 120 5 true' "$(cat "$command_log")" \
 export MATRIX_NAME=Debian
 install_dotfiles_bootstrap_prereqs
 assert_contains \
-  'apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 install -y git curl sudo openssh-client lsof netcat-openbsd procps python3 cron fd-find ripgrep hostname' \
+  'env DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 install -y git curl sudo openssh-client lsof netcat-openbsd procps python3 cron fd-find ripgrep hostname' \
   "$(cat "$command_log")" 'dotfiles Debian installs required system commands'
 
 : >"$command_log"
@@ -269,6 +294,46 @@ assert_contains \
 
 printf 'ok - dotfiles setup composes shared system-command profiles\n'
 
+# Package managers that warn about already-present packages must be asked to
+# skip them. Homebrew's runner image already ships some requested formulae,
+# and pacman otherwise reinstalls every up-to-date package with a warning.
+# Every pacman target below is reported missing unless a fixture says not.
+: >"$command_log"
+export MATRIX_NAME=macOS
+install_dotfiles_bootstrap_prereqs
+assert_contains 'brew install --quiet bash python fd ripgrep' \
+  "$(cat "$command_log")" 'dotfiles macOS skips installed-formula warnings'
+
+: >"$command_log"
+export MATRIX_NAME=Arch
+install_dotfiles_bootstrap_prereqs
+assert_contains \
+  'pacman -Syu --noconfirm --needed git curl sudo openssh lsof openbsd-netcat' \
+  "$(cat "$command_log")" 'dotfiles Arch skips up-to-date packages'
+
+# pacman warns for every current target even under --needed, so only targets
+# that no installed package satisfies may reach `pacman -Syu`.
+: >"$command_log"
+export MOCK_PACMAN_INSTALLED='git curl sudo lsof'
+install_dotfiles_bootstrap_prereqs
+unset MOCK_PACMAN_INSTALLED
+assert_contains \
+  'pacman -Syu --noconfirm --needed openssh openbsd-netcat python' \
+  "$(cat "$command_log")" 'dotfiles Arch names only missing packages'
+
+export MOCK_PACMAN_INSTALLED='bash git'
+assert_eq 'curl' "$(pacman_missing bash git curl)" \
+  'pacman_missing prints only unsatisfied targets'
+assert_eq '' "$(pacman_missing bash git)" \
+  'pacman_missing prints nothing when every target is installed'
+unset MOCK_PACMAN_INSTALLED
+export MOCK_PACMAN_QUERY_STATUS=1
+assert_eq "$(printf 'bash\ngit')" "$(pacman_missing bash git)" \
+  'pacman_missing falls back to the full request when the query fails'
+unset MOCK_PACMAN_QUERY_STATUS
+
+printf 'ok - package installs skip packages that are already current\n'
+
 # Checkrun is a named setup mode rather than a profile list, but it executes
 # in the same capped prerequisite step. Keep its package-manager path behind
 # the shared bounded retry and native network controls as well.
@@ -283,7 +348,7 @@ assert_contains \
   'apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update' \
   "$(cat "$command_log")" 'checkrun Debian updates with bounded apt controls'
 assert_contains \
-  'apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 install -y bash git curl ca-certificates jq python3 python3-pip python3-venv zsh tar gzip unzip xz-utils' \
+  'env DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 install -y bash git curl ca-certificates jq python3 python3-pip python3-venv zsh tar gzip unzip xz-utils' \
   "$(cat "$command_log")" 'checkrun Debian installs with bounded apt controls'
 
 : >"$command_log"
@@ -292,6 +357,21 @@ install_checkrun_prereqs
 assert_contains \
   'dnf --setopt=timeout=30 --setopt=retries=3 install -y --allowerasing bash git curl ca-certificates jq python3.11 python3.11-pip zsh tar gzip unzip xz' \
   "$(cat "$command_log")" 'checkrun CentOS installs a tomllib-capable Python'
+
+: >"$command_log"
+export MATRIX_NAME=macOS
+install_checkrun_prereqs
+assert_contains 'brew install --quiet bash jq yq python zsh' \
+  "$(cat "$command_log")" 'checkrun macOS skips installed-formula warnings'
+
+: >"$command_log"
+export MATRIX_NAME=Arch
+export MOCK_PACMAN_INSTALLED='bash curl'
+install_checkrun_prereqs
+unset MOCK_PACMAN_INSTALLED
+assert_contains \
+  'pacman -Syu --noconfirm --needed git ca-certificates jq python' \
+  "$(cat "$command_log")" 'checkrun Arch names only missing packages'
 unset -f install_yq_v4
 
 printf 'ok - checkrun setup uses bounded package controls\n'

@@ -6,22 +6,24 @@ install_checkrun_prereqs() {
   # these packages.
   case "$MATRIX_NAME" in
     macOS)
-      retry_pkg brew install bash jq yq python zsh
+      # shellcheck disable=SC2086
+      retry_pkg brew install $BREW_INSTALL_OPTS bash jq yq python zsh
       ;;
     Debian | Ubuntu | WSL)
       # Keep this named setup behind the same native transfer limits and hard
       # supervisor as profile-based installs. Otherwise a checkrun consumer
       # can still spend the whole outer prerequisite cap on one apt mirror.
       # shellcheck disable=SC2086
-      retry_pkg $SUDO apt-get $APT_NET_OPTS update
+      retry_pkg $SUDO $APT_GET $APT_NET_OPTS update
       # shellcheck disable=SC2086
-      retry_pkg $SUDO apt-get $APT_NET_OPTS install -y bash git curl ca-certificates jq python3 python3-pip python3-venv zsh tar gzip unzip xz-utils
+      retry_pkg $SUDO $APT_GET $APT_NET_OPTS install -y bash git curl ca-certificates jq python3 python3-pip python3-venv zsh tar gzip unzip xz-utils
       install_yq_v4
       ;;
     Arch)
       pacman-key --init
       pacman-key --populate
-      retry_pkg pacman -Syu --noconfirm bash git curl ca-certificates jq python python-pip zsh tar gzip unzip xz
+      # shellcheck disable=SC2046,SC2086
+      retry_pkg pacman -Syu $PACMAN_SYNC_OPTS $(pacman_missing bash git curl ca-certificates jq python python-pip zsh tar gzip unzip xz)
       install_yq_v4
       ;;
     CentOS*)

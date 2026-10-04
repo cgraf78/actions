@@ -63,12 +63,17 @@ jobs:
     timeout-minutes: 55
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Name checkout's throwaway initial branch so Git skips its hint.
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: init.defaultBranch
+          GIT_CONFIG_VALUE_0: main
         with:
           persist-credentials: false
 
       - name: Stage exact Dot bootstrap payload
         if: inputs.setup == 'dotfiles'
-        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@d828348e1b0db5172c4fcaed84b72ec2c6f54121
+        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@0a0f6e217f3cd5ea4d68b44af88f47cfa9ef8e53
         env:
           HOME: ${{ github.workspace }}
         with:
@@ -84,7 +89,7 @@ jobs:
 
       - name: Configure host Android NDK toolchain
         if: inputs.host-command != '' && inputs.rust-toolchain != ''
-        uses: cgraf78/actions/.github/actions/android-rust-toolchain@d828348e1b0db5172c4fcaed84b72ec2c6f54121
+        uses: cgraf78/actions/.github/actions/android-rust-toolchain@0a0f6e217f3cd5ea4d68b44af88f47cfa9ef8e53
         with:
           rust-target: x86_64-linux-android
 
@@ -125,7 +130,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Stage bounded Termux ADB helper
-        uses: cgraf78/actions/.github/actions/termux-adb@d828348e1b0db5172c4fcaed84b72ec2c6f54121
+        uses: cgraf78/actions/.github/actions/termux-adb@0a0f6e217f3cd5ea4d68b44af88f47cfa9ef8e53
 
       - name: Prepare Termux host runner
         shell: bash
@@ -415,5 +420,8 @@ jobs:
           target: default
           disable-animations: true
           emulator-boot-timeout: 600
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          # `-no-metrics` answers the emulator's metrics-consent banner, which it
+          # prints as a "WARNING - ACTION REQUIRED" block on every launch and
+          # plans to turn into a blocking prompt. It keeps collection off.
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -no-metrics
           script: bash "$RUNNER_TEMP/termux-ci-host.sh"

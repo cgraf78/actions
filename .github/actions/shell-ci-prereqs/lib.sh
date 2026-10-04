@@ -63,18 +63,19 @@ install_package_lists() {
   case "$MATRIX_NAME" in
     macOS)
       if [ -n "$brew_pkgs" ]; then
-        # Package lists are assembled by trusted profile names.
+        # Package lists and install options are assembled by trusted
+        # profile names and the package-manager library.
         # shellcheck disable=SC2086
-        retry_pkg brew install $brew_pkgs
+        retry_pkg brew install $BREW_INSTALL_OPTS $brew_pkgs
       fi
       ;;
     Debian | Ubuntu | WSL)
       if [ -n "$apt_pkgs" ]; then
         # Package lists and network options are assembled here, not by callers.
         # shellcheck disable=SC2086
-        retry_pkg $SUDO apt-get $APT_NET_OPTS update
+        retry_pkg $SUDO $APT_GET $APT_NET_OPTS update
         # shellcheck disable=SC2086
-        retry_pkg $SUDO apt-get $APT_NET_OPTS install -y $apt_pkgs
+        retry_pkg $SUDO $APT_GET $APT_NET_OPTS install -y $apt_pkgs
       fi
       ;;
     Arch)
@@ -83,8 +84,8 @@ install_package_lists() {
       if [ -n "$arch_pkgs" ]; then
         # pacman has no transfer-timeout option of its own, so the `bounded`
         # supervisor in retry_pkg is the only stall guard on this platform.
-        # shellcheck disable=SC2086
-        retry_pkg pacman -Syu --noconfirm $arch_pkgs
+        # shellcheck disable=SC2046,SC2086
+        retry_pkg pacman -Syu $PACMAN_SYNC_OPTS $(pacman_missing $arch_pkgs)
       fi
       ;;
     CentOS* | Fedora)

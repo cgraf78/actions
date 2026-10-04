@@ -159,6 +159,11 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Name checkout's throwaway initial branch so Git skips its hint.
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: init.defaultBranch
+          GIT_CONFIG_VALUE_0: main
         with:
           persist-credentials: false
 
@@ -244,7 +249,7 @@ jobs:
       - name: Install package smoke musl linker
         if: inputs.package-smoke-command != '' && inputs.package-smoke-musl-target != '' && inputs.package-smoke-install-musl-tools
         timeout-minutes: 10
-        uses: cgraf78/actions/.github/actions/musl-build-prereqs@d828348e1b0db5172c4fcaed84b72ec2c6f54121
+        uses: cgraf78/actions/.github/actions/musl-build-prereqs@0a0f6e217f3cd5ea4d68b44af88f47cfa9ef8e53
 
       - name: Prepare package smoke
         if: inputs.package-smoke-command != '' && inputs.package-smoke-setup-command != ''
@@ -329,6 +334,11 @@ jobs:
       CARGO_AUDIT_VERSION: 0.22.2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Name checkout's throwaway initial branch so Git skips its hint.
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: init.defaultBranch
+          GIT_CONFIG_VALUE_0: main
         with:
           persist-credentials: false
 
@@ -425,6 +435,11 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Name checkout's throwaway initial branch so Git skips its hint.
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: init.defaultBranch
+          GIT_CONFIG_VALUE_0: main
         with:
           persist-credentials: false
 
@@ -435,7 +450,7 @@ jobs:
           targets: aarch64-linux-android
 
       - name: Configure Android NDK toolchain
-        uses: cgraf78/actions/.github/actions/android-rust-toolchain@d828348e1b0db5172c4fcaed84b72ec2c6f54121
+        uses: cgraf78/actions/.github/actions/android-rust-toolchain@0a0f6e217f3cd5ea4d68b44af88f47cfa9ef8e53
 
       - name: Build and smoke Android package
         shell: bash
