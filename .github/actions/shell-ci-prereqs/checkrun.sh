@@ -22,8 +22,7 @@ install_checkrun_prereqs() {
     Arch)
       pacman-key --init
       pacman-key --populate
-      # shellcheck disable=SC2046,SC2086
-      retry_pkg pacman -Syu $PACMAN_SYNC_OPTS $(pacman_missing bash git curl ca-certificates jq python python-pip zsh tar gzip unzip xz)
+      pacman_install bash git curl ca-certificates jq python python-pip zsh tar gzip unzip xz
       install_yq_v4
       ;;
     CentOS*)

@@ -30,8 +30,8 @@ APT_GET="env DEBIAN_FRONTEND=noninteractive apt-get"
 # shellcheck disable=SC2034
 BREW_INSTALL_OPTS="--quiet"
 # `--needed` stops pacman reinstalling packages that are already current. It
-# still warns "up to date -- skipping" for each such target, so callers also
-# name only missing targets through pacman_missing.
+# still warns "up to date -- skipping" for each such target, so pacman_install
+# also names only missing targets through pacman_missing.
 # shellcheck disable=SC2034
 PACMAN_SYNC_OPTS="--noconfirm --needed"
 
@@ -69,12 +69,12 @@ configure_ubuntu_archive_mirror() {
 }
 
 # Print the requested pacman targets that no installed package satisfies, one
-# per line. The caller's `pacman -Syu` still upgrades everything already
+# per line. pacman_install's `pacman -Syu` still upgrades everything already
 # installed, so naming only missing targets changes no package outcome; it only
 # avoids pacman's per-target "up to date" warning. Any other query status
 # prints the full request so the install still runs and reports the problem.
-# Status 127 is also the shell's "command not found"; then the following
-# `pacman -Syu` fails the same way, so nothing is hidden.
+# Status 127 is also the shell's "command not found", but pacman_install's
+# preceding sync has already failed the same way, so nothing is hidden.
 pacman_missing() {
   if _missing=$(pacman -T "$@"); then
     return 0
@@ -86,6 +86,21 @@ pacman_missing() {
   else
     printf '%s\n' "$@"
   fi
+}
+
+# Upgrade the system and install the requested targets. pacman registers every
+# configured sync database at startup and, for any operation but a sync, warns
+# "database file for 'core' does not exist" for each one the container image
+# ships without, so the pacman_missing query must wait for a first `-Sy`. The
+# install keeps `-y`: once the databases exist it costs one freshness check
+# and no warning, and each retry still picks up databases a mirror replaced
+# mid-run instead of chasing packages they no longer list. A sync that
+# exhausts its retries stops before the query and install.
+pacman_install() {
+  # shellcheck disable=SC2086
+  retry_pkg pacman -Sy $PACMAN_SYNC_OPTS || return
+  # shellcheck disable=SC2046,SC2086
+  retry_pkg pacman -Syu $PACMAN_SYNC_OPTS $(pacman_missing "$@")
 }
 
 bounded() {

@@ -42,6 +42,24 @@ assert_eq() {
   fi
 }
 
+# pacman registers every configured sync database at startup and warns
+# "database file for 'core' does not exist" for each one a fresh image lacks,
+# whatever the operation. Only a database sync is exempt, so the first pacman
+# command of an Arch install must be `pacman -Sy`.
+assert_pacman_syncs_first() {
+  label=$1
+
+  first=$(grep -m 1 'pacman ' "$command_log" || true)
+  case "$first" in
+    *'pacman -Sy --noconfirm --needed') ;;
+    *)
+      printf 'not ok - %s: first pacman command was <%s>\n' \
+        "$label" "$first" >&2
+      return 1
+      ;;
+  esac
+}
+
 assert_contains() {
   expected=$1
   actual=$2
@@ -58,7 +76,8 @@ assert_contains() {
 }
 
 # Debian-family prerequisite setup can retry both `apt-get update` and
-# `apt-get install`. Account for every bounded attempt, backoff, and forced
+# `apt-get install`, and Arch both its first `pacman -Sy` and the install.
+# Account for every bounded attempt, backoff, and forced
 # kill grace so the full path leaves runner overhead inside the 20m step cap.
 kill_after=${PKG_COMMAND_KILL_AFTER:-0}
 retry_window=$((2 * ((PKG_COMMAND_TIMEOUT + kill_after) * PKG_RETRIES + \
@@ -174,10 +193,12 @@ done
 
 # `pacman -T` prints the unsatisfied targets and exits 127. Fixtures name the
 # already-installed targets in MOCK_PACMAN_INSTALLED and can force any other
-# query failure with MOCK_PACMAN_QUERY_STATUS.
+# query failure with MOCK_PACMAN_QUERY_STATUS. Queries are logged too, so the
+# Arch cases can check that none runs before the databases are synced.
 cat >"$mock_bin/pacman" <<'MOCK'
 #!/bin/sh
 if [ "$1" = -T ]; then
+  printf '%s %s\n' "${0##*/}" "$*" >>"$command_log"
   shift
   [ -z "${MOCK_PACMAN_QUERY_STATUS:-}" ] || exit "$MOCK_PACMAN_QUERY_STATUS"
   missing=0
@@ -310,6 +331,7 @@ install_dotfiles_bootstrap_prereqs
 assert_contains \
   'pacman -Syu --noconfirm --needed git curl sudo openssh lsof openbsd-netcat' \
   "$(cat "$command_log")" 'dotfiles Arch skips up-to-date packages'
+assert_pacman_syncs_first 'dotfiles Arch syncs before querying packages'
 
 # pacman warns for every current target even under --needed, so only targets
 # that no installed package satisfies may reach `pacman -Syu`.
@@ -320,6 +342,7 @@ unset MOCK_PACMAN_INSTALLED
 assert_contains \
   'pacman -Syu --noconfirm --needed openssh openbsd-netcat python' \
   "$(cat "$command_log")" 'dotfiles Arch names only missing packages'
+assert_pacman_syncs_first 'dotfiles Arch syncs before naming missing packages'
 
 export MOCK_PACMAN_INSTALLED='bash git'
 assert_eq 'curl' "$(pacman_missing bash git curl)" \
@@ -330,7 +353,28 @@ unset MOCK_PACMAN_INSTALLED
 export MOCK_PACMAN_QUERY_STATUS=1
 assert_eq "$(printf 'bash\ngit')" "$(pacman_missing bash git)" \
   'pacman_missing falls back to the full request when the query fails'
+: >"$command_log"
+pacman_install bash git
+assert_contains 'pacman -Syu --noconfirm --needed bash git' \
+  "$(cat "$command_log")" 'pacman_install installs the full request when the query fails'
+assert_pacman_syncs_first 'pacman_install syncs before a failing query'
 unset MOCK_PACMAN_QUERY_STATUS
+
+# A sync that exhausts its retries must fail the install without querying or
+# installing against databases that never downloaded.
+: >"$command_log"
+sync_status=0
+(
+  # shellcheck disable=SC2329 # pacman_install invokes this fixture seam.
+  retry_pkg() {
+    printf '%s\n' "$*" >>"$command_log"
+    [ "$2" != -Sy ] || return 1
+  }
+  pacman_install bash git
+) || sync_status=$?
+assert_eq 1 "$sync_status" 'pacman_install returns the failed sync status'
+assert_eq 'pacman -Sy --noconfirm --needed' "$(cat "$command_log")" \
+  'pacman_install stops after a failed sync'
 
 printf 'ok - package installs skip packages that are already current\n'
 
@@ -372,6 +416,7 @@ unset MOCK_PACMAN_INSTALLED
 assert_contains \
   'pacman -Syu --noconfirm --needed git ca-certificates jq python' \
   "$(cat "$command_log")" 'checkrun Arch names only missing packages'
+assert_pacman_syncs_first 'checkrun Arch syncs before querying packages'
 unset -f install_yq_v4
 
 printf 'ok - checkrun setup uses bounded package controls\n'

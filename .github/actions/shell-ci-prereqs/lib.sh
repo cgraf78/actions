@@ -84,8 +84,9 @@ install_package_lists() {
       if [ -n "$arch_pkgs" ]; then
         # pacman has no transfer-timeout option of its own, so the `bounded`
         # supervisor in retry_pkg is the only stall guard on this platform.
-        # shellcheck disable=SC2046,SC2086
-        retry_pkg pacman -Syu $PACMAN_SYNC_OPTS $(pacman_missing $arch_pkgs)
+        # Package lists are assembled by trusted profile names.
+        # shellcheck disable=SC2086
+        pacman_install $arch_pkgs
       fi
       ;;
     CentOS* | Fedora)

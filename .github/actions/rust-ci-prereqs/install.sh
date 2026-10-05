@@ -26,14 +26,13 @@ case "$MATRIX_NAME" in
   Arch)
     pacman-key --init
     pacman-key --populate
-    # shellcheck disable=SC2046,SC2086
-    retry_pkg pacman -Syu $PACMAN_SYNC_OPTS $(pacman_missing \
+    pacman_install \
       base-devel \
       bash \
       ca-certificates \
       curl \
       git \
-      pkgconf)
+      pkgconf
     ;;
   CentOS* | Fedora)
     # shellcheck disable=SC2086
