@@ -16,10 +16,11 @@ STUB
   chmod +x "$tmp/bin/$cmd"
 done
 # `pacman -T` reports every target except bash as unsatisfied (status 127), as
-# on an image that already ships bash; other calls are only logged.
+# on an image that already ships bash; every call is logged.
 cat >"$tmp/bin/pacman" <<'STUB'
 #!/bin/sh
 if [ "$1" = -T ]; then
+  printf '%s %s\n' "${0##*/}" "$*" >>"$STUB_LOG"
   shift
   for target in "$@"; do
     [ "$target" = bash ] || printf '%s\n' "$target"
@@ -48,5 +49,12 @@ env -i PATH="$tmp/bin" STUB_LOG="$log" MATRIX_NAME=Arch \
   sh "$install_sh"
 out=$(<"$log")
 [[ $out == *'timeout -k 5 120 pacman -Syu --noconfirm --needed base-devel ca-certificates curl git pkgconf'* ]]
+# Any pacman command before the database sync warns that each configured sync
+# database is missing, so the sync must come before the `pacman -T` query.
+first_pacman=$(grep -m 1 'pacman ' "$log" || true)
+[[ $first_pacman == *'pacman -Sy --noconfirm --needed' ]] || {
+  printf 'rust-prereqs-test: first pacman command was <%s>\n' "$first_pacman" >&2
+  exit 1
+}
 
 printf 'rust-prereqs-test: ok\n'
