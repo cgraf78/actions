@@ -148,27 +148,39 @@ file_inode() {
   fi
 }
 
+# INT the `generations`-th ancestor of the process named in `ready` once
+# that process (and, with `child_ready`, its child) is running, and wait for
+# the ancestor to exit. A failure writes its reason to `timeout_marker`.
+#
+# The waits for the fixture to start are bounded at 30s: they cover a
+# bootstrap that clones and reaches its delegate, which a loaded macOS
+# runner can stretch well past a few seconds, and a fixture that starts
+# after the killer gave up spins until the CI job times out instead of
+# failing.
 interrupt_parent_of_ready_child() {
   local ready=$1 timeout_marker=$2 generations=${3:-1}
   local child_release=${4:-} child_ready=${5:-} child parent
 
-  for _ in {1..100}; do
+  for _ in {1..600}; do
     [[ -e "$ready" ]] && break
     sleep 0.05
   done
-  [[ -e "$ready" ]] || return 1
+  if [[ ! -e "$ready" ]]; then
+    printf 'the fixture never wrote %s\n' "$ready" >"$timeout_marker"
+    return 1
+  fi
   child=$(sed -n '1p' "$ready")
   if [[ -n "$child_release" ]]; then
     : >"$child_release"
   fi
   if [[ -n "$child_ready" ]]; then
-    for _ in {1..100}; do
+    for _ in {1..600}; do
       [[ -e "$child_ready" ]] && break
       kill -0 "$child" 2>/dev/null || break
       sleep 0.05
     done
     if [[ ! -e "$child_ready" ]]; then
-      : >"$timeout_marker"
+      printf 'the fixture child never wrote %s\n' "$child_ready" >"$timeout_marker"
       kill -TERM "$child" 2>/dev/null || true
       return 1
     fi
@@ -181,7 +193,7 @@ interrupt_parent_of_ready_child() {
     generations=$((generations - 1))
   done
   if [[ -z "$parent" ]]; then
-    : >"$timeout_marker"
+    printf 'no ancestor of %s to interrupt\n' "$child" >"$timeout_marker"
     kill -TERM "$child" 2>/dev/null || true
     return 1
   fi
@@ -192,7 +204,7 @@ interrupt_parent_of_ready_child() {
     sleep 0.05
   done
 
-  : >"$timeout_marker"
+  printf '%s did not exit within 5s of INT\n' "$parent" >"$timeout_marker"
   kill -TERM "$child" 2>/dev/null || true
   kill -TERM "$parent" 2>/dev/null || true
 }
@@ -1635,7 +1647,7 @@ set -e
 interrupt_killer_pid=
 [[ "$post_direct_int_killer_status" -eq 0 &&
   ! -e "$post_direct_int_timeout" ]] ||
-  fail "direct post-install primary did not cancel after INT"
+  fail "direct post-install primary did not cancel after INT: $(cat "$post_direct_int_timeout" 2>/dev/null)"
 [[ -e "$post_direct_int_ready" && -e "$signal_delegate_child_file" ]] ||
   fail "direct post-install INT fixture did not start the delegate tree"
 post_direct_int_delegate_pid=$(sed -n '1p' "$post_direct_int_ready")
@@ -3952,7 +3964,12 @@ signal_ready="$tmp/signal-int.ready"
 signal_release="$tmp/signal-int.release"
 signal_delegate_child_file="$tmp/signal-int.delegate-child"
 signal_timeout="$tmp/signal-int.timeout"
-interrupt_parent_of_ready_child "$signal_ready" "$signal_timeout" &
+# The delegate writes `ready` before it starts the child that publishes the
+# child file, so wait for the child file too: an INT that lands in between
+# cancels the delegate before its child exists, and the assertions below
+# need both.
+interrupt_parent_of_ready_child \
+  "$signal_ready" "$signal_timeout" 1 "" "$signal_delegate_child_file" &
 interrupt_killer_pid=$!
 set +e
 CHECKOUT_TEST_LOG="$tmp/signal-int.log" \
@@ -3969,7 +3986,7 @@ interrupt_killer_status=$?
 set -e
 interrupt_killer_pid=
 [[ "$interrupt_killer_status" -eq 0 && ! -e "$signal_timeout" ]] ||
-  fail "bootstrap did not cancel its active delegate after INT"
+  fail "bootstrap did not cancel its active delegate after INT: $(cat "$signal_timeout" 2>/dev/null)"
 [[ -e "$signal_ready" && -e "$signal_delegate_child_file" ]] ||
   fail "INT-forwarding delegate did not start"
 signal_delegate_pid=$(sed -n '1p' "$signal_ready")
@@ -4075,7 +4092,7 @@ interrupt_killer_status=$?
 set -e
 interrupt_killer_pid=
 [[ "$interrupt_killer_status" -eq 0 && ! -e "$network_signal_timeout" ]] ||
-  fail "bootstrap did not cancel active network Git after INT"
+  fail "bootstrap did not cancel active network Git after INT: $(cat "$network_signal_timeout" 2>/dev/null)"
 [[ -e "$network_signal_ready" ]] ||
   fail "network INT fixture did not reach Git clone"
 network_git_pid=$(sed -n '1p' "$network_signal_ready")
