@@ -15,8 +15,8 @@ usage: consumer-ci/sync.sh <consumer-repository>
 
 Run this command from the cgraf78/actions checkout at the commit the consumer
 should pin. It writes the consumer lock, updates every tracked workflow/action
-reference, refreshes vendored release scripts, and regenerates any opted-in
-release or checkout installer.
+reference, refreshes vendored release and capability-harness scripts, and
+regenerates any opted-in release or checkout installer.
 
 Use --self after committing provider changes to generate cgraf78/actions' own
 internal lock and literal action references from that implementation commit.
@@ -62,6 +62,17 @@ fi
 # gap between a clean checkout and reproducible vendored output.
 shopt -s nullglob
 for provider_script in "$source_root"/release-scripts/*.sh; do
+  provider_relative=${provider_script#"$source_root"/}
+  if [[ ! -f "$provider_script" || -L "$provider_script" ]] ||
+    ! git -C "$source_root" ls-files --error-unmatch -- \
+      "$provider_relative" >/dev/null 2>&1; then
+    printf 'consumer-sync: provider script is not a tracked regular file: %s\n' \
+      "$provider_relative" >&2
+    exit 1
+  fi
+done
+for provider_script in "$source_root"/capability-harness/*.sh \
+  "$source_root/consumer-ci/vendor-scripts.sh"; do
   provider_relative=${provider_script#"$source_root"/}
   if [[ ! -f "$provider_script" || -L "$provider_script" ]] ||
     ! git -C "$source_root" ls-files --error-unmatch -- \
@@ -191,6 +202,26 @@ elif [[ -e "$release_manifest" || -L "$release_manifest" ]]; then
   exit 1
 fi
 
+# Dot overlay repositories opt into the shared capability test harness with a
+# tracked marker config beside the vendored copies. Like release.conf, the
+# config and generated manifest are paired so deleting only one cannot leave
+# vendored bytes outside future drift checks.
+harness_config="$consumer/test/lib/capability-harness.conf"
+harness_manifest="$consumer/test/lib/.capability-harness.manifest"
+harness_enabled=false
+if [[ -e "$harness_config" || -L "$harness_config" ]]; then
+  if [[ ! -f "$harness_config" || -L "$harness_config" ]]; then
+    printf 'consumer-sync: capability harness config must be a regular file: %s\n' \
+      "$harness_config" >&2
+    exit 1
+  fi
+  harness_enabled=true
+elif [[ -e "$harness_manifest" || -L "$harness_manifest" ]]; then
+  printf 'consumer-sync: capability harness manifest exists without capability-harness.conf: %s\n' \
+    "$harness_manifest" >&2
+  exit 1
+fi
+
 installer_policy_enabled() {
   local config=$1 variable=$2
 
@@ -276,6 +307,11 @@ fi
 if [[ "$release_enabled" == true ]]; then
   "$source_root/release-scripts/sync.sh" "$consumer/scripts"
   "$source_root/release-installer/render.sh" "$consumer"
+fi
+if [[ "$harness_enabled" == true ]]; then
+  "$source_root/consumer-ci/vendor-scripts.sh" \
+    "$source_root/capability-harness" "$consumer/test/lib" \
+    .capability-harness.manifest
 fi
 # An enabled checkout renderer runs only after a disabled release renderer has
 # had the same opportunity to retire its generated installer.

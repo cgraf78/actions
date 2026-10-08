@@ -613,6 +613,7 @@ contracts() {
   check '.jobs.quality.steps[] | select(.name == "Test shared ShellCheck inventory action").run == "test/shellcheck-action-test"' test.yml
   check '.jobs.quality.steps[] | select(.name == "Test third-party uses pin policy").run == "test/uses-pin-policy-test"' test.yml
   check '.jobs.quality.steps[] | select(.name == "Test consumer synchronization").run == "test/consumer-sync-test"' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Test shared capability harness").run == "test/capability-harness-test"' test.yml
   check '.jobs.quality.steps[] | select(.name == "Test generated release installer").run == "test/release-installer-test"' test.yml
   check '.jobs.quality.steps[] | select(.name == "Test consumer installer contracts against this template").run == "test/consumer-installer-canary all"' test.yml
   check '.jobs.quality.steps[] | select(.name == "Test consumer installer contracts against this template")."timeout-minutes" == 5' test.yml

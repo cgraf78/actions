@@ -108,7 +108,7 @@ if [[ "$status" -ne 0 ]]; then
   cat >&2 <<'EOF'
 
 Run consumer-ci/sync.sh from a cgraf78/actions checkout at the desired commit,
-then commit the lock, workflow references, and synchronized release scripts.
+then commit the lock, workflow references, and synchronized vendored scripts.
 EOF
   exit 1
 fi
@@ -145,6 +145,38 @@ if [[ "$release_config_tracked" == true ]]; then
   "$actions_root/release-installer/render.sh" --check "$repo_root"
 else
   printf 'verify-consumer-sync: no tracked release config; version lock only\n'
+fi
+
+# Dot overlay repositories vendor the shared capability test harness from the
+# same locked commit. As with release scripts, the marker config and generated
+# manifest must be tracked together so neither can be dropped alone.
+harness_config_tracked=false
+harness_manifest_tracked=false
+if git -C "$repo_root" ls-files --error-unmatch \
+  test/lib/capability-harness.conf >/dev/null 2>&1; then
+  harness_config_tracked=true
+fi
+if git -C "$repo_root" ls-files --error-unmatch \
+  test/lib/.capability-harness.manifest >/dev/null 2>&1; then
+  harness_manifest_tracked=true
+fi
+if [[ "$harness_config_tracked" != "$harness_manifest_tracked" ]]; then
+  printf '%s\n' \
+    'verify-consumer-sync: inconsistent capability harness markers; capability-harness.conf and managed manifest must be tracked together' >&2
+  exit 1
+fi
+if [[ "$harness_config_tracked" == true ]]; then
+  if [[ ! -f test/lib/capability-harness.conf || -L test/lib/capability-harness.conf ]]; then
+    printf '%s\n' \
+      'verify-consumer-sync: capability-harness.conf must be a regular non-symlink file' >&2
+    exit 1
+  fi
+  actions_root=$(cd "$GITHUB_ACTION_PATH/../../.." && pwd)
+  "$GITHUB_ACTION_PATH/../shared/verify-vendored-scripts.sh" \
+    "$actions_root/capability-harness" test/lib .capability-harness.manifest \
+    verify-capability-harness 'capability-harness scripts'
+else
+  printf 'verify-consumer-sync: no tracked capability harness config\n'
 fi
 
 # Source-distributed consumers use the same lock for their generated checkout

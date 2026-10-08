@@ -21,6 +21,8 @@ cp -R "$root/consumer-ci" "$actions_source/consumer-ci"
 cp -R "$root/release-scripts" "$actions_source/release-scripts"
 cp -R "$root/release-installer" "$actions_source/release-installer"
 cp -R "$root/checkout-installer" "$actions_source/checkout-installer"
+cp -R "$root/capability-harness" "$actions_source/capability-harness"
+cp -R "$root/.github/actions/shared" "$actions_source/.github/actions/shared"
 cp -R "$root/.github/actions/verify-consumer-sync" \
   "$actions_source/.github/actions/verify-consumer-sync"
 cp -R "$root/.github/actions/verify-release-scripts" \
@@ -442,6 +444,96 @@ if [[ "$out" != *"inconsistent release markers"* ]]; then
 fi
 if "$sync" "$plain_consumer" >/dev/null 2>&1; then
   fail "sync accepted a release manifest without release.conf"
+fi
+
+# Capability-harness consumers adopt by tracking the marker config. Sync must
+# replace any pre-existing copy at a managed name, keep repository-owned
+# neighbors, and pair the config with a generated manifest that CI verifies.
+harness_consumer="$tmp/harness-consumer"
+mkdir -p "$harness_consumer/.github/workflows" "$harness_consumer/test/lib"
+git -C "$harness_consumer" init --quiet --template=''
+cat >"$harness_consumer/.github/workflows/test.yml" <<'YAML'
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: cgraf78/actions/.github/actions/verify-consumer-sync@main
+YAML
+printf '# Opt in to the shared capability harness.\n' \
+  >"$harness_consumer/test/lib/capability-harness.conf"
+printf 'stale local copy\n' >"$harness_consumer/test/lib/wait-github-state.sh"
+printf '# repo-owned helper\n' >"$harness_consumer/test/lib/own-helper.sh"
+git -C "$harness_consumer" add .
+"$sync" "$harness_consumer" >/dev/null ||
+  fail "sync failed for a capability harness consumer"
+harness_names=$(cd "$actions_source/capability-harness" &&
+  LC_ALL=C printf '%s\n' *.sh)
+[[ -n "$harness_names" ]] ||
+  fail "capability harness provider ships no scripts"
+diff -u <(printf '%s\n' "$harness_names") \
+  "$harness_consumer/test/lib/.capability-harness.manifest" >/dev/null ||
+  fail "sync recorded the wrong capability harness managed set"
+while IFS= read -r harness_name; do
+  cmp -s "$actions_source/capability-harness/$harness_name" \
+    "$harness_consumer/test/lib/$harness_name" ||
+    fail "sync did not vendor capability harness file $harness_name"
+  want_exec=false got_exec=false
+  [[ ! -x "$actions_source/capability-harness/$harness_name" ]] || want_exec=true
+  [[ ! -x "$harness_consumer/test/lib/$harness_name" ]] || got_exec=true
+  [[ "$want_exec" == "$got_exec" ]] ||
+    fail "sync did not mirror the mode of $harness_name"
+done <<<"$harness_names"
+[[ $(<"$harness_consumer/test/lib/own-helper.sh") == '# repo-owned helper' ]] ||
+  fail "sync touched a repository-owned test/lib helper"
+git -C "$harness_consumer" add .
+GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
+  GITHUB_WORKSPACE="$harness_consumer" ACTION_REF="$want" \
+  "$verify" >/dev/null ||
+  fail "freshly synchronized capability harness consumer did not verify"
+
+printf '# local edit\n' >>"$harness_consumer/test/lib/wait-github-state.sh"
+out=$(GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
+  GITHUB_WORKSPACE="$harness_consumer" ACTION_REF="$want" \
+  "$verify" 2>&1) &&
+  fail "drifted capability harness copy unexpectedly verified"
+if [[ "$out" != *"wait-github-state.sh differs"* ||
+  "$out" != *"capability-harness scripts are out of date"* ]]; then
+  fail "capability harness drift did not explain the failed verification"
+fi
+"$sync" "$harness_consumer" >/dev/null ||
+  fail "sync did not restore a drifted capability harness copy"
+git -C "$harness_consumer" add .
+
+# A tracked symlink marker would let the opt-in point outside the reviewed
+# tree; CI must reject it even though Git records both markers.
+mv "$harness_consumer/test/lib/capability-harness.conf" \
+  "$harness_consumer/test/lib/capability-harness.conf-target"
+ln -s capability-harness.conf-target \
+  "$harness_consumer/test/lib/capability-harness.conf"
+git -C "$harness_consumer" add .
+out=$(GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
+  GITHUB_WORKSPACE="$harness_consumer" ACTION_REF="$want" \
+  "$verify" 2>&1) &&
+  fail "symlinked capability harness marker unexpectedly verified"
+if [[ "$out" != *"capability-harness.conf must be a regular non-symlink file"* ]]; then
+  fail "symlinked capability harness marker did not explain the failure"
+fi
+rm "$harness_consumer/test/lib/capability-harness.conf"
+mv "$harness_consumer/test/lib/capability-harness.conf-target" \
+  "$harness_consumer/test/lib/capability-harness.conf"
+git -C "$harness_consumer" add .
+
+git -C "$harness_consumer" rm --cached --quiet test/lib/capability-harness.conf
+rm "$harness_consumer/test/lib/capability-harness.conf"
+out=$(GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
+  GITHUB_WORKSPACE="$harness_consumer" ACTION_REF="$want" \
+  "$verify" 2>&1) &&
+  fail "orphaned capability harness manifest unexpectedly verified"
+if [[ "$out" != *"inconsistent capability harness markers"* ]]; then
+  fail "orphaned capability harness manifest did not explain its marker mismatch"
+fi
+if "$sync" "$harness_consumer" >/dev/null 2>&1; then
+  fail "sync accepted a capability harness manifest without its config"
 fi
 
 # Preflight the consumer before writing its lock. A typo that points at a repo

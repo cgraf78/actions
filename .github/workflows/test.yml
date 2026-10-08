@@ -359,6 +359,10 @@ jobs:
         shell: bash
         run: test/consumer-sync-test
 
+      - name: Test shared capability harness
+        shell: bash
+        run: test/capability-harness-test
+
       - name: Test generated release installer
         shell: bash
         run: test/release-installer-test
