@@ -28,8 +28,10 @@ for entry in capability-fixture.sh suite-inventory.sh wait-github-state.sh; do
   [[ -x "$harness/$entry" ]] || fail "$entry must be executable"
   "$harness/$entry" --self-test || fail "$entry self-test failed"
 done
-[[ ! -x "$harness/dot-release.sh" ]] ||
-  fail "dot-release.sh is a sourced library and must not be executable"
+for library in dot-release.sh workflow-contract.sh; do
+  [[ ! -x "$harness/$library" ]] ||
+    fail "$library is a sourced library and must not be executable"
+done
 
 # Consumers call self-tests from their own functions under strict mode. A
 # cleanup trap that outlives its function would rerun in the caller with its
@@ -51,7 +53,7 @@ done
 # runners already choose strict mode; a library silently enabling it would
 # change unrelated callers' error handling.
 for library in capability-fixture.sh suite-inventory.sh wait-github-state.sh \
-  dot-release.sh; do
+  dot-release.sh workflow-contract.sh; do
   opts=$(bash -c 'set +euo pipefail; . "$1"; printf "%s:%s" "$-" \
     "$(set -o | awk '"'"'$1 == "pipefail" { print $2 }'"'"')"' _ \
     "$harness/$library") || fail "sourcing $library failed"
@@ -329,5 +331,175 @@ out=$(DOT_TEST_DOT_RELEASE_TAG=20990404-000000-aaaaaaaa \
   fail "install accepted an archive with the reserved shdeps marker"
 [[ "$out" == *'reserved shdeps marker'* ]] ||
   fail "install did not explain the reserved shdeps marker"
+
+# --- Workflow contract --------------------------------------------------------
+
+# Evaluate SNIPPET in a strict child shell from DIR after sourcing the
+# library, matching how an overlay's workflow-test sources it after
+# `cd "$repo_root"`.
+contract() {
+  local dir=$1 snippet=$2
+  # shellcheck disable=SC2016 # The child shell expands its own arguments.
+  (cd "$dir" && env -u GITHUB_REPOSITORY bash -c \
+    'set -euo pipefail; . "$1"; eval "$2"' _ \
+    "$harness/workflow-contract.sh" "$snippet")
+}
+
+name_case() {
+  local want=$1 got
+  shift
+  # shellcheck disable=SC2016 # The child shell expands its own arguments.
+  got=$(bash -c '. "$1"; shift; workflow_contract_repo_name "$@"' _ \
+    "$harness/workflow-contract.sh" "$@")
+  [[ "$got" == "$want" ]] || fail "repo name for $* was $got, want $want"
+}
+name_case dotfiles-dev /tmp/project cgraf78/dotfiles-dev \
+  git@github.com:cgraf78/other.git
+name_case dotfiles-dev /tmp/project '' git@github.com:cgraf78/dotfiles-dev.git
+name_case dotfiles-nvim /tmp/project '' https://github.com/cgraf78/dotfiles-nvim
+name_case project /tmp/project '' ''
+
+overlay="$tmp/contract/branch-named-checkout"
+mkdir -p "$overlay"
+git -C "$overlay" init --quiet --template=''
+git -C "$overlay" remote add origin git@github.com:cgraf78/dotfiles-example.git
+cp "$root/LICENSE" "$overlay/LICENSE"
+printf '.worktrees/\n' >"$overlay/.gitignore"
+
+contract "$overlay" 'workflow_contract_init dotfiles-example' ||
+  fail "init rejected the origin-derived repository name"
+out=$(contract "$overlay" 'workflow_contract_init dotfiles-other' 2>&1) &&
+  fail "init accepted an unexpected repository name"
+[[ "$out" == 'workflow-test: unexpected repository name: dotfiles-example' ]] ||
+  fail "init did not name the unexpected repository: $out"
+out=$(GITHUB_REPOSITORY=cgraf78/dotfiles-ci bash -c \
+  '. "$1"; cd "$2"; workflow_contract_init dotfiles-ci; echo "$WORKFLOW_CONTRACT_REPO"' _ \
+  "$harness/workflow-contract.sh" "$overlay" 2>&1) ||
+  fail "init ignored GitHub's repository identity: $out"
+git -C "$overlay" remote remove origin
+out=$(contract "$overlay" 'workflow_contract_init branch-named-checkout' 2>&1) ||
+  fail "init without origin did not fall back to the checkout name: $out"
+git -C "$overlay" remote add origin git@github.com:cgraf78/dotfiles-example.git
+
+contract "$overlay" 'workflow_contract_count_run' ||
+  fail "count_run failed without a counter file"
+WORKFLOW_TEST_COUNT_FILE="$tmp/contract/count" contract "$overlay" \
+  'workflow_contract_count_run; workflow_contract_count_run'
+[[ $(<"$tmp/contract/count") == 2 ]] || fail "count_run did not increment its counter"
+
+contract "$overlay" 'workflow_contract_check_files' ||
+  fail "check_files rejected the canonical LICENSE and .gitignore"
+printf 'extra\n' >>"$overlay/.gitignore"
+out=$(contract "$overlay" 'workflow_contract_check_files' 2>&1) &&
+  fail "check_files accepted an extended .gitignore"
+[[ "$out" == *'.gitignore must contain only .worktrees/'* ]] ||
+  fail "check_files did not explain the .gitignore drift"
+printf '.worktrees/\n' >"$overlay/.gitignore"
+printf ' ' >>"$overlay/LICENSE"
+out=$(contract "$overlay" 'workflow_contract_check_files' 2>&1) &&
+  fail "check_files accepted altered LICENSE bytes"
+[[ "$out" == *'LICENSE bytes differ'* ]] ||
+  fail "check_files did not explain the LICENSE drift"
+cp "$root/LICENSE" "$overlay/LICENSE"
+
+printf '# type<TAB>path\nprogram\ttest/run\n\nprogram\ttest/lib/x.sh\n' \
+  >"$overlay/inventory"
+contract "$overlay" 'workflow_contract_check_inventory_programs inventory' ||
+  fail "inventory check rejected program-only rows"
+printf 'fixture\ttest/run\n' >>"$overlay/inventory"
+out=$(contract "$overlay" 'workflow_contract_check_inventory_programs inventory' 2>&1) &&
+  fail "inventory check accepted an unlinted fixture row"
+[[ "$out" == *'not a linted program: fixture test/run'* ]] ||
+  fail "inventory check did not name the fixture row: $out"
+out=$(contract "$overlay" 'workflow_contract_check_inventory_programs missing' 2>&1) &&
+  fail "inventory check accepted a missing inventory"
+
+# A stub gh answers from environment knobs so each remote rule fails alone.
+gh_bin="$tmp/contract/gh-bin"
+mkdir -p "$gh_bin"
+cat >"$gh_bin/gh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  *'--jq .visibility'*) printf '%s\n' "${STUB_GH_VISIBILITY:-public}" ;;
+  *'--jq .default_branch'*) printf '%s\n' "${STUB_GH_BRANCH:-main}" ;;
+  *'--jq .license.spdx_id'*) printf '%s\n' "${STUB_GH_LICENSE:-MIT}" ;;
+  *'contents/LICENSE'*) base64 <"$STUB_GH_LICENSE_FILE" ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$gh_bin/gh"
+remote() {
+  PATH="$gh_bin:$PATH" STUB_GH_LICENSE_FILE="${STUB_GH_LICENSE_FILE:-$root/LICENSE}" \
+    contract "$overlay" "workflow_contract_init dotfiles-example; $1"
+}
+remote workflow_contract_remote_predicate ||
+  fail "remote predicate rejected a conforming repository"
+for knob in STUB_GH_VISIBILITY=private STUB_GH_BRANCH=master STUB_GH_LICENSE=Apache-2.0; do
+  out=$(
+    export "${knob?}"
+    remote workflow_contract_remote_predicate 2>&1
+  ) &&
+    fail "remote predicate accepted $knob"
+  [[ "$out" == workflow-test:* ]] || fail "remote predicate did not explain $knob: $out"
+done
+printf 'different\n' >"$tmp/contract/other-license"
+out=$(STUB_GH_LICENSE_FILE="$tmp/contract/other-license" \
+  remote workflow_contract_remote_predicate 2>&1) &&
+  fail "remote predicate accepted a different published LICENSE"
+[[ "$out" == *'remote license differs from the tested checkout'* ]] ||
+  fail "remote predicate did not explain the LICENSE mismatch"
+# Failed attempts must not leave downloads behind; polling retries them.
+leak_tmp="$tmp/contract/leak-tmp"
+mkdir -p "$leak_tmp"
+TMPDIR="$leak_tmp" STUB_GH_LICENSE_FILE="$tmp/contract/other-license" \
+  remote workflow_contract_remote_predicate >/dev/null 2>&1 &&
+  fail "remote predicate accepted a different published LICENSE"
+# Look only for the predicate's own download: host tools such as a git
+# wrapper may legitimately write other files under TMPDIR.
+[[ -z $(find "$leak_tmp" -name target-LICENSE -print) ]] ||
+  fail "failed remote predicate leaked its download"
+# Without gh on PATH the predicate must say so. GitHub's identity supplies the
+# repository name because the stub-only PATH has no git either.
+# shellcheck disable=SC2016 # The child shell expands its own arguments.
+out=$(cd "$overlay" && PATH="$stub_bin" GITHUB_REPOSITORY=cgraf78/dotfiles-example \
+  bash -c 'set -euo pipefail; . "$1"; workflow_contract_init dotfiles-example
+    workflow_contract_remote_predicate' _ "$harness/workflow-contract.sh" 2>&1) &&
+  fail "remote predicate passed without gh"
+[[ "$out" == *'gh is required for remote validation'* ]] ||
+  fail "remote predicate did not explain the missing gh: $out"
+
+# The predicate is called from a strict caller's function; its cleanup trap
+# must not survive to rerun there with its local variable out of scope.
+# shellcheck disable=SC2016 # The child shell evaluates this snippet.
+out=$(remote 'wrapper() { workflow_contract_remote_predicate; echo wrapped; }
+  wrapper; [[ -z $(trap -p RETURN) ]] && echo trap-cleared' 2>&1) ||
+  fail "remote predicate failed from a strict caller: $out"
+[[ "$out" == *wrapped*trap-cleared* ]] ||
+  fail "remote predicate left a RETURN trap behind: $out"
+
+out=$(remote 'workflow_contract_dispatch_predicate --remote; echo continued' 2>&1) ||
+  fail "dispatch failed a non-predicate argument: $out"
+[[ "$out" == continued ]] || fail "dispatch did not return for other arguments: $out"
+out=$(remote 'workflow_contract_dispatch_predicate --remote-predicate; echo continued' 2>&1) ||
+  fail "dispatch failed the predicate mode: $out"
+[[ "$out" != *continued* ]] || fail "dispatch did not exit after the predicate"
+
+# Polling resolves the vendored poller beside the library, not from the cwd,
+# and re-runs the contract script until it reports ready.
+cat >"$tmp/contract/script" <<'EOF'
+#!/usr/bin/env bash
+[[ ${1:-} == --remote-predicate ]] || exit 9
+state=${0%/*}/attempts
+count=0
+[[ ! -f $state ]] || count=$(<"$state")
+printf '%s\n' "$((count + 1))" >"$state"
+((count >= 1))
+EOF
+chmod +x "$tmp/contract/script"
+contract "$tmp" "workflow_contract_poll_remote '$tmp/contract/script'" >/dev/null ||
+  fail "poll_remote did not wait for a predicate that becomes ready"
+[[ $(<"$tmp/contract/attempts") == 2 ]] ||
+  fail "poll_remote did not retry the predicate"
 
 printf 'capability-harness-test: ok\n'
