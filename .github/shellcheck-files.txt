@@ -27,6 +27,7 @@ program	capability-harness/capability-fixture.sh
 program	capability-harness/dot-release.sh
 program	capability-harness/suite-inventory.sh
 program	capability-harness/wait-github-state.sh
+program	capability-harness/workflow-contract.sh
 program	checkout-installer/bash-resolver-v1.sh.in
 program	checkout-installer/install.sh.in
 program	checkout-installer/lock-v1.sh.in

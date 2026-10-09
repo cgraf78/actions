@@ -270,7 +270,8 @@ is owned by [`release-installer/`](release-installer/README.md).
 Standalone Dot overlay repositories vendor the shared capability test helpers
 from [`capability-harness/`](capability-harness/README.md) into `test/lib/`:
 the no-base Dot client fixture, the checksum-verified Dot release installer,
-the suite-inventory check, and bounded GitHub-state polling. Each overlay keeps
+the suite-inventory check, bounded GitHub-state polling, and the repository
+contract shared by their `test/workflow-test` scripts. Each overlay keeps
 its own runner and overlay-specific fixtures. `verify-consumer-sync` holds the
 vendored copies to the same lock as every other derived file.
 

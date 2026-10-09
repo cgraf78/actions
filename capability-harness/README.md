@@ -24,9 +24,15 @@ resync command.
 | `dot-release.sh` | `capability_dot_release_install DEST` resolves, downloads, checksum-verifies, and extracts one Dot release. Sourced, not executed. |
 | `suite-inventory.sh` | `validate_suite_inventory ROOT INVENTORY SOURCE_ROOT` proves the declared suite list and the executable suites match, printing suite names. Executable for `--self-test`. |
 | `wait-github-state.sh` | `wait_github_state TIMEOUT INTERVAL COMMAND...` polls a GitHub-state predicate with a bounded deadline. Executable as a command or for `--self-test`. |
+| `workflow-contract.sh` | Repository-contract helpers for `test/workflow-test`: `fail`, `workflow_contract_init REPO` (repository identity), `workflow_contract_check_files` (canonical MIT `LICENSE`, `.gitignore`), `workflow_contract_check_inventory_programs` (no unlinted `fixture` rows), the remote public/MIT/default-branch predicate with its `--remote-predicate` dispatch and bounded poll, and the `test/run` invocation counter. Sourced, not executed. |
 
 Sourcing any file defines functions only; the caller keeps its own shell
 options. A direct run enables strict mode for its entry point.
+
+`workflow-contract.sh` intentionally omits two checks overlays used to carry:
+the `cgraf78/actions sync` job (`verify-consumer-sync`) owns the actions lock
+and every literal ref, and shell CI's `shellcheck-inventory` owns the typed
+ShellCheck inventory. Each overlay keeps its own workflow-shape assertions.
 
 `capability_dot_release_install` reads `DOT_TEST_DOT_RELEASE_TAG` (default
 `latest`, resolved once through the anonymous `releases/latest` redirect) and
@@ -49,5 +55,8 @@ The marker carries no settings. It and the generated
 `test/lib/.capability-harness.manifest` must be tracked together; CI rejects
 either one alone so deleting a single marker cannot silently place the
 vendored files outside drift checks. Add each vendored file to the consumer's
-ShellCheck inventory, then source the libraries from the scripts that use
-them (normally `test/run`, and `test/workflow-test` for GitHub-state polling).
+ShellCheck inventory (adding a file to this family therefore needs that
+consumer edit alongside the lock bump), then source the libraries from the
+scripts that use
+them (normally `test/run`, and `test/workflow-test` for the repository
+contract).
