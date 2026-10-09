@@ -125,6 +125,7 @@ cp -R "$root/.github/actions/verify-consumer-sync" \
   "$actions_source/.github/actions/verify-consumer-sync"
 cp -R "$root/.github/actions/verify-release-scripts" \
   "$actions_source/.github/actions/verify-release-scripts"
+cp -R "$root/.github/actions/shared" "$actions_source/.github/actions/shared"
 git -C "$actions_source" init --quiet --template=''
 git -C "$actions_source" config core.hooksPath /dev/null
 git -C "$actions_source" add .

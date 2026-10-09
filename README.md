@@ -13,8 +13,8 @@ detailed result contract is documented in
 Consumer repositories make one version decision in
 `.github/cgraf78-actions.lock`; `consumer-ci/sync.sh` generates the literal
 workflow refs GitHub requires and, when configured, refreshes vendored release
-scripts and generates either release-backed or checkout-backed installers from
-that same commit. See
+or capability-harness scripts and generates either release-backed or
+checkout-backed installers from that same commit. See
 [`consumer-ci/README.md`](consumer-ci/README.md) for the update and verification
 contract.
 
@@ -265,6 +265,15 @@ declares only its payload in `scripts/release.conf`. The broader
 installer opted in through that release policy. The generated installer itself
 is owned by [`release-installer/`](release-installer/README.md).
 
+## Capability test harness
+
+Standalone Dot overlay repositories vendor the shared capability test helpers
+from [`capability-harness/`](capability-harness/README.md) into `test/lib/`:
+the no-base Dot client fixture, the checksum-verified Dot release installer,
+the suite-inventory check, and bounded GitHub-state polling. Each overlay keeps
+its own runner and overlay-specific fixtures. `verify-consumer-sync` holds the
+vendored copies to the same lock as every other derived file.
+
 ## Checkout bootstrap installer
 
 Source-distributed repositories keep their command and supporting files in one
@@ -332,16 +341,20 @@ than one worker are split into first-party composite actions:
   matches an allowlisted infrastructure signature.
 - `.github/actions/termux-adb/` stages the bounded `adb` wrapper used by the
   Termux emulator worker.
-- `.github/actions/shared/` holds sourced helpers shared by two actions,
-  currently the infrastructure-stall markers `termux-adb` emits and
-  `infra-retry` classifies.
+- `.github/actions/shared/` holds helpers shared by two actions: the
+  infrastructure-stall markers `termux-adb` emits and `infra-retry` classifies,
+  and the vendored-script comparison both release-script and capability-harness
+  verification use.
 - `.github/actions/verify-release-scripts/` fails a consumer whose vendored
   release scripts no longer match `release-scripts/`.
 - `.github/actions/verify-consumer-sync/` enforces one consumer lock across all
-  workflow/action refs, release tooling, and any generated release or checkout
-  installer.
+  workflow/action refs, release tooling, the capability harness, and any
+  generated release or checkout installer.
 - `consumer-ci/` owns the maintainer command that regenerates a consumer from
-  one clean, reviewed `actions` checkout.
+  one clean, reviewed `actions` checkout, plus the one copy-and-manifest
+  implementation every vendored script family uses.
+- `capability-harness/` owns the shared test-harness helpers that Dot overlay
+  repositories vendor into `test/lib/`.
 - `checkout-installer/` owns the self-contained bootstrap template and renderer
   for repositories that install from durable source checkouts.
 - `release-scripts/` owns the shared release identity, packaging, and smoke

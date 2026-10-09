@@ -21,6 +21,8 @@ make_provider() {
     "$work/consumer-ci/verify-self-pin.sh"
   cp "$root/consumer-ci/retain-self-pin.sh" \
     "$work/consumer-ci/retain-self-pin.sh"
+  cp "$root/consumer-ci/vendor-scripts.sh" \
+    "$work/consumer-ci/vendor-scripts.sh"
   cp -R "$root/release-scripts" "$work/release-scripts"
   cp -R "$root/release-installer" "$work/release-installer"
   cp -R "$root/checkout-installer" "$work/checkout-installer"

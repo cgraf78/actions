@@ -18,9 +18,15 @@ program	.github/actions/verify-release-scripts/verify.sh
 program	.github/actions/termux-adb/termux-adb.sh
 program	.github/actions/termux-adb/bin/adb
 program	.github/actions/shared/infra-stall-markers.sh
+program	.github/actions/shared/verify-vendored-scripts.sh
 program	consumer-ci/sync.sh
 program	consumer-ci/retain-self-pin.sh
 program	consumer-ci/verify-self-pin.sh
+program	consumer-ci/vendor-scripts.sh
+program	capability-harness/capability-fixture.sh
+program	capability-harness/dot-release.sh
+program	capability-harness/suite-inventory.sh
+program	capability-harness/wait-github-state.sh
 program	checkout-installer/bash-resolver-v1.sh.in
 program	checkout-installer/install.sh.in
 program	checkout-installer/lock-v1.sh.in
@@ -35,6 +41,7 @@ program	release-scripts/release-version.sh
 program	release-scripts/release.sh
 program	release-scripts/smoke-release.sh
 program	release-scripts/sync.sh
+program	test/capability-harness-test
 program	test/consumer-sync-test
 program	test/consumer-installer-canary
 program	test/check-uses-pins.sh

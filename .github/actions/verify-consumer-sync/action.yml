@@ -1,5 +1,5 @@
 name: Verify consumer synchronization
-description: Verify that Actions refs, release scripts, and any generated installer come from one locked commit.
+description: Verify that Actions refs, vendored release and capability-harness scripts, and any generated installer come from one locked commit.
 
 runs:
   using: composite

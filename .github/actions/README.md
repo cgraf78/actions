@@ -30,8 +30,10 @@ this repo and by other `cgraf78` repositories.
 - `verify-consumer-sync` is the consumer-facing gate: it requires every
   `cgraf78/actions` ref and the verifier's own ref to match the repository lock,
   then runs `verify-release-scripts` for the same checked-out actions commit
-  when the consumer tracks `scripts/release.conf`, and rerenders any generated
-  release or checkout installer selected by consumer policy.
+  when the consumer tracks `scripts/release.conf`, compares vendored
+  capability-harness scripts when it tracks `test/lib/capability-harness.conf`,
+  and rerenders any generated release or checkout installer selected by
+  consumer policy.
 
 Keep composite actions narrow and reusable. If behavior is only needed by a
 single reusable workflow, prefer keeping it in that workflow until a second
@@ -44,6 +46,11 @@ timeouts and retry classification have one owner.
 `shared/infra-stall-markers.sh` is likewise a sourced library, not an action.
 It owns the stable infrastructure-stall markers that `termux-adb` emits and
 `infra-retry` classifies, so producer and classifier cannot drift apart.
+
+`shared/verify-vendored-scripts.sh` is an internal command, not an action. It
+owns the byte, mode, and managed-file-set comparison for every vendored script
+family, so `verify-release-scripts` and the capability-harness check in
+`verify-consumer-sync` enforce one contract.
 
 `dotfiles-bootstrap` defaults to `mode: full`. `mode: stage` publishes a
 private, self-contained payload at `stage-directory`; `mode: install-staged`

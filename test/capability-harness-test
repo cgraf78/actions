@@ -1,0 +1,333 @@
+#!/usr/bin/env bash
+
+# Contract coverage for the capability test harness that Dot overlay
+# repositories vendor into test/lib. Every consumer inherits these bytes, so
+# the edge cases live here instead of being re-tested in each overlay; the
+# overlays' own runs then exercise the vendored copies on the full matrix.
+
+set -uo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# Child shells below run with a stub-only PATH. A host startup file named by
+# BASH_ENV would run first under that PATH and can fail or block before the
+# code under test starts, so keep every child shell hermetic.
+unset BASH_ENV ENV
+harness="$root/capability-harness"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() {
+  printf 'capability-harness-test: %s\n' "$1" >&2
+  exit 1
+}
+
+# --- Executable self-tests ----------------------------------------------------
+
+for entry in capability-fixture.sh suite-inventory.sh wait-github-state.sh; do
+  [[ -x "$harness/$entry" ]] || fail "$entry must be executable"
+  "$harness/$entry" --self-test || fail "$entry self-test failed"
+done
+[[ ! -x "$harness/dot-release.sh" ]] ||
+  fail "dot-release.sh is a sourced library and must not be executable"
+
+# Consumers call self-tests from their own functions under strict mode. A
+# cleanup trap that outlives its function would rerun in the caller with its
+# local variable out of scope and abort under `set -u`.
+for pair in capability-fixture.sh:capability_fixture_self_test \
+  suite-inventory.sh:suite_inventory_self_test \
+  wait-github-state.sh:wait_github_state_self_test; do
+  out=$(bash -c 'set -euo pipefail; . "$1"; self_test=$2
+    wrapper() { "$self_test"; echo wrapped; }
+    wrapper
+    [[ -z $(trap -p RETURN) ]] && echo trap-cleared' _ \
+    "$harness/${pair%%:*}" "${pair#*:}" 2>&1) ||
+    fail "${pair#*:} failed when called from a strict caller: $out"
+  [[ "$out" == *wrapped*trap-cleared* ]] ||
+    fail "${pair#*:} left a RETURN trap behind: $out"
+done
+
+# Sourced libraries must leave the caller's shell options alone. The overlay
+# runners already choose strict mode; a library silently enabling it would
+# change unrelated callers' error handling.
+for library in capability-fixture.sh suite-inventory.sh wait-github-state.sh \
+  dot-release.sh; do
+  opts=$(bash -c 'set +euo pipefail; . "$1"; printf "%s:%s" "$-" \
+    "$(set -o | awk '"'"'$1 == "pipefail" { print $2 }'"'"')"' _ \
+    "$harness/$library") || fail "sourcing $library failed"
+  [[ "${opts%%:*}" != *e* && "${opts%%:*}" != *u* && "${opts#*:}" == off ]] ||
+    fail "sourcing $library changed the caller's shell options: $opts"
+done
+
+# --- Capability fixture -------------------------------------------------------
+
+fixture() {
+  bash -c '. "$1"; shift; capability_fixture_create "$@"' _ \
+    "$harness/capability-fixture.sh" "$@"
+}
+
+mkdir -p "$tmp/overlay"
+rc=0
+fixture relative/home "$tmp/overlay" 20-example.conf 2>/dev/null || rc=$?
+[[ "$rc" == 2 ]] || fail "fixture accepted a relative home (rc $rc)"
+rc=0
+fixture "$tmp/home-no-descriptor" "$tmp/overlay" 2>/dev/null || rc=$?
+[[ "$rc" == 2 ]] || fail "fixture accepted a missing descriptor (rc $rc)"
+for descriptor in nvim.conf 2-nvim.conf 20-nvim 20-../x.conf 20-Nvim.conf; do
+  rc=0
+  fixture "$tmp/home-bad" "$tmp/overlay" "$descriptor" 2>/dev/null || rc=$?
+  [[ "$rc" == 2 ]] || fail "fixture accepted descriptor $descriptor (rc $rc)"
+done
+[[ ! -e "$tmp/home-bad" ]] ||
+  fail "fixture wrote files before rejecting its descriptor"
+mkdir -p "$tmp/home-base/.dotfiles"
+rc=0
+fixture "$tmp/home-base" "$tmp/overlay" 20-example.conf 2>/dev/null || rc=$?
+[[ "$rc" == 2 ]] || fail "fixture accepted a home with a base repository"
+
+# A caller may already have created the extension root under a permissive
+# umask. The fixture owns the trust boundary and must tighten it regardless.
+mkdir -p "$tmp/home-open/.config/dot/extensions"
+chmod 777 "$tmp/home-open/.config/dot/extensions"
+fixture "$tmp/home-open" "$tmp/overlay" 30-example.conf ||
+  fail "fixture failed over a pre-existing extension root"
+mode=$(ls -ld "$tmp/home-open/.config/dot/extensions")
+[[ "${mode:0:10}" == drwx------ ]] ||
+  fail "fixture left a permissive extension root: ${mode:0:10}"
+[[ $(<"$tmp/home-open/.config/dot/overlays.d/30-example.conf") == $'sync=none\npath='"$tmp/overlay" ]] ||
+  fail "fixture wrote the wrong overlay descriptor"
+
+# --- Suite inventory ----------------------------------------------------------
+
+inventory_root="$tmp/inventory/home/.local/lib/dotfiles/tests"
+mkdir -p "$inventory_root"
+printf '#!/usr/bin/env bash\n' >"$inventory_root/alpha-test"
+chmod +x "$inventory_root/alpha-test"
+validate() {
+  bash -c '. "$1"; validate_suite_inventory "$2" "$3" "$4"' _ \
+    "$harness/suite-inventory.sh" "$inventory_root" "$1" "$tmp/inventory"
+}
+printf '# comment\n\nhome/.local/lib/dotfiles/tests/alpha-test\n' \
+  >"$tmp/inventory/good"
+[[ $(validate "$tmp/inventory/good") == alpha ]] ||
+  fail "suite inventory did not print the declared suite name"
+printf 'home/.local/lib/dotfiles/tests/../alpha-test\n' >"$tmp/inventory/bad"
+validate "$tmp/inventory/bad" >/dev/null 2>&1 &&
+  fail "suite inventory accepted a path outside the suite namespace"
+printf 'home/.local/lib/dotfiles/tests/alpha-test\nhome/.local/lib/dotfiles/tests/missing-test\n' \
+  >"$tmp/inventory/missing"
+out=$(validate "$tmp/inventory/missing" 2>&1) &&
+  fail "suite inventory accepted a missing suite"
+[[ "$out" == *'missing executable suite'* ]] ||
+  fail "suite inventory did not name the missing suite"
+
+# --- Dot release --------------------------------------------------------------
+
+stub_bin="$tmp/stub-bin"
+assets="$tmp/assets"
+mkdir -p "$stub_bin" "$assets"
+# Resolve real tools first so the stubs below can shadow only curl and uname.
+for tool in bash cat cp mkdir mktemp rm ls tar gzip sha256sum shasum awk dirname env; do
+  tool_path=$(command -v "$tool" 2>/dev/null) || continue
+  ln -s "$tool_path" "$stub_bin/$tool"
+done
+cat >"$stub_bin/curl" <<'EOF'
+#!/usr/bin/env bash
+# Serve release assets from a local directory and record each request.
+set -euo pipefail
+printf '%s\n' "$*" >>"$STUB_CURL_LOG"
+url= out= head=false
+while (($#)); do
+  case $1 in
+    -o) out=$2; shift 2 ;;
+    -w | --connect-timeout | --max-time | --retry | --retry-delay | --retry-max-time) shift 2 ;;
+    -fsSIL) head=true; shift ;;
+    -*) shift ;;
+    *) url=$1; shift ;;
+  esac
+done
+if [[ $head == true ]]; then
+  [[ -n ${STUB_EFFECTIVE:-} ]] || exit 22
+  printf '%s' "$STUB_EFFECTIVE"
+  exit 0
+fi
+asset=$STUB_ASSETS/${url##*/}
+[[ -f $asset ]] || exit 22
+cp "$asset" "$out"
+EOF
+cat >"$stub_bin/uname" <<'EOF'
+#!/usr/bin/env bash
+case $1 in
+  -s) printf '%s\n' "${STUB_UNAME_S:-Linux}" ;;
+  -m) printf '%s\n' "${STUB_UNAME_M:-x86_64}" ;;
+  -o) [[ -n ${STUB_UNAME_O:-} ]] || exit 1; printf '%s\n' "$STUB_UNAME_O" ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$stub_bin/curl" "$stub_bin/uname"
+export STUB_CURL_LOG="$tmp/curl.log" STUB_ASSETS="$assets"
+
+release_tag=20990101-000000-abcdef12
+other_tag=20990202-000000-12345678
+make_asset() {
+  local tag=$1 platform=$2 extra=${3:-} staging
+  staging=$(mktemp -d "$tmp/asset.XXXXXX")
+  printf '#!/bin/sh\necho dot %s\n' "$tag" >"$staging/dot"
+  chmod +x "$staging/dot"
+  [[ -z "$extra" ]] || : >"$staging/$extra"
+  tar -czf "$assets/dot-$tag-$platform.tar.gz" -C "$staging" .
+  (cd "$assets" && if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "dot-$tag-$platform.tar.gz"
+  else
+    shasum -a 256 "dot-$tag-$platform.tar.gz"
+  fi) >"$assets/dot-$tag-$platform.tar.gz.sha256"
+}
+make_asset "$release_tag" linux-x86_64-musl
+make_asset "$other_tag" linux-x86_64-musl
+
+# Run one library function in a strict child shell with only the stubs on
+# PATH, matching how consumer runners call it under `set -euo pipefail`.
+release() {
+  # shellcheck disable=SC2016 # The child shell expands its own arguments.
+  env -u PREFIX PATH="$stub_bin" bash -c \
+    'set -euo pipefail; . "$1"; shift; "$@"' _ "$harness/dot-release.sh" "$@"
+}
+
+platform_case() {
+  local want=$1 got
+  shift
+  # shellcheck disable=SC2016 # The child shell expands its own arguments.
+  got=$(env "$@" PATH="$stub_bin" bash -c \
+    'set -euo pipefail; . "$1"; _capability_dot_release_platform' _ \
+    "$harness/dot-release.sh" 2>/dev/null) || got=FAILED
+  [[ "$got" == "$want" ]] || fail "platform for $* was $got, want $want"
+}
+platform_case linux-x86_64-musl -u PREFIX STUB_UNAME_S=Linux STUB_UNAME_M=x86_64
+platform_case linux-aarch64-musl -u PREFIX STUB_UNAME_S=Linux STUB_UNAME_M=aarch64
+platform_case macos-x86_64 -u PREFIX STUB_UNAME_S=Darwin STUB_UNAME_M=x86_64
+platform_case macos-aarch64 -u PREFIX STUB_UNAME_S=Darwin STUB_UNAME_M=arm64
+platform_case android-aarch64 -u PREFIX STUB_UNAME_S=Linux STUB_UNAME_M=aarch64 \
+  STUB_UNAME_O=Android
+platform_case android-x86_64 STUB_UNAME_S=Linux STUB_UNAME_M=x86_64 \
+  PREFIX=/data/data/com.termux/files/usr
+platform_case FAILED -u PREFIX STUB_UNAME_S=FreeBSD STUB_UNAME_M=x86_64
+platform_case FAILED -u PREFIX STUB_UNAME_S=Linux STUB_UNAME_M=riscv64
+platform_case FAILED STUB_UNAME_S=Linux STUB_UNAME_M=armv7l STUB_UNAME_O=Android
+
+got=$(STUB_EFFECTIVE="https://github.com/cgraf78/dot/releases/tag/$release_tag" \
+  release _capability_dot_release_latest_tag cgraf78/dot) ||
+  fail "latest-tag lookup failed on a valid redirect"
+[[ "$got" == "$release_tag" ]] || fail "latest-tag lookup returned $got"
+grep -F -e '--retry-all-errors' "$STUB_CURL_LOG" >/dev/null ||
+  fail "latest-tag lookup does not retry transient failures"
+out=$(STUB_EFFECTIVE=https://github.com/cgraf78/dot/releases \
+  release _capability_dot_release_latest_tag cgraf78/dot 2>&1) &&
+  fail "latest-tag lookup accepted a repository without releases"
+[[ "$out" == *'has no releases yet'* ]] ||
+  fail "latest-tag lookup did not explain a missing release"
+out=$(STUB_EFFECTIVE=https://github.com/cgraf78/dot/releases/tag/v1.0 \
+  release _capability_dot_release_latest_tag cgraf78/dot 2>&1) &&
+  fail "latest-tag lookup accepted a tag outside the release grammar"
+[[ "$out" == *'unexpected latest-release redirect'* ]] ||
+  fail "latest-tag lookup did not explain an unexpected redirect"
+
+# The default request floats to the newest release once per run.
+: >"$STUB_CURL_LOG"
+STUB_EFFECTIVE="https://github.com/cgraf78/dot/releases/tag/$release_tag" \
+  release capability_dot_release_install "$tmp/dot-latest" ||
+  fail "default install failed"
+[[ $("$tmp/dot-latest/dot") == "dot $release_tag" ]] ||
+  fail "default install did not extract the latest release"
+grep -F 'https://github.com/cgraf78/dot/releases/latest' "$STUB_CURL_LOG" >/dev/null ||
+  fail "default install did not resolve the latest release"
+
+# An explicit tag selects that exact release without a latest lookup.
+: >"$STUB_CURL_LOG"
+DOT_TEST_DOT_RELEASE_TAG=$other_tag \
+  release capability_dot_release_install "$tmp/dot-explicit" ||
+  fail "explicit-tag install failed"
+[[ $("$tmp/dot-explicit/dot") == "dot $other_tag" ]] ||
+  fail "explicit-tag install extracted the wrong release"
+if grep -F 'releases/latest' "$STUB_CURL_LOG" >/dev/null; then
+  fail "explicit-tag install still resolved the latest release"
+fi
+
+out=$(DOT_TEST_DOT_RELEASE_TAG=latest-ish \
+  release capability_dot_release_install "$tmp/dot-bad-tag" 2>&1) &&
+  fail "install accepted a malformed explicit tag"
+[[ "$out" == *'invalid Dot test release tag'* ]] ||
+  fail "install did not explain a malformed tag"
+for repo in 'cgraf78/dot/extra' '../dot' 'cgraf78/' 'cg raf/dot'; do
+  out=$(DOT_TEST_DOT_RELEASE_REPO=$repo DOT_TEST_DOT_RELEASE_TAG=$release_tag \
+    release capability_dot_release_install "$tmp/dot-bad-repo" 2>&1) &&
+    fail "install accepted repository $repo"
+  [[ "$out" == *'invalid Dot test release repository'* ]] ||
+    fail "install did not explain invalid repository $repo"
+done
+
+mkdir -p "$tmp/dot-nonempty"
+: >"$tmp/dot-nonempty/keep"
+out=$(DOT_TEST_DOT_RELEASE_TAG=$release_tag \
+  release capability_dot_release_install "$tmp/dot-nonempty" 2>&1) &&
+  fail "install extracted into a nonempty destination"
+[[ "$out" == *'refusing to extract into a nonempty directory'* ]] ||
+  fail "install did not explain a nonempty destination"
+
+# A failed fetch must report its own error and return cleanly through the
+# public wrapper. A stale RETURN trap would instead rerun cleanup with its
+# local variable out of scope and abort the caller with `unbound variable`.
+printf '0000  dot-%s-linux-x86_64-musl.tar.gz\n' "$release_tag" \
+  >"$assets/dot-$release_tag-linux-x86_64-musl.tar.gz.sha256"
+# shellcheck disable=SC2016 # The child shell expands its own arguments.
+out=$(DOT_TEST_DOT_RELEASE_TAG=$release_tag release bash -c \
+  'set -u; . "$1"; capability_dot_release_install "$2" || echo returned-cleanly' _ \
+  "$harness/dot-release.sh" "$tmp/dot-mismatch" 2>&1)
+[[ "$out" == *'checksum mismatch for'* ]] ||
+  fail "install did not reject a checksum mismatch: $out"
+[[ "$out" == *returned-cleanly* && "$out" != *'unbound variable'* ]] ||
+  fail "failed fetch did not return cleanly through the wrapper: $out"
+[[ ! -e "$tmp/dot-mismatch/dot" ]] ||
+  fail "install extracted an archive that failed its checksum"
+
+# Restore a valid sidecar, then cover both checksum tools and their absence
+# with PATH variants that hide the other tool.
+make_asset "$release_tag" linux-x86_64-musl
+for sum_tool in sha256sum shasum; do
+  sum_path=$(command -v "$sum_tool" 2>/dev/null) || continue
+  sum_bin="$tmp/stub-$sum_tool"
+  cp -R "$stub_bin" "$sum_bin"
+  rm -f "$sum_bin/sha256sum" "$sum_bin/shasum"
+  ln -s "$sum_path" "$sum_bin/$sum_tool"
+  # shellcheck disable=SC2016 # The child shell expands its own arguments.
+  env -u PREFIX PATH="$sum_bin" DOT_TEST_DOT_RELEASE_TAG=$release_tag bash -c \
+    'set -euo pipefail; . "$1"; capability_dot_release_install "$2"' _ \
+    "$harness/dot-release.sh" "$tmp/dot-$sum_tool" ||
+    fail "install failed with only $sum_tool available"
+  [[ -x "$tmp/dot-$sum_tool/dot" ]] ||
+    fail "install with only $sum_tool did not extract the release"
+done
+nosum_bin="$tmp/stub-nosum"
+cp -R "$stub_bin" "$nosum_bin"
+rm -f "$nosum_bin/sha256sum" "$nosum_bin/shasum"
+# shellcheck disable=SC2016 # The child shell expands its own arguments.
+out=$(env -u PREFIX PATH="$nosum_bin" DOT_TEST_DOT_RELEASE_TAG=$release_tag bash -c \
+  'set -euo pipefail; . "$1"; capability_dot_release_install "$2"' _ \
+  "$harness/dot-release.sh" "$tmp/dot-nosum" 2>&1) &&
+  fail "install succeeded without any checksum tool"
+[[ "$out" == *'sha256sum or shasum is required'* ]] ||
+  fail "install did not explain the missing checksum tool"
+
+out=$(DOT_TEST_DOT_RELEASE_TAG=20990303-000000-00000000 \
+  release capability_dot_release_install "$tmp/dot-missing" 2>&1) &&
+  fail "install succeeded without a published asset"
+[[ "$out" == *'could not download'* ]] ||
+  fail "install did not explain a missing asset"
+
+make_asset 20990404-000000-aaaaaaaa linux-x86_64-musl .shdeps-release-layout
+out=$(DOT_TEST_DOT_RELEASE_TAG=20990404-000000-aaaaaaaa \
+  release capability_dot_release_install "$tmp/dot-marker" 2>&1) &&
+  fail "install accepted an archive with the reserved shdeps marker"
+[[ "$out" == *'reserved shdeps marker'* ]] ||
+  fail "install did not explain the reserved shdeps marker"
+
+printf 'capability-harness-test: ok\n'

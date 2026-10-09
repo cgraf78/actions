@@ -32,7 +32,7 @@ checkout step for release-critical tooling.
 | `package-release.sh` | Builds the archive and checksum for one Rust target. |
 | `smoke-release.sh` | Extracts and validates a packaged archive. |
 | `.release-scripts.manifest` | Consumer-generated list of files owned by the sync contract; it is not a source file here. |
-| `sync.sh` | Low-level maintainer tool used by consumer synchronization. Not vendored. |
+| `sync.sh` | Low-level maintainer wrapper over `consumer-ci/vendor-scripts.sh` for this family. Not vendored. |
 
 ## Release identity
 
