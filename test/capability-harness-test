@@ -49,6 +49,27 @@ for pair in capability-fixture.sh:capability_fixture_self_test \
     fail "${pair#*:} left a RETURN trap behind: $out"
 done
 
+# Bash's integer clock can tick between recording a start and polling an
+# already-ready predicate. Advance it at that call to cover the boundary
+# deterministically without delaying the predicate or replacing the poller.
+out=$(bash -c 'set -euo pipefail; boundary_marker=$2; . "$1"
+  eval "$(declare -f wait_github_state | sed '\''1s/wait_github_state/clock_boundary_poll/'\'')"
+  wait_github_state() {
+    local rc=0
+    clock_boundary_poll "$@" || rc=$?
+    if [[ $rc == 0 && ${3:-} == true ]]; then
+      SECONDS=$((SECONDS + 1))
+      printf applied >"$boundary_marker"
+    fi
+    return "$rc"
+  }
+  wait_github_state_self_test
+  echo clock-boundary-passed' _ "$harness/wait-github-state.sh" "$tmp/clock-boundary" 2>&1) ||
+  fail "ready-predicate self-test depends on the integer clock: $out"
+[[ -f $tmp/clock-boundary ]] || fail 'ready-predicate clock boundary was not exercised'
+[[ $out == *clock-boundary-passed* ]] ||
+  fail 'ready-predicate self-test did not complete across the clock boundary'
+
 # Sourced libraries must leave the caller's shell options alone. The overlay
 # runners already choose strict mode; a library silently enabling it would
 # change unrelated callers' error handling.
