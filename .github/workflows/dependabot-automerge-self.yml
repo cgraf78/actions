@@ -1,0 +1,19 @@
+name: Dependabot auto-merge
+
+# This repository's own caller for dependabot-automerge.yml. The target trigger
+# loads both this file and the local reusable workflow from the default branch,
+# so no pull-request code is checked out or executed; it only supplies the write
+# token needed to enroll a Dependabot PR in repository-protected auto-merge.
+on: # zizmor: ignore[dangerous-triggers]
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions: {}
+
+jobs:
+  enable:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: ./.github/workflows/dependabot-automerge.yml

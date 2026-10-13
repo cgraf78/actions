@@ -315,6 +315,9 @@ than one worker are split into first-party composite actions:
 - `.github/workflows/retry-infrastructure.yml` is this repository's own
   `workflow_run` controller that retries infrastructure failures in `Tests`
   through `infra-retry`; it is not a reusable workflow.
+- `.github/workflows/dependabot-automerge-self.yml` is this repository's own
+  `pull_request_target` caller that enrolls its Dependabot pull requests through
+  the local `dependabot-automerge.yml`; it is not a reusable workflow.
 - `.github/actions/platform-matrix/` owns the shared OS matrix. Shell CI uses it
   today; Rust CI uses it too; future C++ or other language-specific reusable
   workflows should consume the same action instead of copying platform JSON.

@@ -51,3 +51,14 @@ The July 2026 public-dotfiles migration deliberately removes the obsolete
 dotfiles-only deploy-key secret after `cgraf78/ds` became public. Existing
 immutable workflow pins retain the old contract; advancing the dotfiles caller
 pin must remove that secret in the same change.
+
+## Repository Callers
+
+These run only in this repository and are not reusable workflows.
+
+- `dependabot-automerge-self.yml` is this repository's own caller for
+  `dependabot-automerge.yml`. It mirrors `examples/dependabot-automerge.yml`
+  but uses the local workflow path, which `pull_request_target` loads from the
+  default branch, so this repository's Dependabot PRs land like a consumer's.
+- `retry-infrastructure.yml` is this repository's own `workflow_run` retry
+  controller for `Tests`.
