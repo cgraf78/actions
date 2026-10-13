@@ -245,6 +245,30 @@ contracts() {
   check '.jobs.enable.steps[] | select(.name == "Enable squash auto-merge").run | contains("gh pr merge \"$PR_NUMBER\" --repo \"$GITHUB_REPOSITORY\" --auto --squash")' dependabot-automerge.yml
   check '.jobs.enable.steps[] | select(.name == "Enable squash auto-merge").run | contains("--admin") | not' dependabot-automerge.yml
 
+  # The self-caller must stay a thin, default-branch-only enrollment shim: one
+  # Dependabot-gated job delegating to the local reusable workflow with no
+  # checkout, secrets, or extra permissions.
+  check '(.on | keys | join(",")) == "pull_request_target"' dependabot-automerge-self.yml
+  # yq reports a missing key's length as 0; require the explicit empty map.
+  check '(.permissions | tag) == "!!map" and (.permissions | length) == 0' dependabot-automerge-self.yml
+  check '(.jobs | keys | join(",")) == "enable"' dependabot-automerge-self.yml
+  check '.jobs.enable.if == "github.event.pull_request.user.login == '\''dependabot[bot]'\''"' dependabot-automerge-self.yml
+  check '.jobs.enable.uses == "./.github/workflows/dependabot-automerge.yml"' dependabot-automerge-self.yml
+  check '.jobs.enable.permissions.contents == "write"' dependabot-automerge-self.yml
+  check '.jobs.enable.permissions."pull-requests" == "write"' dependabot-automerge-self.yml
+  check '(.jobs.enable.permissions | length) == 2' dependabot-automerge-self.yml
+  check '.jobs.enable.secrets == null' dependabot-automerge-self.yml
+  # Apart from the workflow ref, the self-caller is the published consumer
+  # example; drift between them would mean one of them is wrong.
+  local caller_shape='{"on": .on, "permissions": .permissions, "jobs": (.jobs | .enable |= del(.uses))} | sort_keys(..)'
+  local example_caller self_caller
+  example_caller=$(yq -o=json -I=0 "$caller_shape" "$root/examples/dependabot-automerge.yml")
+  self_caller=$(yq -o=json -I=0 "$caller_shape" "$root/.github/workflows/dependabot-automerge-self.yml")
+  [[ $example_caller == "$self_caller" ]] || {
+    echo 'workflow contract failed: dependabot-automerge-self.yml must mirror examples/dependabot-automerge.yml' >&2
+    return 1
+  }
+
   check '.on.workflow_call.inputs.project_name.required == true' mise-lock-refresh.yml
   check '.on.workflow_call.inputs.project_name.type == "string"' mise-lock-refresh.yml
   check '.on.workflow_call.inputs.mise_config_file.required == true' mise-lock-refresh.yml
