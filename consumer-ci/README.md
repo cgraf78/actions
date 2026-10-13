@@ -85,10 +85,10 @@ jobs:
       - uses: cgraf78/actions/.github/actions/verify-consumer-sync@FULL_COMMIT_SHA
 ```
 
-Dependabot cannot update the custom lock or vendored files, so an ordinary
-Dependabot SHA bump is expected to fail with the synchronization command until
-a maintainer regenerates the consumer. This is deliberate fail-closed behavior,
-not a bot failure to ignore.
+Dependabot cannot update the custom lock or vendored files, so the consumer
+Dependabot examples ignore `cgraf78/actions`. If a consumer does not, an
+ordinary Dependabot SHA bump fails with the synchronization command until a
+maintainer regenerates the consumer. This is deliberate fail-closed behavior.
 
 The actions repository also uses this command on itself. A commit cannot
 contain its own hash, so use this copy-paste sequence:

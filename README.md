@@ -68,11 +68,12 @@ full matrix.
 
 Callers should pin a reviewed full commit SHA so an unchanged caller commit
 always executes the same workflow code. Enable weekly GitHub Actions Dependabot
-updates in the caller repository so shared fixes arrive as ordinary dependency
-PRs and run through the caller's CI before merge. `FULL_COMMIT_SHA` is a drafting
-placeholder in the examples below. Before committing a consumer change, run
-`consumer-ci/sync.sh` from the reviewed `actions` checkout; it writes the one
-lock value and substitutes every runtime placeholder or older ref together.
+updates in the caller repository for third-party actions, but ignore
+`cgraf78/actions` as the examples do: its refs advance only with the consumer
+lock. `FULL_COMMIT_SHA` is a drafting placeholder in the examples below. Before
+committing a consumer change, run `consumer-ci/sync.sh` from the reviewed
+`actions` checkout; it writes the one lock value and substitutes every runtime
+placeholder or older ref together.
 
 Dependabot-triggered workflows receive only Dependabot secrets. After reviewing
 the proposed workflow commit, a caller whose CI requires sensitive repository
@@ -368,9 +369,10 @@ than one worker are split into first-party composite actions:
   self-contained top-level installer. Consumers commit the generated file so
   direct downloads never depend on this repository at runtime.
 
-Callers pin reusable workflows to reviewed commit SHAs and use dependency PRs
-to roll shared fixes across the fleet. Consumer lock verification prevents a
-partial bump from mixing revisions. This repository uses the same lock and
+Callers pin reusable workflows to reviewed commit SHAs, and maintainers roll
+shared fixes across the fleet by running `consumer-ci/sync.sh` against each
+consumer. Consumer lock verification prevents a partial bump from mixing
+revisions. This repository uses the same lock and
 synchronizer for its internal self-pins. Because a commit cannot contain its
 own hash, the lock names the immediately preceding reviewed implementation
 commit and a follow-up commit contains only the synchronized refs. Before
