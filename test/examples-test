@@ -99,7 +99,8 @@ yq -e '
 yq -e '
   .version == 2 and
   .updates[0]."package-ecosystem" == "github-actions" and
-  .updates[0].schedule.interval == "weekly"
+  .updates[0].schedule.interval == "weekly" and
+  ([.updates[0].ignore[] | select(."dependency-name" == "cgraf78/actions")] | length) == 1
 ' "$examples/dependabot.yml" >/dev/null
 
 yq -e '

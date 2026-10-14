@@ -163,6 +163,7 @@ pull request rather than at release time:
    consumer. Commit the lock, generated workflow refs, manifest, scripts, and
    opted-in top-level installer together.
 
-Dependabot bumps the pinned SHA but cannot resync the vendored files, so its
-pull requests fail the drift gate until step 2 is applied. That failure is the
-intended signal, not a bug.
+The consumer Dependabot examples ignore `cgraf78/actions` because Dependabot
+can bump the pinned SHA but cannot resync the vendored files. A consumer without
+that ignore gets bump pull requests that fail the drift gate until step 2 is
+applied; that failure is deliberate, not a bug.

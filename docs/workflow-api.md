@@ -7,12 +7,13 @@ drafting, asset upload, and publishing. Caller repositories own product
 contracts such as package layout, whether to opt into the standard generated
 installer, generated metadata, signing, and smoke-test assertions.
 
-Callers must reference workflows by full 40-character commit SHA. Treat the
-workflow ref as a dependency: enable weekly GitHub Actions Dependabot updates,
-let each update run the caller's normal CI, and optionally enroll bot-authored
-updates in protected auto-merge through `dependabot-automerge.yml`. This keeps
-shared fixes moving across `cgraf78` repositories without changing the workflow
-code executed by an unchanged caller commit.
+Callers must reference workflows by full 40-character commit SHA. Enable weekly
+GitHub Actions Dependabot updates for third-party actions, let each update run
+the caller's normal CI, and optionally enroll bot-authored updates in protected
+auto-merge through `dependabot-automerge.yml`. Configure Dependabot to ignore
+`cgraf78/actions` itself, as the examples do: those refs advance only with the
+consumer lock, when a maintainer runs `consumer-ci/sync.sh` against the consumer
+after a reviewed `actions` change lands.
 
 Examples use `FULL_COMMIT_SHA` only as a drafting placeholder. For initial
 adoption, add the example and then run `consumer-ci/sync.sh` from a reviewed
@@ -66,11 +67,12 @@ auto-merge and grant the reusable job `contents: write` plus
 `pull-requests: write`; keep every other workflow permission empty.
 
 An example caller is available at `examples/dependabot-automerge.yml`. Use
-`examples/dependabot-rust.yml` for a Rust repository that should receive both
-GitHub Actions and Cargo updates. The Rust example excludes `cgraf78/actions`
-because its lock, workflow refs, and optional vendored scripts must advance as
-one reviewed unit through `consumer-ci/sync.sh`; every Dependabot PR the
-configuration does create can then satisfy the consumer consistency gate.
+`examples/dependabot.yml` for GitHub Actions updates, or
+`examples/dependabot-rust.yml` for a Rust repository that should also receive
+Cargo updates. Both examples exclude `cgraf78/actions` because its lock,
+workflow refs, and optional vendored scripts must advance as one reviewed unit
+through `consumer-ci/sync.sh`; every Dependabot PR the configuration does create
+can then satisfy the consumer consistency gate.
 
 ## `mise-lock-refresh.yml`
 
