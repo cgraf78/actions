@@ -3,6 +3,8 @@
 ![Tests](https://github.com/cgraf78/actions/actions/workflows/test.yml/badge.svg?branch=main)
 
 Reusable GitHub Actions workflows and action helpers for `cgraf78` repos.
+They are built for my own repos and public so those repos can pin them. Reuse
+is welcome, but inputs and defaults follow what my repos need.
 
 Public CI workflows expose a stable `Required` job for branch protection.
 Require `<caller job> / Required` rather than internal platform jobs so matrix
