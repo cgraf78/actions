@@ -26,8 +26,9 @@ caller contract and the source of truth for inputs and outputs.
 
 ## Invariants
 
-- Every public workflow exposes a stable `Required` job. Callers require
-  `<caller job> / Required`, never an internal platform job.
+- The public CI workflows (`shell-ci`, `rust-ci`, `termux-ci`) each expose a
+  stable `Required` job. Callers require `<caller job> / Required`, never an
+  internal platform job.
 - Third-party `uses:` are pinned to full commit SHAs
   (`test/uses-pin-policy-test`).
 - `test/workflow-contract-test` asserts workflow structure; edit it together
@@ -38,14 +39,15 @@ caller contract and the source of truth for inputs and outputs.
 
 ## Testing
 
-CI's Quality job runs these; run the ones your change touches:
+CI (`.github/workflows/test.yml`) runs these; run the ones your change
+touches:
 
 - `actionlint .github/workflows/*.yml` (1.7.12) and
   `zizmor --offline .github/workflows/*.yml` (1.29.0).
 - Every `test/*-test` named in `.github/workflows/test.yml`.
-- `/bin/bash test/release-installer-test`, `test/checkout-installer-test`, and
-  `test/release-asset-upload-test`: CI also runs these under macOS stock
-  Bash 3.2.
+- `test/release-installer-test`, `test/checkout-installer-test`, and
+  `test/release-asset-upload-test` also run under macOS stock `/bin/bash`
+  3.2 in separate jobs.
 - `./.github/actions/shellcheck-inventory/run.sh "$PWD" .github/shellcheck-files.txt`:
   fails on any shell program missing from the inventory (untracked files
   included) and on stale rows.
