@@ -44,7 +44,8 @@ touches:
 
 - `actionlint .github/workflows/*.yml` (1.7.12) and
   `zizmor --offline .github/workflows/*.yml` (1.29.0).
-- Every `test/*-test` named in `.github/workflows/test.yml`.
+- Every `test/*-test` named in `.github/workflows/test.yml`, plus
+  `test/consumer-installer-canary all`.
 - `test/release-installer-test`, `test/checkout-installer-test`, and
   `test/release-asset-upload-test` also run under macOS stock `/bin/bash`
   3.2 in separate jobs.
