@@ -405,6 +405,8 @@ contracts() {
   check '.on.workflow_call.inputs."dotfiles-shdeps-update-policy".type == "string"' _termux-ci.yml
   check '.jobs.termux."timeout-minutes" == 55' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Run caller tests in Termux").with."emulator-boot-timeout" == 600' _termux-ci.yml
+  # Android 11's misaligned GWP-ASan blocks crash Rust callers at random.
+  check '.jobs.termux.steps[] | select(.name == "Run caller tests in Termux").with."api-level" >= 31' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Run caller tests in Termux").with."emulator-options" | split(" ") | any_c(. == "-no-metrics")' _termux-ci.yml
   check ".jobs.termux.steps[] | select(.name == \"Stage bounded Termux ADB helper\").uses == \"cgraf78/actions/.github/actions/termux-adb@$actions_lock\"" _termux-ci.yml
   check_step_order 'Stage bounded Termux ADB helper' \
