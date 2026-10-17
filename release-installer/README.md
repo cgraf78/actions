@@ -102,6 +102,11 @@ case into a failure before anything is downloaded. `--archive` is the
 first-class offline/test path; its checksum defaults to `PATH.sha256` and does
 not perform an online attestation lookup.
 
+Online verification explicitly identifies `cgraf78/actions` as the signer
+repository because the release uses its shared workflow. For manual checks
+that also constrain the workflow and source/signer commit SHAs, follow
+[Verifying Published Attestations](../docs/workflow-api.md#verifying-published-attestations).
+
 Linux and macOS default to:
 
 ```text
