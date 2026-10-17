@@ -74,7 +74,7 @@ jobs:
 
       - name: Stage exact Dot bootstrap payload
         if: inputs.setup == 'dotfiles'
-        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@db62d9a6ae066894e710afe4edcdc6508a942c90
+        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@160882f3d7f6d956d67364ddb102aae1b0c9f623
         env:
           HOME: ${{ github.workspace }}
         with:
@@ -90,7 +90,7 @@ jobs:
 
       - name: Configure host Android NDK toolchain
         if: inputs.host-command != '' && inputs.rust-toolchain != ''
-        uses: cgraf78/actions/.github/actions/android-rust-toolchain@db62d9a6ae066894e710afe4edcdc6508a942c90
+        uses: cgraf78/actions/.github/actions/android-rust-toolchain@160882f3d7f6d956d67364ddb102aae1b0c9f623
         with:
           rust-target: x86_64-linux-android
 
@@ -138,7 +138,7 @@ jobs:
       # lib/sdk-installer.js at the runner's pinned commit.
       # test/workflow-contract-test ties all four to that step and pin.
       - name: Install Android SDK packages
-        uses: cgraf78/actions/.github/actions/android-sdk-packages@db62d9a6ae066894e710afe4edcdc6508a942c90
+        uses: cgraf78/actions/.github/actions/android-sdk-packages@160882f3d7f6d956d67364ddb102aae1b0c9f623
         with:
           api-level: 31
           target: default
@@ -146,7 +146,7 @@ jobs:
           build-tools-version: 37.0.0
 
       - name: Stage bounded Termux ADB helper
-        uses: cgraf78/actions/.github/actions/termux-adb@db62d9a6ae066894e710afe4edcdc6508a942c90
+        uses: cgraf78/actions/.github/actions/termux-adb@160882f3d7f6d956d67364ddb102aae1b0c9f623
 
       - name: Prepare Termux host runner
         shell: bash
