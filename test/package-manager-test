@@ -5,6 +5,8 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=.github/actions/package-manager/lib.sh
 . "$root/.github/actions/package-manager/lib.sh"
+# shellcheck source=.github/actions/shared/infra-stall-markers.sh
+. "$root/.github/actions/shared/infra-stall-markers.sh"
 
 [[ $PKG_COMMAND_TIMEOUT -eq 120 ]]
 
@@ -71,8 +73,9 @@ else
   status=$?
 fi
 [[ $status -eq 124 ]]
-grep -Fq 'infra-stall: package command exhausted bounded retries' \
-  "$tmp/timeout.err"
+# The POSIX library cannot locate the shared marker file, so it prints the
+# literal; this binds that copy to the token infra-retry classifies.
+grep -Fxq "$PACKAGE_COMMAND_STALL_MARKER" "$tmp/timeout.err"
 
 # A bounded-timeout kill can interrupt dpkg mid-unpack; the next install
 # attempt then fails with exit 100 ("dpkg was interrupted") unless the retry

@@ -161,11 +161,33 @@ repository Actions secrets. See GitHub's
 The `infra-retry` composite action lets a caller smooth over a small allowlist
 of failures caused before repository code runs. It recognizes GitHub runner
 job-container pulls that exhausted the runner's own retries due to transient
-registry transport failures, Termux APK launches whose bootstrap never became
-ready before the caller command ran, and pinned ShellCheck archive downloads
-that exhausted curl's retries before repository inventory began. It does not
-retry ShellCheck findings, tests, builds, package-manager failures,
-authentication failures, or mixed infrastructure/application failures.
+registry transport failures, pinned ShellCheck archive downloads that
+exhausted curl's retries before repository inventory began, and the
+`infra-stall:` markers this repository's own supervisors print when a bounded
+step gives up: package commands that hit their deadline, Android SDK package
+installs that exhausted their attempts, and Termux emulator setup (package
+service, APK install, bootstrap) that never became ready. It does not retry
+ShellCheck findings, tests, builds, package-manager dependency or conflict
+errors, authentication failures, or mixed infrastructure/application
+failures.
+
+The runner echoes every step's script, inputs, and environment into the job
+log before the step runs, so a phrase written in a `run:` block appears in
+every log that reached that step, even when its branch never executed. The
+`infra-stall:` markers are therefore printed only at runtime, from variables
+in `.github/actions/shared/infra-stall-markers.sh` (the POSIX package-manager
+library keeps one literal copy in its sourced script), and the workflow
+contract test rejects any workflow, action, or example YAML that spells one
+out.
+
+The classifier runs from the default branch, so it can be newer or older than
+the failed run's workflow pin. Both mismatches fail closed: a run pinned
+before the Termux bootstrap and in-sandbox package markers existed, such as a
+pull request opened before its repository's lock bump, gets no automatic
+retry for those two stalls, and while a lock-bump pull request is open the
+older default-branch controller does not retry the new bootstrap, package, or
+Android SDK markers. The package-service and ADB setup markers are unchanged
+and keep retrying across both.
 
 The action inspects failed leaf-job logs and ignores only derived `Required`
 aggregates. It reruns failed jobs through GitHub's API when every failed leaf is
@@ -602,7 +624,13 @@ check. It forwards typed inputs to the internal `_termux-ci.yml` worker, which
 installs the checksum-pinned official Termux APK, copies the caller checkout to
 `$HOME/project`, and runs the caller's command under Termux Bash with `errexit`,
 `nounset`, and `pipefail` enabled. Callers do not depend on the emulator,
-bootstrap, or sandbox-transport implementation.
+bootstrap, or sandbox-transport implementation. When the worker's emulator
+script fails after boot, including through the caller command, it prints
+Android's crash log buffer (`adb logcat -b crash -d`, bounded to about 30
+seconds) in a collapsed group before the emulator shuts down, so a native
+crash arrives with its signal, abort message, and backtrace. The buffer also
+holds any system crashes since boot. The dump never changes the job's result,
+and boot, SDK, or AVD failures and cancelled jobs get none.
 
 For `setup: dotfiles`, the worker reads the checked-out client's cutover lock on
 the Ubuntu host, stages that exact standalone Dot engine, and installs it with

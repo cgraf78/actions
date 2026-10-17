@@ -26,6 +26,45 @@ write_jobs() {
   ) | {total_count: length, jobs: .}' -- "$@" >"$destination"
 }
 
+# Echo a step the way the runner does before executing it: the first script
+# line in the group title, every script line in cyan, then its inputs and
+# environment. Anything written in the step's YAML therefore reaches the log
+# of every job that gets this far, whether or not that code path executes.
+render_step() {
+  local workflow=$1 step=$2 selector script line
+
+  selector=".jobs.termux.steps[] | select(.name == \"$step\")"
+  yq -e "$selector" "$root/.github/workflows/$workflow" >/dev/null ||
+    fail "render_step: no step named $step in $workflow"
+  script=$(yq -r "$selector | .run // \"\"" "$root/.github/workflows/$workflow")
+  if [[ -n "$script" ]]; then
+    printf '##[group]Run %s\n' "${script%%$'\n'*}"
+    while IFS= read -r line; do
+      printf '\033[36;1m%s\033[0m\n' "$line"
+    done <<<"$script"
+  else
+    printf '##[group]Run %s\n' \
+      "$(yq -r "$selector | .uses" "$root/.github/workflows/$workflow")"
+  fi
+  yq -r "$selector | ((.with // {}) * (.env // {})) | to_entries[] |
+    \"  \" + .key + \": \" + (.value | tostring)" \
+    "$root/.github/workflows/$workflow"
+  printf '##[endgroup]\n'
+}
+
+# Prefix each line with a runner timestamp, as the job-log API returns it, so
+# positive cases also prove a marker is found mid-line rather than anchored.
+stamp() {
+  sed 's/^/2026-10-17T03:25:13.6396758Z /'
+}
+
+# Everything the current Termux worker echoes before the caller command runs.
+render_termux_setup() {
+  render_step _termux-ci.yml 'Install Android SDK packages'
+  render_step _termux-ci.yml 'Prepare Termux host runner'
+  render_step _termux-ci.yml 'Run caller tests in Termux'
+}
+
 run_case() {
   local name=$1
   local jobs=$2
@@ -97,6 +136,7 @@ EOF
 mkdir -p \
   "$tmp/infra-logs" \
   "$tmp/termux-logs" \
+  "$tmp/sdk-logs" \
   "$tmp/termux-adb-logs" \
   "$tmp/shellcheck-http-logs" \
   "$tmp/shellcheck-connection-logs" \
@@ -167,30 +207,153 @@ write_jobs "$tmp/termux-jobs.json" \
   '16:rust / Termux runtime / Runtime / Android / Termux x86_64:failure' \
   '17:rust / Termux runtime / Required:failure' \
   '18:rust / Required:failure'
+
+# The runner echoes the worker's whole setup script, including the phrases of
+# branches that never execute, into every Termux job log. A caller test
+# failure after that echo is repository-owned and must stay red.
+{
+  render_termux_setup
+  cat <<'EOF'
+Waiting for Termux bootstrap
+Copying caller checkout
+Running caller command inside Termux
+  FAIL: live watcher covers its key only (expected 'b', got 'ab')
+Results: 230 passed, 1 failed
+##[error]The process '/usr/bin/sh' failed with exit code 1
+EOF
+} | stamp >"$tmp/termux-logs/16.log"
+run_case termux-caller-failure "$tmp/termux-jobs.json" "$tmp/termux-logs"
+if grep -Fq 'rerun-failed-jobs' "$tmp/termux-caller-failure/gh-calls"; then
+  fail "Termux caller failure was rerun because of the echoed setup script"
+fi
+grep -Fq 'not an allowlisted infrastructure failure' \
+  "$tmp/termux-caller-failure/stdout" ||
+  fail "Termux caller failure decision was not reported"
+
+# The same failure recorded from a real job before the markers moved out of
+# the YAML: its echoed script still spells the old bootstrap and package
+# phrases, which must no longer opt anything into a retry.
+cp "$root/test/fixtures/infra-retry/termux-caller-failure.log" \
+  "$tmp/termux-logs/16.log"
+run_case termux-recorded-caller-failure \
+  "$tmp/termux-jobs.json" "$tmp/termux-logs"
+if grep -Fq 'rerun-failed-jobs' \
+  "$tmp/termux-recorded-caller-failure/gh-calls"; then
+  fail "recorded Termux caller failure was rerun"
+fi
+
+# A bootstrap that never became ready is infrastructure only when the helper
+# printed its runtime marker, which sits outside every YAML file.
+{
+  render_termux_setup
+  printf '%s\n' \
+    'Waiting for Termux bootstrap' \
+    "$TERMUX_BOOTSTRAP_TIMEOUT_MARKER" \
+    'Termux bootstrap was not ready after bounded polling' \
+    "##[error]The process '/usr/bin/sh' failed with exit code 1"
+} | stamp >"$tmp/termux-logs/16.log"
+run_case termux-bootstrap "$tmp/termux-jobs.json" "$tmp/termux-logs"
+grep -Fq 'rerun-failed-jobs' "$tmp/termux-bootstrap/gh-calls" ||
+  fail "Termux bootstrap stall was not rerun"
+grep -Fq "allowlisted bounded infrastructure stall ($TERMUX_BOOTSTRAP_TIMEOUT_MARKER)" \
+  "$tmp/termux-bootstrap/stdout" ||
+  fail "Termux bootstrap retry decision did not name its marker"
+
+# The bootstrap phrases alone are display text, not a runtime signal.
 cat >"$tmp/termux-logs/16.log" <<'EOF'
 Installing Termux APK
 Waiting for Termux bootstrap
 Termux bootstrap did not become ready
 The process '/usr/bin/sh' failed with exit code 1
 EOF
-
-run_case termux "$tmp/termux-jobs.json" "$tmp/termux-logs"
-grep -Fq 'rerun-failed-jobs' "$tmp/termux/gh-calls" ||
-  fail "allowlisted Termux bootstrap failure was not rerun"
-grep -Fq 'allowlisted Termux bootstrap failure' "$tmp/termux/stdout" ||
-  fail "Termux bootstrap retry decision was not reported"
+run_case termux-bootstrap-prose "$tmp/termux-jobs.json" "$tmp/termux-logs"
+if grep -Fq 'rerun-failed-jobs' "$tmp/termux-bootstrap-prose/gh-calls"; then
+  fail "Termux bootstrap prose without its marker was rerun"
+fi
 
 write_jobs "$tmp/termux-package-jobs.json" \
   '19:rust / Termux runtime / Runtime / Android / Termux x86_64:failure' \
   '20:rust / Termux runtime / Required:failure'
-cat >"$tmp/termux-logs/19.log" <<'EOF'
-infra-stall: Termux package command exhausted bounded retries
-Error: Process completed with exit code 124.
-EOF
+{
+  render_termux_setup
+  printf '%s\n' "$TERMUX_PACKAGE_COMMAND_MARKER" \
+    'Error: Process completed with exit code 124.'
+} | stamp >"$tmp/termux-logs/19.log"
 
 run_case termux-package "$tmp/termux-package-jobs.json" "$tmp/termux-logs"
 grep -Fq 'rerun-failed-jobs' "$tmp/termux-package/gh-calls" ||
   fail "bounded Termux package failure was not rerun"
+
+# The pre-v1 in-sandbox phrase was spelled out in the echoed script, so a run
+# still on an older worker cannot prove a stall with it.
+cat >"$tmp/termux-logs/19.log" <<'EOF'
+infra-stall: Termux package command exhausted bounded retries
+Error: Process completed with exit code 124.
+EOF
+run_case termux-package-legacy \
+  "$tmp/termux-package-jobs.json" "$tmp/termux-logs"
+if grep -Fq 'rerun-failed-jobs' "$tmp/termux-package-legacy/gh-calls"; then
+  fail "legacy echoed Termux package phrase was rerun"
+fi
+
+# The emulator runner's own sdkmanager calls fail with one-shot download
+# errors. The worker's bounded pre-install prints its marker only after every
+# attempt failed; the third-party warning alone stays red.
+write_jobs "$tmp/sdk-jobs.json" \
+  '61:shell / Termux runtime / Runtime / Android / Termux x86_64:failure' \
+  '62:shell / Required:failure'
+{
+  render_step _termux-ci.yml 'Install Android SDK packages'
+  printf '%s\n' \
+    'Warning: An error occurred while preparing SDK package Android Emulator: Error on ZipFile unknown archive.' \
+    'android-sdk-packages: attempt 3/3 failed (exit 1); giving up' \
+    "$ANDROID_SDK_INSTALL_MARKER" \
+    'Error: Process completed with exit code 1.'
+} | stamp >"$tmp/sdk-logs/61.log"
+run_case android-sdk "$tmp/sdk-jobs.json" "$tmp/sdk-logs"
+grep -Fq 'rerun-failed-jobs' "$tmp/android-sdk/gh-calls" ||
+  fail "exhausted Android SDK install was not rerun"
+
+cat >"$tmp/sdk-logs/61.log" <<'EOF'
+[command]/usr/bin/sh -c \sdkmanager --install emulator --channel=0 > /dev/null
+Warning: An error occurred while preparing SDK package Android Emulator: Error on ZipFile unknown archive.
+##[error]The process '/usr/bin/sh' failed with exit code 1
+EOF
+run_case android-sdk-unmarked "$tmp/sdk-jobs.json" "$tmp/sdk-logs"
+if grep -Fq 'rerun-failed-jobs' "$tmp/android-sdk-unmarked/gh-calls"; then
+  fail "unmarked sdkmanager failure was rerun"
+fi
+
+# Every token the producers print must be retryable on its own; a token added
+# to the shared file but not classified would be a silent no-op. Messages
+# name the index, never the token: a printed token would make a failure of
+# this very test look retryable.
+for index in "${!INFRA_STALL_MARKERS[@]}"; do
+  printf '%s\n%s\n' "${INFRA_STALL_MARKERS[index]}" \
+    'Error: Process completed with exit code 1.' | stamp \
+    >"$tmp/sdk-logs/61.log"
+  run_case marker-each "$tmp/sdk-jobs.json" "$tmp/sdk-logs"
+  grep -Fq 'rerun-failed-jobs' "$tmp/marker-each/gh-calls" ||
+    fail "INFRA_STALL_MARKERS[$index] was not rerun"
+  rm -rf "$tmp/marker-each"
+done
+defined_markers=$(grep -c "^[A-Z_]*='infra-stall: " \
+  "$root/.github/actions/shared/infra-stall-markers.sh")
+[[ ${#INFRA_STALL_MARKERS[@]} -eq $defined_markers ]] ||
+  fail "a shared infra-stall token is missing from INFRA_STALL_MARKERS"
+
+# Every workflow and action file, echoed at once, followed by an ordinary
+# test failure. No allowlist rule may fire on YAML text alone.
+mkdir -p "$tmp/yaml-logs"
+{
+  cat "$root"/.github/workflows/*.yml "$root"/.github/actions/*/action.yml
+  printf '%s\n' 'FAIL: ordinary test assertion' \
+    'Error: Process completed with exit code 1.'
+} >"$tmp/yaml-logs/61.log"
+run_case all-yaml "$tmp/sdk-jobs.json" "$tmp/yaml-logs"
+if grep -Fq 'rerun-failed-jobs' "$tmp/all-yaml/gh-calls"; then
+  fail "workflow or action YAML text alone made a failure retryable"
+fi
 
 write_jobs "$tmp/termux-adb-jobs.json" \
   '37:rust / Termux runtime / Runtime / Android / Termux x86_64:failure' \

@@ -48,14 +48,6 @@ is_retryable_docker_pull() {
       "$log"
 }
 
-is_retryable_termux_bootstrap() {
-  local log=$1
-
-  grep -Fq 'Installing Termux APK' "$log" &&
-    grep -Fq 'Waiting for Termux bootstrap' "$log" &&
-    grep -Fq 'Termux bootstrap did not become ready' "$log"
-}
-
 is_retryable_shellcheck_download() {
   local log=$1 final_curl final_exit
 
@@ -96,15 +88,23 @@ is_retryable_shellcheck_download() {
   return 1
 }
 
+# Sets `stall_marker` to the matched token so the caller can report it.
 is_retryable_bounded_stall() {
-  local log=$1
+  local log=$1 marker
 
   # Provider-owned wrappers print these tokens only when their supervisor
-  # deadline expires. Classification therefore does not depend on third-party
-  # package-manager or Android-emulator wording.
-  grep -Eq 'infra-stall: (Termux )?package command exhausted bounded retries' \
-    "$log" || grep -Fq "$TERMUX_ADB_SETUP_TIMEOUT_MARKER" "$log" ||
-    grep -Fq "$TERMUX_PACKAGE_SERVICE_MARKER" "$log"
+  # deadline or bounded retries expire. Classification therefore does not
+  # depend on third-party package-manager or Android-emulator wording. Match
+  # only the tokens, never step prose: the runner echoes each step's script
+  # into the log, so any phrase written in a `run:` block appears in every
+  # job that reached that step, whether or not the branch executed.
+  for marker in "${INFRA_STALL_MARKERS[@]}"; do
+    if grep -Fq -- "$marker" "$log"; then
+      stall_marker=$marker
+      return 0
+    fi
+  done
+  return 1
 }
 
 is_retryable_step_timeout() {
@@ -179,7 +179,7 @@ main() {
   local failed_leaf=0
   local retryable_leaf=0
   local unclassified_leaf=0
-  local job_id name log
+  local job_id name log stall_marker
   while IFS=$'\t' read -r job_id name; do
     if is_required_aggregate "$name"; then
       notice "ignoring derived aggregate failure: $name"
@@ -198,14 +198,11 @@ main() {
     if is_retryable_docker_pull "$log"; then
       notice "allowlisted Docker pull failure: $name"
       retryable_leaf=$((retryable_leaf + 1))
-    elif is_retryable_termux_bootstrap "$log"; then
-      notice "allowlisted Termux bootstrap failure: $name"
-      retryable_leaf=$((retryable_leaf + 1))
     elif is_retryable_shellcheck_download "$log"; then
       notice "allowlisted ShellCheck prerequisite download failure: $name"
       retryable_leaf=$((retryable_leaf + 1))
     elif is_retryable_bounded_stall "$log"; then
-      notice "allowlisted bounded package-command stall: $name"
+      notice "allowlisted bounded infrastructure stall ($stall_marker): $name"
       retryable_leaf=$((retryable_leaf + 1))
     elif is_retryable_step_timeout "$log"; then
       notice "allowlisted network step timeout: $name"

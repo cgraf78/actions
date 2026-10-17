@@ -22,6 +22,9 @@ this repo and by other `cgraf78` repositories.
   failed leaf job matches an allowlisted infrastructure failure signature.
 - `termux-adb` stages the bounded `adb` wrapper and helper used by the Termux
   emulator worker.
+- `android-sdk-packages` pre-installs, with bounded retries, the SDK packages
+  the pinned `reactivecircus/android-emulator-runner` would otherwise download
+  in one unretried attempt.
 - `dotfiles-bootstrap` installs Dot and locked Mise tools, runs doctor when the
   full dependency provider converges, or stages and installs one exact
   standalone Dot payload for sandbox CI.
@@ -44,8 +47,11 @@ action. The Rust, musl, and shell prerequisite actions source it so mirror
 timeouts and retry classification have one owner.
 
 `shared/infra-stall-markers.sh` is likewise a sourced library, not an action.
-It owns the stable infrastructure-stall markers that `termux-adb` emits and
-`infra-retry` classifies, so producer and classifier cannot drift apart.
+It owns the stable infrastructure-stall markers that `termux-adb`,
+`android-sdk-packages`, and the Termux worker emit and `infra-retry`
+classifies, so producer and classifier cannot drift apart. Producers print
+them only at runtime: the runner echoes YAML into the job log, so a marker
+written there would match every failure in that job.
 
 `shared/verify-vendored-scripts.sh` is an internal command, not an action. It
 owns the byte, mode, and managed-file-set comparison for every vendored script

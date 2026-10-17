@@ -403,7 +403,7 @@ contracts() {
   check '.on.workflow_call.inputs."dotfiles-shdeps-update-policy".default == "config"' _termux-ci.yml
   check '.on.workflow_call.inputs."dotfiles-shdeps-update-policy".required == false' _termux-ci.yml
   check '.on.workflow_call.inputs."dotfiles-shdeps-update-policy".type == "string"' _termux-ci.yml
-  check '.jobs.termux."timeout-minutes" == 55' _termux-ci.yml
+  check '.jobs.termux."timeout-minutes" == 67' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Run caller tests in Termux").with."emulator-boot-timeout" == 600' _termux-ci.yml
   # Android 11's misaligned GWP-ASan blocks crash Rust callers at random.
   check '.jobs.termux.steps[] | select(.name == "Run caller tests in Termux").with."api-level" >= 31' _termux-ci.yml
@@ -414,6 +414,11 @@ contracts() {
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("source \"$TERMUX_ADB_HELPER\"")' _termux-ci.yml
   check '[.jobs.termux.steps[] | select((.run? // "") | contains("$GITHUB_WORKSPACE/.github/scripts/termux-adb.sh"))] | length == 0' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("termux_wait_for_runtime 30 3 1")' _termux-ci.yml
+  # The emulator runner kills the device when its script returns, so the
+  # failure-only crash dump must be armed inside the host script, before the
+  # first emulator command can fail.
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("source \"$TERMUX_ADB_HELPER\"\ntrap '\''termux_dump_crash_log 30'\'' EXIT\napk=")' _termux-ci.yml
+  check '[.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | match("(^|\n) *trap "; "g")] | length == 1' _termux-ci.yml
   check_no_unsupervised_adb _termux-ci.yml
   check_file '.runs.using == "composite"' .github/actions/termux-adb/action.yml
   check_file '.runs.steps[0].run | contains("$GITHUB_ACTION_PATH/termux-adb.sh")' .github/actions/termux-adb/action.yml
@@ -463,7 +468,10 @@ contracts() {
   check '.jobs.termux.steps[] | select(.name == "Download official Termux APK").run | contains("--retry 1 --retry-all-errors --retry-delay 1")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Download official Termux APK").run | contains("--connect-timeout 10 --max-time 45")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Download official Termux APK").run | contains("--speed-limit 1024 --speed-time 30")' _termux-ci.yml
-  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("infra-stall: Termux package command exhausted bounded retries")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("printf '\''package_stall_marker=%q\\n'\'' \"${TERMUX_PACKAGE_COMMAND_MARKER:?}\"")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("printf '\''%s\\n'\'' \"$package_stall_marker\" >&2")' _termux-ci.yml
+  # The guard above fails loudly if the helper is not sourced first.
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | split("printf '\''package_stall_marker=") | .[0] | contains("source \"$TERMUX_ADB_HELPER\"")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("if [[ \"$rc\" -eq 124 ]]")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("Acquire::http::Timeout=30")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("timeout -k 5 120")' _termux-ci.yml
@@ -762,7 +770,80 @@ check_checkout_initial_branch() {
   done
 }
 
+# The emulator runner installs its SDK packages itself, once, without retries.
+# The worker pre-installs the same set with bounded retries, which only helps
+# while both name identical packages: the shared api-level, target, and arch,
+# the runner's default stable channel, no extra package inputs, and the
+# build-tools version hard-coded in the runner's lib/sdk-installer.js.
+# shellcheck disable=SC2016
+check_android_sdk_packages() {
+  local sdk='.jobs.termux.steps[] | select(.name == "Install Android SDK packages")'
+  local emulator='.jobs.termux.steps[] | select(.name == "Run caller tests in Termux")'
+  local input emulator_ref build_tools
+
+  check "$sdk.uses == \"cgraf78/actions/.github/actions/android-sdk-packages@$actions_lock\"" _termux-ci.yml
+  check_step_order 'Install Android SDK packages' \
+    'Run caller tests in Termux' _termux-ci.yml termux
+  for input in api-level target arch; do
+    check "($sdk.with.\"$input\" | tostring) == ($emulator.with.\"$input\" | tostring)" _termux-ci.yml
+  done
+  for input in channel system-image-api-level emulator-build ndk cmake; do
+    check "$emulator.with | has(\"$input\") | not" _termux-ci.yml
+  done
+  check_file '.runs.steps[0].run == "$GITHUB_ACTION_PATH/install.sh"' \
+    .github/actions/android-sdk-packages/action.yml
+  check_file '.runs.steps[0].env | to_entries | map(.key + "=" + .value) | join(",") ==
+    "ANDROID_SDK_API_LEVEL=${{ inputs.api-level }},ANDROID_SDK_ARCH=${{ inputs.arch }},ANDROID_SDK_BUILD_TOOLS_VERSION=${{ inputs.build-tools-version }},ANDROID_SDK_TARGET=${{ inputs.target }}"' \
+    .github/actions/android-sdk-packages/action.yml
+
+  # Re-read lib/sdk-installer.js at any new pin before extending this list: a
+  # different BUILD_TOOLS_VERSION, package set, or channel makes the runner
+  # download again, unretried.
+  emulator_ref=$(yq -r "$emulator.uses" "$root/.github/workflows/_termux-ci.yml")
+  build_tools=$(yq -r "$sdk.with.\"build-tools-version\"" \
+    "$root/.github/workflows/_termux-ci.yml")
+  case "$emulator_ref=$build_tools" in
+    reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d=37.0.0) ;;
+    *)
+      printf 'workflow contract failed: _termux-ci.yml: build-tools-version %s is not known to match %s; re-read lib/sdk-installer.js at that pin, then update the step and this table\n' \
+        "$build_tools" "$emulator_ref" >&2
+      return 1
+      ;;
+  esac
+}
+
+# The runner echoes every `run:` script, `with:` input, and `env:` value into
+# the job log before the step runs, and infra-retry treats any marker in a log
+# as proof of an infrastructure stall. A marker spelled out in YAML would
+# therefore make every later failure in that job look retryable. The runner
+# also lists GITHUB_ENV values under every later step, so no workflow or
+# action may route a marker variable there. Failure messages name the array
+# index, not the token, so this check cannot itself trigger a retry.
+check_no_literal_infra_markers() {
+  local index file
+
+  # shellcheck source=.github/actions/shared/infra-stall-markers.sh
+  source "$root/.github/actions/shared/infra-stall-markers.sh"
+  for file in "$root"/.github/workflows/*.yml "$root"/.github/actions/*/action.yml \
+    "$root"/examples/*.yml; do
+    for index in "${!INFRA_STALL_MARKERS[@]}"; do
+      if grep -Fq -- "${INFRA_STALL_MARKERS[index]}" "$file"; then
+        printf 'workflow contract failed: %s spells out INFRA_STALL_MARKERS[%s]\n' \
+          "${file#"$root"/}" "$index" >&2
+        return 1
+      fi
+    done
+  done
+  if grep -rEn '_MARKER.*GITHUB_(ENV|OUTPUT)|GITHUB_(ENV|OUTPUT).*_MARKER' \
+    "$root/.github" "$root/examples" >&2; then
+    echo 'workflow contract failed: an infra marker is routed through GITHUB_ENV or GITHUB_OUTPUT' >&2
+    return 1
+  fi
+}
+
 contracts
+check_android_sdk_packages
+check_no_literal_infra_markers
 check_platform_matrices
 check_rust_test_shards
 check_checkout_initial_branch

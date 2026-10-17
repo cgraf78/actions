@@ -1,5 +1,6 @@
 # type<TAB>repository-relative path
 # `fixture` rows are discovered but intentionally not linted as programs.
+program	.github/actions/android-sdk-packages/install.sh
 program	.github/actions/dotfiles-bootstrap/bounded.sh
 program	.github/actions/dotfiles-bootstrap/install.sh
 program	.github/actions/infra-retry/retry.sh
@@ -42,6 +43,7 @@ program	release-scripts/release-version.sh
 program	release-scripts/release.sh
 program	release-scripts/smoke-release.sh
 program	release-scripts/sync.sh
+program	test/android-sdk-packages-test
 program	test/capability-harness-test
 program	test/consumer-sync-test
 program	test/consumer-installer-canary
