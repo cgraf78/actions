@@ -1,6 +1,7 @@
 # actions
 
-![Tests](https://github.com/cgraf78/actions/actions/workflows/test.yml/badge.svg?branch=main)
+[![Tests](https://github.com/cgraf78/actions/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/cgraf78/actions/actions/workflows/test.yml?query=branch%3Amain)
+[![License](https://img.shields.io/badge/license-MIT-67ac09)](LICENSE)
 
 Reusable GitHub Actions workflows and action helpers for `cgraf78` repos.
 They are built for my own repos and are public so those repos can pin them.
