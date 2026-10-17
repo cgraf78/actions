@@ -26,6 +26,9 @@ termux_adb() {
   _termux_adb_timeout "$timeout_seconds" "$adb_command" "$@"
 }
 
+# Termux unpacks its bootstrap on first launch, before any caller code runs.
+# Exhaustion prints the stable infra-stall marker so a launch that never
+# finishes unpacking is retried as infrastructure.
 termux_wait_for_runtime() {
   local attempts=$1
   local timeout_seconds=$2
@@ -42,6 +45,7 @@ termux_wait_for_runtime() {
     fi
   done
 
+  printf '%s\n' "$TERMUX_BOOTSTRAP_TIMEOUT_MARKER" >&2
   return 1
 }
 

@@ -327,6 +327,10 @@ jobs:
         shell: bash
         run: test/termux-adb-test
 
+      - name: Test bounded Android SDK installs
+        shell: bash
+        run: test/android-sdk-packages-test
+
       - name: Test shell prerequisite profiles
         shell: bash
         run: test/shell-ci-prereqs-test

@@ -1,0 +1,270 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+install=$root/.github/actions/android-sdk-packages/install.sh
+# shellcheck source=.github/actions/shared/infra-stall-markers.sh
+source "$root/.github/actions/shared/infra-stall-markers.sh"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() {
+  printf 'android-sdk-packages-test: %s\n' "$*" >&2
+  exit 1
+}
+
+sdk=$tmp/sdk
+mkdir -p "$sdk/cmdline-tools/latest/bin"
+cat >"$sdk/cmdline-tools/latest/bin/sdkmanager" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$FAKE_SDK_CALLS"
+if [[ $1 == --licenses ]]; then
+  answer=
+  read -r answer || true
+  printf 'licenses answer: %s\n' "$answer" >>"$FAKE_SDK_CALLS"
+  [[ -z ${FAKE_SDK_LICENSES_DELAY:-} ]] || sleep "$FAKE_SDK_LICENSES_DELAY"
+  [[ ${FAKE_SDK_LICENSES:-accept} == accept ]] || exit 1
+  exit 0
+fi
+count=$(($(cat "$FAKE_SDK_ATTEMPTS" 2>/dev/null || echo 0) + 1))
+printf '%s\n' "$count" >"$FAKE_SDK_ATTEMPTS"
+if [[ -e "$ANDROID_HOME/.temp/partial.zip" ||
+  -e "$ANDROID_HOME/.downloadIntermediates/partial" ]]; then
+  printf 'install %s saw a partial download\n' "$count" >>"$FAKE_SDK_CALLS"
+fi
+echo '[=======                                ] 20% Downloading progress'
+case $FAKE_SDK_MODE in
+  succeed) exit 0 ;;
+  fail-then-succeed)
+    ((count > FAKE_SDK_FAILURES)) && exit 0
+    ;;
+  hang)
+    printf '%s\n' "$$" >>"$FAKE_SDK_PIDS"
+    exec sleep 30
+    ;;
+  ignore-term)
+    # A JVM that ignores TERM; the ignored disposition survives exec.
+    trap '' TERM
+    printf '%s\n' "$$" >>"$FAKE_SDK_PIDS"
+    exec sleep 30
+    ;;
+esac
+mkdir -p "$ANDROID_HOME/.temp" "$ANDROID_HOME/.downloadIntermediates"
+: >"$ANDROID_HOME/.temp/partial.zip"
+: >"$ANDROID_HOME/.downloadIntermediates/partial"
+echo 'Warning: An error occurred while preparing SDK package Android Emulator: Error on ZipFile unknown archive.' >&2
+exit 1
+EOF
+chmod +x "$sdk/cmdline-tools/latest/bin/sdkmanager"
+
+# Runs install.sh with valid production inputs and fast retries; extra
+# `NAME=value` arguments override the environment for one case.
+run_case() {
+  local name=$1
+  shift
+  local case_dir=$tmp/$name
+  mkdir -p "$case_dir"
+  set +e
+  env \
+    ANDROID_HOME="$sdk" \
+    ANDROID_SDK_API_LEVEL=31 \
+    ANDROID_SDK_ARCH=x86_64 \
+    ANDROID_SDK_BUILD_TOOLS_VERSION=37.0.0 \
+    ANDROID_SDK_TARGET=default \
+    ANDROID_SDK_ATTEMPT_TIMEOUT=20 \
+    ANDROID_SDK_RETRY_DELAYS='0 0' \
+    FAKE_SDK_ATTEMPTS="$case_dir/attempts" \
+    FAKE_SDK_CALLS="$case_dir/calls" \
+    FAKE_SDK_MODE=succeed \
+    FAKE_SDK_PIDS="$case_dir/pids" \
+    "$@" \
+    bash "$install" >"$case_dir/stdout" 2>"$case_dir/stderr"
+  status=$?
+  set -e
+  : >>"$case_dir/calls"
+  rm -rf "$sdk/.temp" "$sdk/.downloadIntermediates"
+}
+
+# A killed child can linger briefly until it is reaped (on the kill-after
+# path timeout signals its own group, so init reaps it), so poll for up to
+# 2s before declaring that a recorded PID outlived its attempt. A survivor
+# would live for the fake's full 30s.
+assert_attempts_reaped() {
+  local pid tries
+  [[ -s "$tmp/$1/pids" ]] || fail "$1: no stalled sdkmanager was started"
+  while read -r pid; do
+    for ((tries = 0; tries < 10; tries++)); do
+      kill -0 "$pid" 2>/dev/null || continue 2
+      sleep 0.2
+    done
+    # Kill only the fake's own sleep, never a process that reused the PID.
+    if [[ $(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null) == 'sleep 30 ' ]]; then
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+    fail "$1: stalled sdkmanager $pid outlived its attempt"
+  done <"$tmp/$1/pids"
+}
+
+install_calls() {
+  grep -c -- '^--install ' "$tmp/$1/calls" || true
+}
+
+assert_no_marker() {
+  if grep -Fq 'infra-stall:' "$tmp/$1/stdout" "$tmp/$1/stderr"; then
+    fail "$1: printed an infra marker"
+  fi
+}
+
+expected_install='--install build-tools;37.0.0 platform-tools platforms;android-31 emulator system-images;android-31;default;x86_64 --channel=0'
+
+run_case success
+[[ $status -eq 0 ]] || fail "success: exit $status"
+grep -Fxq -- '--licenses' "$tmp/success/calls" ||
+  fail "success: licenses were not accepted first"
+grep -Fxq 'licenses answer: y' "$tmp/success/calls" ||
+  fail "success: license prompts were not answered"
+grep -Fxq -- "$expected_install" "$tmp/success/calls" ||
+  fail "success: package set differs from the emulator runner's"
+[[ $(install_calls success) -eq 1 ]] || fail "success: installed more than once"
+if grep -Fq 'Downloading progress' "$tmp/success/stdout" "$tmp/success/stderr"; then
+  fail "success: sdkmanager progress output was not suppressed"
+fi
+assert_no_marker success
+
+# Transient download failures recover within the bounded attempts.
+run_case transient FAKE_SDK_MODE=fail-then-succeed FAKE_SDK_FAILURES=2
+[[ $status -eq 0 ]] || fail "transient: exit $status"
+[[ $(install_calls transient) -eq 3 ]] ||
+  fail "transient: expected three install attempts"
+grep -Fq 'attempt 2/3 failed (exit 1); retrying in 0s' "$tmp/transient/stderr" ||
+  fail "transient: retry was not reported"
+grep -Fq 'unknown archive' "$tmp/transient/stderr" ||
+  fail "transient: sdkmanager diagnostics were hidden"
+if grep -Fq 'saw a partial download' "$tmp/transient/calls"; then
+  fail "transient: a retry resumed the failed attempt's partial download"
+fi
+assert_no_marker transient
+
+# A license or manifest failure is part of the same bounded attempt.
+run_case licenses FAKE_SDK_LICENSES=reject
+[[ $status -ne 0 ]] || fail "licenses: rejected licenses succeeded"
+[[ $(grep -Fxc -- '--licenses' "$tmp/licenses/calls") -eq 3 ]] ||
+  fail "licenses: license failures were not retried"
+[[ $(install_calls licenses) -eq 0 ]] ||
+  fail "licenses: installed after licenses failed"
+
+# Exhaustion prints the marker exactly once, as its own line, and keeps the
+# last attempt's status.
+run_case exhausted FAKE_SDK_MODE=fail
+[[ $status -eq 1 ]] || fail "exhausted: expected exit 1, got $status"
+[[ $(install_calls exhausted) -eq 3 ]] ||
+  fail "exhausted: expected three install attempts"
+[[ $(grep -Fxc "$ANDROID_SDK_INSTALL_MARKER" "$tmp/exhausted/stderr") -eq 1 ]] ||
+  fail "exhausted: marker was not printed exactly once"
+
+# The delay list sets the attempt count: one delay means two attempts, and
+# an empty list means one.
+run_case two-attempts FAKE_SDK_MODE=fail ANDROID_SDK_RETRY_DELAYS=0
+[[ $(install_calls two-attempts) -eq 2 ]] ||
+  fail "two-attempts: delay list did not bound the attempts"
+run_case one-attempt FAKE_SDK_MODE=fail ANDROID_SDK_RETRY_DELAYS=
+[[ $(install_calls one-attempt) -eq 1 ]] ||
+  fail "one-attempt: empty delay list did not mean a single attempt"
+grep -Fxq "$ANDROID_SDK_INSTALL_MARKER" "$tmp/one-attempt/stderr" ||
+  fail "one-attempt: exhaustion omitted the marker"
+
+# A stalled download is cut off per attempt, and its process does not
+# outlive the attempt. Licenses and install share each attempt's deadline in
+# whole seconds, so 2s guarantees the install step at least 1s.
+started=$SECONDS
+run_case hang FAKE_SDK_MODE=hang ANDROID_SDK_ATTEMPT_TIMEOUT=2
+elapsed=$((SECONDS - started))
+[[ $status -eq 124 ]] || fail "hang: expected timeout status 124, got $status"
+[[ $elapsed -lt 20 ]] || fail "hang: three bounded attempts took ${elapsed}s"
+[[ $(install_calls hang) -eq 3 ]] || fail "hang: expected three attempts"
+grep -Fxq "$ANDROID_SDK_INSTALL_MARKER" "$tmp/hang/stderr" ||
+  fail "hang: exhausted stalls omitted the marker"
+assert_attempts_reaped hang
+
+# A stalled sdkmanager that ignores TERM is killed once the grace expires,
+# not when the fake's own 30s sleep ends.
+started=$SECONDS
+run_case ignore-term FAKE_SDK_MODE=ignore-term ANDROID_SDK_ATTEMPT_TIMEOUT=2 \
+  ANDROID_SDK_KILL_AFTER=1 ANDROID_SDK_RETRY_DELAYS=
+elapsed=$((SECONDS - started))
+[[ $elapsed -lt 15 ]] || fail "ignore-term: TERM-ignoring attempt ran ${elapsed}s"
+[[ $status -eq 124 || $status -eq 137 ]] ||
+  fail "ignore-term: expected a timeout status, got $status"
+grep -Fxq "$ANDROID_SDK_INSTALL_MARKER" "$tmp/ignore-term/stderr" ||
+  fail "ignore-term: exhausted stall omitted the marker"
+assert_attempts_reaped ignore-term
+
+# License acceptance and install share one deadline per attempt, which the
+# job timeout budget assumes: a slow license step leaves the install only
+# the remainder instead of a fresh full timeout.
+started=$SECONDS
+run_case shared-deadline FAKE_SDK_MODE=hang FAKE_SDK_LICENSES_DELAY=2 \
+  ANDROID_SDK_ATTEMPT_TIMEOUT=4 ANDROID_SDK_RETRY_DELAYS=
+elapsed=$((SECONDS - started))
+[[ $status -eq 124 ]] || fail "shared-deadline: expected 124, got $status"
+[[ $elapsed -lt 6 ]] ||
+  fail "shared-deadline: one attempt ran ${elapsed}s past its 4s deadline"
+assert_attempts_reaped shared-deadline
+
+# An attempt whose license step used up the whole deadline must not start
+# the install: `timeout 0` would mean no limit at all. A pass-through
+# `timeout` stub lets the license step overrun deterministically and records
+# every duration it is given.
+mkdir -p "$tmp/stub-bin"
+cat >"$tmp/stub-bin/timeout" <<'STUB'
+#!/usr/bin/env bash
+[[ $1 == --kill-after=* ]] && shift
+printf '%s\n' "$1" >>"$FAKE_TIMEOUT_DURATIONS"
+(($1 > 0)) || exit 99
+shift
+exec "$@"
+STUB
+chmod +x "$tmp/stub-bin/timeout"
+run_case deadline-spent FAKE_SDK_LICENSES_DELAY=2 ANDROID_SDK_ATTEMPT_TIMEOUT=1 \
+  ANDROID_SDK_RETRY_DELAYS= FAKE_TIMEOUT_DURATIONS="$tmp/durations" \
+  PATH="$tmp/stub-bin:$PATH"
+[[ $status -eq 124 ]] || fail "deadline-spent: expected 124, got $status"
+[[ $(install_calls deadline-spent) -eq 0 ]] ||
+  fail "deadline-spent: install started after the deadline passed"
+[[ $(wc -l <"$tmp/durations") -eq 1 ]] ||
+  fail "deadline-spent: expected only the license step to be bounded"
+
+# Without the image's command-line tools the emulator runner provisions its
+# own, so the pre-install steps aside instead of failing the job.
+run_case no-tools ANDROID_HOME="$tmp/empty-sdk"
+[[ $status -eq 0 ]] || fail "no-tools: exit $status"
+grep -Fq '::warning::' "$tmp/no-tools/stdout" ||
+  fail "no-tools: skip was not surfaced as a warning"
+assert_no_marker no-tools
+run_case no-home ANDROID_HOME=
+[[ $status -eq 0 ]] || fail "no-home: exit $status"
+assert_no_marker no-home
+
+# Inputs become sdkmanager package paths, so anything that could name an
+# extra package or option fails before sdkmanager runs.
+for override in \
+  'ANDROID_SDK_API_LEVEL=31 --verbose' \
+  'ANDROID_SDK_API_LEVEL=0' \
+  'ANDROID_SDK_TARGET=default;extra' \
+  'ANDROID_SDK_ARCH=x86_64 emulator' \
+  'ANDROID_SDK_BUILD_TOOLS_VERSION=37.0.0;platform-tools' \
+  'ANDROID_SDK_BUILD_TOOLS_VERSION=' \
+  'ANDROID_SDK_ATTEMPT_TIMEOUT=0' \
+  'ANDROID_SDK_KILL_AFTER=0' \
+  'ANDROID_SDK_RETRY_DELAYS=30 soon'; do
+  run_case invalid "$override"
+  [[ $status -ne 0 ]] || fail "invalid input accepted: $override"
+  [[ ! -s "$tmp/invalid/calls" ]] ||
+    fail "invalid input reached sdkmanager: $override"
+  assert_no_marker invalid
+  rm -rf "$tmp/invalid"
+done
+
+printf 'android-sdk-packages-test: ok\n'

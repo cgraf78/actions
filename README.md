@@ -354,10 +354,13 @@ than one worker are split into first-party composite actions:
   matches an allowlisted infrastructure signature.
 - `.github/actions/termux-adb/` stages the bounded `adb` wrapper used by the
   Termux emulator worker.
+- `.github/actions/android-sdk-packages/` pre-installs the emulator runner's
+  SDK packages with bounded retries, so its own one-shot installs have no
+  archives left to download.
 - `.github/actions/shared/` holds helpers shared by two actions: the
-  infrastructure-stall markers `termux-adb` emits and `infra-retry` classifies,
-  and the vendored-script comparison both release-script and capability-harness
-  verification use.
+  infrastructure-stall markers provider actions emit and `infra-retry`
+  classifies, and the vendored-script comparison both release-script and
+  capability-harness verification use.
 - `.github/actions/verify-release-scripts/` fails a consumer whose vendored
   release scripts no longer match `release-scripts/`.
 - `.github/actions/verify-consumer-sync/` enforces one consumer lock across all

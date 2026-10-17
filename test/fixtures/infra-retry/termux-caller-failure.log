@@ -1,0 +1,409 @@
+2026-10-15T20:01:40.1798899Z ##[group]Run case "$DOTFILES_SHDEPS_UPDATE_POLICY" in
+2026-10-15T20:01:40.1800218Z [36;1mcase "$DOTFILES_SHDEPS_UPDATE_POLICY" in[0m
+2026-10-15T20:01:40.1800713Z [36;1m  config | pinned | latest) ;;[0m
+2026-10-15T20:01:40.1801137Z [36;1m  *)[0m
+2026-10-15T20:01:40.1801611Z [36;1m    printf 'unsupported Dotfiles Shdeps update policy: %s\n' \[0m
+2026-10-15T20:01:40.1802219Z [36;1m      "$DOTFILES_SHDEPS_UPDATE_POLICY" >&2[0m
+2026-10-15T20:01:40.1802677Z [36;1m    exit 2[0m
+2026-10-15T20:01:40.1803022Z [36;1m    ;;[0m
+2026-10-15T20:01:40.1803348Z [36;1mesac[0m
+2026-10-15T20:01:40.1803796Z [36;1mprofiles_b64=$(printf '%s' "$PROFILES" | base64 --wrap=0)[0m
+2026-10-15T20:01:40.1804803Z [36;1mpolicy_b64=$(printf '%s' "$DOTFILES_SHDEPS_UPDATE_POLICY" | base64 --wrap=0)[0m
+2026-10-15T20:01:40.1805501Z [36;1msetup_b64=$(printf '%s' "$SETUP" | base64 --wrap=0)[0m
+2026-10-15T20:01:40.1806190Z [36;1mworkdir_b64=$(printf '%s' "$TERMUX_CI_WORKING_DIRECTORY" | base64 --wrap=0)[0m
+2026-10-15T20:01:40.1806927Z [36;1mpayload_b64=$(printf '%s' "$DOTFILES_BOOTSTRAP_PAYLOAD" | base64 --wrap=0)[0m
+2026-10-15T20:01:40.1807572Z [36;1mpayload_name=${DOTFILES_BOOTSTRAP_PAYLOAD##*/}[0m
+2026-10-15T20:01:40.1808061Z [36;1mcase "$payload_name" in[0m
+2026-10-15T20:01:40.1808476Z [36;1m  '' | . | .. | *[!A-Za-z0-9._-]*)[0m
+2026-10-15T20:01:40.1809016Z [36;1m    echo "unsafe Dot bootstrap payload name: $payload_name" >&2[0m
+2026-10-15T20:01:40.1809558Z [36;1m    exit 1[0m
+2026-10-15T20:01:40.1809896Z [36;1m    ;;[0m
+2026-10-15T20:01:40.1810224Z [36;1mesac[0m
+2026-10-15T20:01:40.1810691Z [36;1mpayload_name_b64=$(printf '%s' "$payload_name" | base64 --wrap=0)[0m
+2026-10-15T20:01:40.1811372Z [36;1mprintf '%s' "$TERMUX_CI_COMMAND" >"$RUNNER_TEMP/termux-ci-command"[0m
+2026-10-15T20:01:40.1812106Z [36;1m{[0m
+2026-10-15T20:01:40.1812633Z [36;1m  printf '%s\n' '#!/data/data/com.termux/files/usr/bin/bash' 'set -euo pipefail'[0m
+2026-10-15T20:01:40.1813329Z [36;1m  printf "profiles_b64='%s'\n" "$profiles_b64"[0m
+2026-10-15T20:01:40.1813852Z [36;1m  printf "policy_b64='%s'\n" "$policy_b64"[0m
+2026-10-15T20:01:40.1814595Z [36;1m  printf "setup_b64='%s'\n" "$setup_b64"[0m
+2026-10-15T20:01:40.1815115Z [36;1m  printf "workdir_b64='%s'\n" "$workdir_b64"[0m
+2026-10-15T20:01:40.1815720Z [36;1m  printf "payload_name_b64='%s'\n" "$payload_name_b64"[0m
+2026-10-15T20:01:40.1816229Z [36;1m  cat <<'RUNNER'[0m
+2026-10-15T20:01:40.1816668Z [36;1mexport HOME=/data/data/com.termux/files/home[0m
+2026-10-15T20:01:40.1817209Z [36;1mexport PREFIX=/data/data/com.termux/files/usr[0m
+2026-10-15T20:01:40.1817701Z [36;1mexport TMPDIR=$PREFIX/tmp[0m
+2026-10-15T20:01:40.1818248Z [36;1m# Do not let the copied caller checkout substitute Bash or Git before[0m
+2026-10-15T20:01:40.1818934Z [36;1m# the exact staged runtime is installed. Keep bootstrap lookup limited[0m
+2026-10-15T20:01:40.1819603Z [36;1m# to Termux-owned tools; invoke the tracked client front door only[0m
+2026-10-15T20:01:40.1820155Z [36;1m# after that runtime exists.[0m
+2026-10-15T20:01:40.1820564Z [36;1mexport PATH=$PREFIX/bin[0m
+2026-10-15T20:01:40.1820984Z [36;1mexport TERMUX_PKG_NO_MIRROR_SELECT=1[0m
+2026-10-15T20:01:40.1821546Z [36;1m# The bootstrap APK otherwise probes mirrors and may select one with[0m
+2026-10-15T20:01:40.1822217Z [36;1m# stale indexes. Keep CI reproducible on Termux's primary repository.[0m
+2026-10-15T20:01:40.1822767Z [36;1mprintf '%s\n' \[0m
+2026-10-15T20:01:40.1823280Z [36;1m  'deb https://packages.termux.dev/apt/termux-main stable main' \[0m
+2026-10-15T20:01:40.1823837Z [36;1m  >"$PREFIX/etc/apt/sources.list"[0m
+2026-10-15T20:01:40.1824819Z [36;1mprofiles=$(printf %s "$profiles_b64" | base64 -d)[0m
+2026-10-15T20:01:40.1825477Z [36;1mdotfiles_shdeps_update_policy=$(printf %s "$policy_b64" | base64 -d)[0m
+2026-10-15T20:01:40.1826084Z [36;1msetup=$(printf %s "$setup_b64" | base64 -d)[0m
+2026-10-15T20:01:40.1826525Z [36;1mcase "$setup" in[0m
+2026-10-15T20:01:40.1827106Z [36;1m  none | checkrun | dotfiles) ;;[0m
+2026-10-15T20:01:40.1827531Z [36;1m  *)[0m
+2026-10-15T20:01:40.1827966Z [36;1m    printf 'unsupported Termux setup mode: %s\n' "$setup" >&2[0m
+2026-10-15T20:01:40.1828469Z [36;1m    exit 2[0m
+2026-10-15T20:01:40.1828800Z [36;1m    ;;[0m
+2026-10-15T20:01:40.1829118Z [36;1mesac[0m
+2026-10-15T20:01:40.1829600Z [36;1mif [[ "$setup" == dotfiles && "$dotfiles_shdeps_update_policy" != config ]]; then[0m
+2026-10-15T20:01:40.1830291Z [36;1m  export DOT_SHDEPS_UPDATE_POLICY=$dotfiles_shdeps_update_policy[0m
+2026-10-15T20:01:40.1830806Z [36;1mfi[0m
+2026-10-15T20:01:40.1831269Z [36;1m# Match the conventional-platform named setup by composing the same[0m
+2026-10-15T20:01:40.1831947Z [36;1m# command capabilities. Keeping these as profiles preserves one[0m
+2026-10-15T20:01:40.1832571Z [36;1m# package-policy vocabulary across the two workers.[0m
+2026-10-15T20:01:40.1833079Z [36;1mif [[ "$setup" == dotfiles ]]; then[0m
+2026-10-15T20:01:40.1833642Z [36;1m  profiles=${profiles:+$profiles,}cron,fd,ripgrep,hostname,python[0m
+2026-10-15T20:01:40.1834661Z [36;1mfi[0m
+2026-10-15T20:01:40.1835010Z [36;1mhas_profile() {[0m
+2026-10-15T20:01:40.1835400Z [36;1m  case ",$profiles," in[0m
+2026-10-15T20:01:40.1835803Z [36;1m    *",$1,"*) return 0 ;;[0m
+2026-10-15T20:01:40.1836198Z [36;1m    *) return 1 ;;[0m
+2026-10-15T20:01:40.1836561Z [36;1m  esac[0m
+2026-10-15T20:01:40.1836879Z [36;1m}[0m
+2026-10-15T20:01:40.1837336Z [36;1m# Every runtime needs a trusted shell and Termux's exec-path shim.[0m
+2026-10-15T20:01:40.1838004Z [36;1m# `base` adds network/source-control tools for repository test suites;[0m
+2026-10-15T20:01:40.1838659Z [36;1m# `runtime` keeps smoke-only callers lean and avoids Git's OpenSSH[0m
+2026-10-15T20:01:40.1839397Z [36;1m# dependency and first-install host-key setup.[0m
+2026-10-15T20:01:40.1839870Z [36;1mpackages=(bash termux-exec)[0m
+2026-10-15T20:01:40.1840348Z [36;1mif has_profile base || [[ "$setup" == dotfiles ]]; then[0m
+2026-10-15T20:01:40.1840846Z [36;1m  packages+=(git curl)[0m
+2026-10-15T20:01:40.1841243Z [36;1melif ! has_profile runtime; then[0m
+2026-10-15T20:01:40.1841742Z [36;1m  echo "Termux profiles must include base or runtime" >&2[0m
+2026-10-15T20:01:40.1842214Z [36;1m  exit 2[0m
+2026-10-15T20:01:40.1842525Z [36;1mfi[0m
+2026-10-15T20:01:40.1842857Z [36;1mhas_profile jq && packages+=(jq)[0m
+2026-10-15T20:01:40.1843298Z [36;1mhas_profile python && packages+=(python)[0m
+2026-10-15T20:01:40.1843752Z [36;1mhas_profile zsh && packages+=(zsh)[0m
+2026-10-15T20:01:40.1845352Z [36;1mhas_profile lua && packages+=(lua54)[0m
+2026-10-15T20:01:40.1845833Z [36;1mhas_profile neovim && packages+=(neovim)[0m
+2026-10-15T20:01:40.1846298Z [36;1mhas_profile tmux && packages+=(tmux)[0m
+2026-10-15T20:01:40.1846887Z [36;1mhas_profile openssh-netcat-lsof &&[0m
+2026-10-15T20:01:40.1847379Z [36;1m  packages+=(openssh netcat-openbsd lsof)[0m
+2026-10-15T20:01:40.1847872Z [36;1mhas_profile procps && packages+=(procps)[0m
+2026-10-15T20:01:40.1848357Z [36;1mhas_profile cron && packages+=(cronie)[0m
+2026-10-15T20:01:40.1848818Z [36;1mhas_profile fd && packages+=(fd)[0m
+2026-10-15T20:01:40.1849277Z [36;1mhas_profile ripgrep && packages+=(ripgrep)[0m
+2026-10-15T20:01:40.1849779Z [36;1mhas_profile hostname && packages+=(inetutils)[0m
+2026-10-15T20:01:40.1850376Z [36;1m# Termux's rolling shellcheck package has intermittently omitted its[0m
+2026-10-15T20:01:40.1851060Z [36;1m# runtime library edge; request it explicitly so a successful install[0m
+2026-10-15T20:01:40.1851726Z [36;1m# cannot leave an executable that fails before caller lint begins.[0m
+2026-10-15T20:01:40.1852392Z [36;1mhas_profile shellcheck && packages+=(shellcheck libandroid-utimes)[0m
+2026-10-15T20:01:40.1853035Z [36;1mtermux_pkg() {[0m
+2026-10-15T20:01:40.1853405Z [36;1m  local rc[0m
+2026-10-15T20:01:40.1853764Z [36;1m  if timeout -k 5 120 "$@"; then[0m
+2026-10-15T20:01:40.1854411Z [36;1m    return 0[0m
+2026-10-15T20:01:40.1854758Z [36;1m  else[0m
+2026-10-15T20:01:40.1855284Z [36;1m    rc=$?[0m
+2026-10-15T20:01:40.1855617Z [36;1m  fi[0m
+2026-10-15T20:01:40.1856071Z [36;1m  # Apt owns two transport retries inside this supervised attempt.[0m
+2026-10-15T20:01:40.1856727Z [36;1m  # Only the supervisor deadline opts the workflow into one failed-[0m
+2026-10-15T20:01:40.1857352Z [36;1m  # job rerun; dependency/conflict failures remain terminal.[0m
+2026-10-15T20:01:40.1857855Z [36;1m  if [[ "$rc" -eq 124 ]]; then[0m
+2026-10-15T20:01:40.1858392Z [36;1m    echo 'infra-stall: Termux package command exhausted bounded retries' >&2[0m
+2026-10-15T20:01:40.1858933Z [36;1m  fi[0m
+2026-10-15T20:01:40.1859258Z [36;1m  return "$rc"[0m
+2026-10-15T20:01:40.1859719Z [36;1m}[0m
+2026-10-15T20:01:40.1860036Z [36;1mapt_net_opts=([0m
+2026-10-15T20:01:40.1860414Z [36;1m  -o Acquire::http::Timeout=30[0m
+2026-10-15T20:01:40.1860837Z [36;1m  -o Acquire::https::Timeout=30[0m
+2026-10-15T20:01:40.1861252Z [36;1m  -o Acquire::Retries=2[0m
+2026-10-15T20:01:40.1861626Z [36;1m)[0m
+2026-10-15T20:01:40.1861997Z [36;1mtermux_pkg apt-get "${apt_net_opts[@]}" update[0m
+2026-10-15T20:01:40.1862581Z [36;1m# The pinned APK can predate the live Termux repository. Termux does[0m
+2026-10-15T20:01:40.1863217Z [36;1m# not support partial upgrades: installing a current executable[0m
+2026-10-15T20:01:40.1864048Z [36;1m# beside bootstrap-era shared libraries can leave it unable to link.[0m
+2026-10-15T20:01:40.1864713Z [36;1m# Converge the base image first, then install caller capabilities.[0m
+2026-10-15T20:01:40.1865318Z [36;1mDEBIAN_FRONTEND=noninteractive termux_pkg apt-get \[0m
+2026-10-15T20:01:40.1865922Z [36;1m  "${apt_net_opts[@]}" \[0m
+2026-10-15T20:01:40.1866343Z [36;1m  -o Dpkg::Options::=--force-confold \[0m
+2026-10-15T20:01:40.1866965Z [36;1m  full-upgrade -y[0m
+2026-10-15T20:01:40.1867426Z [36;1mDEBIAN_FRONTEND=noninteractive termux_pkg apt-get \[0m
+2026-10-15T20:01:40.1867916Z [36;1m  "${apt_net_opts[@]}" \[0m
+2026-10-15T20:01:40.1868332Z [36;1m  -o Dpkg::Options::=--force-confold \[0m
+2026-10-15T20:01:40.1868769Z [36;1m  install -y "${packages[@]}"[0m
+2026-10-15T20:01:40.1869233Z [36;1mtermux_exec_lib="$PREFIX/lib/libtermux-exec.so"[0m
+2026-10-15T20:01:40.1869715Z [36;1mif [[ ! -f "$termux_exec_lib" ]]; then[0m
+2026-10-15T20:01:40.1870246Z [36;1m  termux_exec_lib="$PREFIX/lib/libtermux-exec-ld-preload.so"[0m
+2026-10-15T20:01:40.1870741Z [36;1mfi[0m
+2026-10-15T20:01:40.1871075Z [36;1m[[ -f "$termux_exec_lib" ]] || {[0m
+2026-10-15T20:01:40.1871565Z [36;1m  echo "termux-exec preload library is unavailable" >&2[0m
+2026-10-15T20:01:40.1872039Z [36;1m  exit 1[0m
+2026-10-15T20:01:40.1872352Z [36;1m}[0m
+2026-10-15T20:01:40.1872697Z [36;1mexport LD_PRELOAD="$termux_exec_lib"[0m
+2026-10-15T20:01:40.1873185Z [36;1mproject_root=$(cd "$HOME/project" && pwd -P)[0m
+2026-10-15T20:01:40.1873710Z [36;1mif [[ "$setup" == dotfiles ]]; then[0m
+2026-10-15T20:01:40.1874497Z [36;1m  payload_name=$(printf %s "$payload_name_b64" | base64 -d)[0m
+2026-10-15T20:01:40.1875020Z [36;1m  case "$payload_name" in[0m
+2026-10-15T20:01:40.1875430Z [36;1m    '' | . | .. | *[!A-Za-z0-9._-]*)[0m
+2026-10-15T20:01:40.1875947Z [36;1m      echo "unsafe Dot bootstrap payload name: $payload_name" >&2[0m
+2026-10-15T20:01:40.1876456Z [36;1m      exit 1[0m
+2026-10-15T20:01:40.1876783Z [36;1m      ;;[0m
+2026-10-15T20:01:40.1877097Z [36;1m  esac[0m
+2026-10-15T20:01:40.1877464Z [36;1m  dotfiles_payload=$TMPDIR/$payload_name[0m
+2026-10-15T20:01:40.1877979Z [36;1m  [[ -d "$dotfiles_payload" && ! -L "$dotfiles_payload" &&[0m
+2026-10-15T20:01:40.1878498Z [36;1m    -f "$dotfiles_payload/bootstrap.sh" &&[0m
+2026-10-15T20:01:40.1878982Z [36;1m    ! -L "$dotfiles_payload/bootstrap.sh" ]] || {[0m
+2026-10-15T20:01:40.1879565Z [36;1m    echo "Dot bootstrap payload is unavailable: $dotfiles_payload" >&2[0m
+2026-10-15T20:01:40.1880102Z [36;1m    exit 1[0m
+2026-10-15T20:01:40.1880426Z [36;1m  }[0m
+2026-10-15T20:01:40.1881014Z [36;1m  # install-staged binds the managed checkout to this exact file URL.[0m
+2026-10-15T20:01:40.1881694Z [36;1m  # Preserve the same spelling for the caller's later provider run;[0m
+2026-10-15T20:01:40.1882348Z [36;1m  # Shdeps intentionally rejects equivalent-looking origin drift.[0m
+2026-10-15T20:01:40.1883009Z [36;1m  export SHDEPS_DOT_REPO="file://$dotfiles_payload/dot-origin.git"[0m
+2026-10-15T20:01:40.1883531Z [36;1m  ([0m
+2026-10-15T20:01:40.1884079Z [36;1m    cd "$project_root"[0m
+2026-10-15T20:01:40.1884497Z [36;1m    HOME="$project_root" \[0m
+2026-10-15T20:01:40.1884917Z [36;1m      DOT_INIT_SKIP_PROVIDER=1 \[0m
+2026-10-15T20:01:40.1885390Z [36;1m      DOTFILES_BOOTSTRAP_MODE=install-staged \[0m
+2026-10-15T20:01:40.1885916Z [36;1m      DOTFILES_BOOTSTRAP_STAGE_DIR="$dotfiles_payload" \[0m
+2026-10-15T20:01:40.1886491Z [36;1m      "$PREFIX/bin/bash" "$dotfiles_payload/bootstrap.sh"[0m
+2026-10-15T20:01:40.1886969Z [36;1m  )[0m
+2026-10-15T20:01:40.1887411Z [36;1m  [[ -x "$project_root/.local/share/cgraf78/dot/bin/dot" ]] || {[0m
+2026-10-15T20:01:40.1888004Z [36;1m    echo 'standalone Dot runtime was not installed' >&2[0m
+2026-10-15T20:01:40.1888482Z [36;1m    exit 1[0m
+2026-10-15T20:01:40.1888815Z [36;1m  }[0m
+2026-10-15T20:01:40.1889133Z [36;1mfi[0m
+2026-10-15T20:01:40.1889523Z [36;1mworkdir=$(printf %s "$workdir_b64" | base64 -d)[0m
+2026-10-15T20:01:40.1890064Z [36;1mworkdir_path=$(cd "$project_root/$workdir" && pwd -P)[0m
+2026-10-15T20:01:40.1890561Z [36;1mcase "$workdir_path" in[0m
+2026-10-15T20:01:40.1890990Z [36;1m  "$project_root"|"$project_root"/*) ;;[0m
+2026-10-15T20:01:40.1891525Z [36;1m  *) echo "working-directory escapes checkout" >&2; exit 1 ;;[0m
+2026-10-15T20:01:40.1892024Z [36;1mesac[0m
+2026-10-15T20:01:40.1892361Z [36;1mcd "$workdir_path"[0m
+2026-10-15T20:01:40.1892973Z [36;1mbash -euo pipefail "$TMPDIR/termux-ci-command"[0m
+2026-10-15T20:01:40.1893424Z [36;1mRUNNER[0m
+2026-10-15T20:01:40.1893786Z [36;1m} >"$RUNNER_TEMP/termux-ci-runner"[0m
+2026-10-15T20:01:40.1894411Z [36;1m{[0m
+2026-10-15T20:01:40.1894810Z [36;1m  printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail'[0m
+2026-10-15T20:01:40.1895328Z [36;1m  printf "setup_b64='%s'\n" "$setup_b64"[0m
+2026-10-15T20:01:40.1895800Z [36;1m  printf "payload_b64='%s'\n" "$payload_b64"[0m
+2026-10-15T20:01:40.1896318Z [36;1m  printf "payload_name_b64='%s'\n" "$payload_name_b64"[0m
+2026-10-15T20:01:40.1896788Z [36;1m  cat <<'SCRIPT'[0m
+2026-10-15T20:01:40.1897170Z [36;1msource "$TERMUX_ADB_HELPER"[0m
+2026-10-15T20:01:40.1897581Z [36;1mapk="$RUNNER_TEMP/termux.apk"[0m
+2026-10-15T20:01:40.1898047Z [36;1mecho "Waiting for the package manager service"[0m
+2026-10-15T20:01:40.1898557Z [36;1mif ! termux_wait_for_package_service 20 5 1; then[0m
+2026-10-15T20:01:40.1899109Z [36;1m  echo "Package manager service did not become ready" >&2[0m
+2026-10-15T20:01:40.1899593Z [36;1m  exit 1[0m
+2026-10-15T20:01:40.1899915Z [36;1mfi[0m
+2026-10-15T20:01:40.1900248Z [36;1mecho "Installing Termux APK"[0m
+2026-10-15T20:01:40.1900687Z [36;1mif ! termux_install_apk 2 120 5 "$apk"; then[0m
+2026-10-15T20:01:40.1901211Z [36;1m  echo "Termux APK install failed after bounded retries" >&2[0m
+2026-10-15T20:01:40.1901694Z [36;1m  exit 1[0m
+2026-10-15T20:01:40.1902004Z [36;1mfi[0m
+2026-10-15T20:01:40.1902335Z [36;1mecho "Launching Termux"[0m
+2026-10-15T20:01:40.1902829Z [36;1mtermux_adb 30 shell am start -n com.termux/.app.TermuxActivity[0m
+2026-10-15T20:01:40.1903331Z [36;1m[0m
+2026-10-15T20:01:40.1903672Z [36;1mecho "Waiting for Termux bootstrap"[0m
+2026-10-15T20:01:40.1904461Z [36;1mif ! termux_wait_for_runtime 30 3 1; then[0m
+2026-10-15T20:01:40.1905137Z [36;1m  echo "Termux bootstrap did not become ready" >&2[0m
+2026-10-15T20:01:40.1905594Z [36;1m  exit 1[0m
+2026-10-15T20:01:40.1905916Z [36;1mfi[0m
+2026-10-15T20:01:40.1906213Z [36;1m[0m
+2026-10-15T20:01:40.1906540Z [36;1mecho "Copying caller checkout"[0m
+2026-10-15T20:01:40.1906984Z [36;1mtermux_adb 30 shell run-as com.termux \[0m
+2026-10-15T20:01:40.1907632Z [36;1m  mkdir -p files/home/project files/usr/tmp[0m
+2026-10-15T20:01:40.1908140Z [36;1mtar -C "$GITHUB_WORKSPACE" -cf - . |[0m
+2026-10-15T20:01:40.1908619Z [36;1m  termux_adb 120 shell run-as com.termux \[0m
+2026-10-15T20:01:40.1909095Z [36;1m    tar -C files/home/project -xf -[0m
+2026-10-15T20:01:40.1909513Z [36;1m[0m
+2026-10-15T20:01:40.1909880Z [36;1msetup=$(printf %s "$setup_b64" | base64 -d)[0m
+2026-10-15T20:01:40.1910346Z [36;1mif [[ "$setup" == dotfiles ]]; then[0m
+2026-10-15T20:01:40.1910859Z [36;1m  dotfiles_payload=$(printf %s "$payload_b64" | base64 -d)[0m
+2026-10-15T20:01:40.1911448Z [36;1m  payload_name=$(printf %s "$payload_name_b64" | base64 -d)[0m
+2026-10-15T20:01:40.1911974Z [36;1m  case "$payload_name" in[0m
+2026-10-15T20:01:40.1912389Z [36;1m    '' | . | .. | *[!A-Za-z0-9._-]*)[0m
+2026-10-15T20:01:40.1912919Z [36;1m      echo "unsafe Dot bootstrap payload name: $payload_name" >&2[0m
+2026-10-15T20:01:40.1913430Z [36;1m      exit 1[0m
+2026-10-15T20:01:40.1913763Z [36;1m      ;;[0m
+2026-10-15T20:01:40.1914311Z [36;1m  esac[0m
+2026-10-15T20:01:40.1914724Z [36;1m  [[ ${dotfiles_payload##*/} == "$payload_name" ]] || {[0m
+2026-10-15T20:01:40.1915327Z [36;1m    echo 'Dot bootstrap payload name does not match its source path' >&2[0m
+2026-10-15T20:01:40.1915861Z [36;1m    exit 1[0m
+2026-10-15T20:01:40.1916193Z [36;1m  }[0m
+2026-10-15T20:01:40.1916556Z [36;1m  payload_parent=${dotfiles_payload%/*}[0m
+2026-10-15T20:01:40.1917122Z [36;1m  [[ -n "$payload_parent" && "$payload_parent" != "$dotfiles_payload" &&[0m
+2026-10-15T20:01:40.1917723Z [36;1m    -d "$payload_parent" && ! -L "$payload_parent" &&[0m
+2026-10-15T20:01:40.1918267Z [36;1m    -d "$dotfiles_payload" && ! -L "$dotfiles_payload" &&[0m
+2026-10-15T20:01:40.1918787Z [36;1m    -f "$dotfiles_payload/payload-v1" &&[0m
+2026-10-15T20:01:40.1919409Z [36;1m    ! -L "$dotfiles_payload/payload-v1" &&[0m
+2026-10-15T20:01:40.1919891Z [36;1m    -f "$dotfiles_payload/bootstrap.sh" &&[0m
+2026-10-15T20:01:40.1920380Z [36;1m    ! -L "$dotfiles_payload/bootstrap.sh" &&[0m
+2026-10-15T20:01:40.1920863Z [36;1m    -d "$dotfiles_payload/dot-origin.git" &&[0m
+2026-10-15T20:01:40.1921358Z [36;1m    ! -L "$dotfiles_payload/dot-origin.git" ]] || {[0m
+2026-10-15T20:01:40.1921931Z [36;1m    echo "Dot bootstrap payload is unsafe: $dotfiles_payload" >&2[0m
+2026-10-15T20:01:40.1922433Z [36;1m    exit 1[0m
+2026-10-15T20:01:40.1922760Z [36;1m  }[0m
+2026-10-15T20:01:40.1923164Z [36;1m  # `test -e` is false for a dangling symlink. Reject `-L`[0m
+2026-10-15T20:01:40.1923767Z [36;1m  # separately so extraction preserves the no-clobber boundary for[0m
+2026-10-15T20:01:40.1924525Z [36;1m  # every existing path type.[0m
+2026-10-15T20:01:40.1924980Z [36;1m  if termux_adb 30 shell run-as com.termux \[0m
+2026-10-15T20:01:40.1925479Z [36;1m    test -e "files/usr/tmp/$payload_name" ||[0m
+2026-10-15T20:01:40.1925958Z [36;1m    termux_adb 30 shell run-as com.termux \[0m
+2026-10-15T20:01:40.1926451Z [36;1m      test -L "files/usr/tmp/$payload_name"; then[0m
+2026-10-15T20:01:40.1927047Z [36;1m    echo "Termux Dot bootstrap destination already exists: $payload_name" >&2[0m
+2026-10-15T20:01:40.1927607Z [36;1m    exit 1[0m
+2026-10-15T20:01:40.1927935Z [36;1m  fi[0m
+2026-10-15T20:01:40.1928319Z [36;1m  echo "Copying exact Dot bootstrap payload"[0m
+2026-10-15T20:01:40.1928836Z [36;1m  tar -C "$payload_parent" -cf - "$payload_name" |[0m
+2026-10-15T20:01:40.1929339Z [36;1m    termux_adb 120 shell run-as com.termux \[0m
+2026-10-15T20:01:40.1929795Z [36;1m      tar -C files/usr/tmp -xf -[0m
+2026-10-15T20:01:40.1930191Z [36;1mfi[0m
+2026-10-15T20:01:40.1930497Z [36;1m[0m
+2026-10-15T20:01:40.1930822Z [36;1mecho "Copying Termux runner"[0m
+2026-10-15T20:01:40.1931337Z [36;1mtar -C "$RUNNER_TEMP" -cf - termux-ci-command termux-ci-runner |[0m
+2026-10-15T20:01:40.1931988Z [36;1m  termux_adb 30 shell run-as com.termux tar -C files/usr/tmp -xf -[0m
+2026-10-15T20:01:40.1932490Z [36;1m[0m
+2026-10-15T20:01:40.1932985Z [36;1mecho "Running caller command inside Termux"[0m
+2026-10-15T20:01:40.1933486Z [36;1mtermux_adb 1200 shell run-as com.termux \[0m
+2026-10-15T20:01:40.1934192Z [36;1m  files/usr/bin/bash files/usr/tmp/termux-ci-runner[0m
+2026-10-15T20:01:40.1934660Z [36;1mSCRIPT[0m
+2026-10-15T20:01:40.1935026Z [36;1m} >"$RUNNER_TEMP/termux-ci-host.sh"[0m
+2026-10-15T20:01:40.1935497Z [36;1mchmod 0700 "$RUNNER_TEMP/termux-ci-host.sh"[0m
+2026-10-15T20:01:40.2007067Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-15T20:01:40.2007615Z env:
+2026-10-15T20:01:40.2008478Z   TERMUX_ADB_HELPER: /home/runner/work/_actions/cgraf78/actions/b93184588d4631149766a1faf5279f75e38bc09b/.github/actions/termux-adb/termux-adb.sh
+2026-10-15T20:01:40.2009555Z   TERMUX_ADB_REAL: /usr/local/lib/android/sdk/platform-tools/adb
+2026-10-15T20:01:40.2010318Z   DOTFILES_BOOTSTRAP_PAYLOAD: /home/runner/work/_temp/dotfiles-bootstrap-payload
+2026-10-15T20:01:40.2010987Z   DOTFILES_SHDEPS_UPDATE_POLICY: config
+2026-10-15T20:01:40.2011462Z   PROFILES: base,jq,python
+2026-10-15T20:01:40.2011860Z   SETUP: none
+2026-10-15T20:01:40.2012356Z   TERMUX_CI_COMMAND: AGENTGUARD_SKIP_SHELLCHECK=1 test/agentguard-test
+2026-10-15T20:01:40.2012967Z   TERMUX_CI_WORKING_DIRECTORY: .
+2026-10-15T20:01:40.2013378Z ##[endgroup]
+2026-10-15T20:01:40.2351423Z ##[group]Run reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+2026-10-15T20:01:40.2352060Z with:
+2026-10-15T20:01:40.2352358Z   api-level: 30
+2026-10-15T20:01:40.2352664Z   arch: x86_64
+2026-10-15T20:01:40.2352957Z   target: default
+2026-10-15T20:01:40.2353274Z   disable-animations: true
+2026-10-15T20:01:40.2353644Z   emulator-boot-timeout: 600
+2026-10-15T20:01:40.2354629Z   emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -no-metrics
+2026-10-15T20:01:40.2355614Z   script: bash "$RUNNER_TEMP/termux-ci-host.sh"
+2026-10-15T20:01:40.2356028Z   cores: 2
+2026-10-15T20:01:40.2356317Z   avd-name: test
+2026-10-15T20:01:40.2356638Z   force-avd-creation: true
+2026-10-15T20:01:40.2356990Z   emulator-port: 5554
+2026-10-15T20:01:40.2357338Z   disable-spellchecker: false
+2026-10-15T20:01:40.2357717Z   disable-linux-hw-accel: auto
+2026-10-15T20:01:40.2358101Z   enable-hw-keyboard: false
+2026-10-15T20:01:40.2358472Z   channel: stable
+2026-10-15T20:01:40.2358768Z env:
+2026-10-15T20:01:40.2359486Z   TERMUX_ADB_HELPER: /home/runner/work/_actions/cgraf78/actions/b93184588d4631149766a1faf5279f75e38bc09b/.github/actions/termux-adb/termux-adb.sh
+2026-10-15T20:01:40.2360390Z   TERMUX_ADB_REAL: /usr/local/lib/android/sdk/platform-tools/adb
+2026-10-15T20:01:40.2360852Z ##[endgroup]
+2026-10-15T20:01:40.2923132Z ##[group]Configure emulator
+2026-10-15T20:01:40.2925241Z API level: 30
+2026-10-15T20:01:40.2925912Z System image API level: 30
+2026-10-15T20:01:40.2926679Z target: default
+2026-10-15T20:01:40.2927306Z CPU architecture: x86_64
+2026-10-15T20:01:40.2927982Z Hardware profile: 
+2026-10-15T20:01:40.2928565Z Cores: 2
+2026-10-15T20:01:40.2929138Z RAM size: 
+2026-10-15T20:01:40.2929713Z Heap size: 
+2026-10-15T20:01:40.2930290Z SD card path or size: 
+2026-10-15T20:01:40.2931708Z Disk size: 
+2026-10-15T20:01:40.2932321Z AVD name: test
+2026-10-15T20:01:40.2932947Z force avd creation: true
+2026-10-15T20:01:40.2933665Z Emulator boot timeout: 600
+2026-10-15T20:01:40.2934657Z emulator port: 5554
+2026-10-15T20:01:40.2935901Z emulator options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -no-metrics
+2026-10-15T20:01:40.2937274Z disable animations: true
+2026-10-15T20:01:40.2937987Z disable spellchecker: false
+2026-10-15T20:01:40.2938782Z disable Linux hardware acceleration: false
+2026-10-15T20:01:40.2939588Z enable hardware keyboard: false
+2026-10-15T20:01:40.2940220Z Channel: 0 (stable)
+2026-10-15T20:01:40.2940822Z Script:
+2026-10-15T20:01:40.2941406Z bash "$RUNNER_TEMP/termux-ci-host.sh"
+2026-10-15T20:01:40.2942142Z Pre emulator launch script:
+2026-10-15T20:01:40.2943235Z ##[endgroup]
+2026-10-15T20:01:40.2945448Z ##[group]Install Android SDK
+2026-10-15T20:01:40.3002262Z [command]/usr/bin/sh -c \yes | sdkmanager --licenses > /dev/null
+2026-10-15T20:01:48.6872148Z Installing latest build tools, platform tools, and platform.
+2026-10-15T20:01:48.6890340Z [command]/usr/bin/sh -c \sdkmanager --install 'build-tools;37.0.0' platform-tools 'platforms;android-30'> /dev/null
+2026-10-15T20:01:55.6766501Z Installing latest emulator.
+2026-10-15T20:01:55.6782398Z [command]/usr/bin/sh -c \sdkmanager --install emulator --channel=0 > /dev/null
+2026-10-15T20:02:05.0050746Z Installing system images.
+2026-10-15T20:02:05.0064933Z [command]/usr/bin/sh -c \sdkmanager --install 'system-images;android-30;default;x86_64' --channel=0 > /dev/null
+2026-10-15T20:02:25.5827127Z ##[endgroup]
+2026-10-15T20:02:25.5829272Z ##[group]Create AVD
+2026-10-15T20:02:25.5830173Z Creating AVD.
+2026-10-15T20:02:25.5852218Z [command]/usr/bin/sh -c \echo no | avdmanager create avd --force -n test --package 'system-images;android-30;default;x86_64'
+2026-10-15T20:02:26.4781575Z Loading local repository...                                                     
+2026-10-15T20:02:26.4784073Z [=========                              ] 25% Loading local repository...       
+2026-10-15T20:02:26.4786122Z [=========                              ] 25% Fetch remote repository...        
+2026-10-15T20:02:26.4787223Z [=======================================] 100% Fetch remote repository...       
+2026-10-15T20:02:26.7007561Z Auto-selecting single ABI x86_64
+2026-10-15T20:02:26.7911114Z Do you wish to create a custom hardware profile? [no] [command]/usr/bin/sh -c \printf 'hw.cpu.ncore=2\n' >> /home/runner/.android/avd/test.avd/config.ini
+2026-10-15T20:02:26.7936152Z ##[endgroup]
+2026-10-15T20:02:53.6082505Z [command]/usr/local/lib/android/sdk/platform-tools/adb -s emulator-5554 shell settings put global window_animation_scale 0.0
+2026-10-15T20:02:53.8996076Z [command]/usr/local/lib/android/sdk/platform-tools/adb -s emulator-5554 shell settings put global transition_animation_scale 0.0
+2026-10-15T20:02:54.1005600Z [command]/usr/local/lib/android/sdk/platform-tools/adb -s emulator-5554 shell settings put global animator_duration_scale 0.0
+2026-10-15T20:02:54.5108786Z ##[endgroup]
+2026-10-15T20:02:54.5141842Z [command]/usr/bin/sh -c bash "$RUNNER_TEMP/termux-ci-host.sh"
+2026-10-15T20:02:54.5164909Z Waiting for the package manager service
+2026-10-15T20:02:54.7715638Z Installing Termux APK
+2026-10-15T20:02:55.6753499Z Performing Streamed Install
+2026-10-15T20:02:55.6755251Z Success
+2026-10-15T20:02:55.6756960Z Launching Termux
+2026-10-15T20:02:55.7493115Z Starting: Intent { cmp=com.termux/.app.TermuxActivity }
+2026-10-15T20:02:55.7530359Z Waiting for Termux bootstrap
+2026-10-15T20:02:59.1092031Z Copying caller checkout
+2026-10-15T20:02:59.1591187Z Copying Termux runner
+2026-10-15T20:02:59.1740610Z Running caller command inside Termux
+2026-10-15T20:02:59.7509669Z Get:1 https://packages.termux.dev/apt/termux-main stable InRelease [14.0 kB]
+2026-10-15T20:03:00.0029656Z Get:2 https://packages.termux.dev/apt/termux-main stable/main x86_64 Packages [587 kB]
+2026-10-15T20:03:00.6796191Z Fetched 601 kB in 1s (411 kB/s)
+2026-10-15T20:06:54.5459359Z   PASS: unwatched: exits 0
+2026-10-15T20:06:54.5459495Z   PASS: unwatched: reminds with the label
+2026-10-15T20:06:54.5459632Z   PASS: unwatched: reminds with the hint
+2026-10-15T20:06:54.5459777Z   PASS: unwatched: stdout stays a plain response
+2026-10-15T20:06:54.5459905Z   PASS: unwatched: once per prompt
+2026-10-15T20:06:54.5460041Z   PASS: unwatched: again after a new prompt
+2026-10-15T20:06:54.5460157Z   PASS: new submit: reminds
+2026-10-15T20:06:54.5460366Z   FAIL: live watcher covers its key only (expected 'b', got 'ab')
+2026-10-15T20:06:54.5461170Z   watcher argv: bash|/data/data/com.termux/files/usr/bin/bash|/data/data/com.termux/files/usr/tmp/tmp.G7Go2Cdccc/tmp.aE7FFK/live-git-pr-watch/git-pr-watch|--wait|
+2026-10-15T20:06:54.5461411Z   FAIL: unscoped pending covers every key (expected 'none', got 'ab')
+2026-10-15T20:06:54.5461704Z   FAIL: scoped pending covers its scope, not the unscoped key (expected 'b', got 'ab')
+2026-10-15T20:06:54.5461876Z   PASS: scoped pending of another scope covers nothing
+2026-10-15T20:06:54.5462005Z   PASS: temporary watcher file is ignored
+2026-10-15T20:06:54.5462268Z   PASS: another key sharing a prefix covers nothing
+2026-10-15T20:06:54.5462379Z   PASS: dead watcher covers nothing
+2026-10-15T20:06:54.5462533Z   PASS: live process with another name covers nothing
+2026-10-15T20:06:54.5462779Z   FAIL: scope with a dot: pending matches whole scope (expected 'none', got 'c')
+2026-10-15T20:06:54.5463016Z   FAIL: watcher behind a dynamic linker argv[0] counts (expected 'b', got 'ab')
+2026-10-15T20:06:54.5463134Z   PASS: done after the submit satisfies
+2026-10-15T20:06:54.5463262Z   PASS: done in the submit's second does not
+2026-10-15T20:06:54.5463387Z   PASS: done with an unknown epoch does not
+2026-10-15T20:06:54.6094963Z   PASS: probe with leftover job: member stopped
+2026-10-15T20:06:54.6094979Z 
+2026-10-15T20:06:54.6095174Z === wait-until: TERM stops a running probe ===
+2026-10-15T20:06:54.6095321Z   PASS: TERM probe: started
+2026-10-15T20:06:54.6095471Z   PASS: TERM: exits 143
+2026-10-15T20:06:54.6095615Z   PASS: TERM: probe stopped
+2026-10-15T20:06:54.6095621Z 
+2026-10-15T20:06:54.6095761Z ================================
+2026-10-15T20:06:54.6095915Z Results: 74 passed, 0 failed
+2026-10-15T20:06:54.6096048Z ================================
+2026-10-15T20:06:54.6371563Z ##[error]The process '/usr/bin/sh' failed with exit code 1
+2026-10-15T20:06:54.6381364Z ##[group]Terminate Emulator
+2026-10-15T20:06:54.6381630Z [command]/usr/local/lib/android/sdk/platform-tools/adb -s emulator-5554 emu kill
+2026-10-15T20:06:54.6419981Z OK: killing emulator, bye bye
+2026-10-15T20:06:54.6420495Z OK
+2026-10-15T20:06:54.6422173Z INFO         | Wait for emulator (pid 2753) 20 seconds to shutdown gracefully before kill;you can set environment variable ANDROID_EMULATOR_WAIT_TIME_BEFORE_KILL(in seconds) to change the default value (20 seconds)
+2026-10-15T20:06:54.6422406Z 
+2026-10-15T20:06:54.6423173Z ##[endgroup]
+2026-10-15T20:06:54.6465102Z USER_INFO    | Snapshots have been disabled by the user, save request is ignored.
+2026-10-15T20:06:54.6465780Z INFO         | Saving snapshot 'default_boot' took 0 ms
+2026-10-15T20:06:55.3405148Z ERROR        | stop: Not implemented
+2026-10-15T20:06:55.3406229Z WARNING      | Emulator client has not yet been configured.. Call configure me first!
+2026-10-15T20:06:55.3512896Z INFO         | removeAll
+2026-10-15T20:06:56.0441517Z Post job cleanup.

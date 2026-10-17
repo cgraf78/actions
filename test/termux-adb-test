@@ -386,12 +386,33 @@ elapsed=$((SECONDS - started))
 
 : >"$ADB_CALLS"
 export ADB_BEHAVIOR=fail
-if termux_wait_for_runtime 3 1 0; then
+if termux_wait_for_runtime 3 1 0 2>"$tmp/runtime-stderr"; then
   printf 'termux adb test failed: unavailable runtime became ready\n' >&2
   exit 1
 fi
 [[ "$(wc -l <"$ADB_CALLS")" -eq 3 ]] || {
   printf 'termux adb test failed: readiness probe did not stop after three attempts\n' >&2
+  exit 1
+}
+grep -Fxq "$TERMUX_BOOTSTRAP_TIMEOUT_MARKER" "$tmp/runtime-stderr" || {
+  printf 'termux adb test failed: bootstrap exhaustion omitted the infra marker\n' >&2
+  exit 1
+}
+
+# A runtime that becomes ready after transient misses is healthy and must not
+# leave a marker that would make a later caller failure look retryable.
+: >"$ADB_CALLS"
+export ADB_BEHAVIOR=fail-then-succeed ADB_ATTEMPTS="$tmp/runtime-attempts" ADB_FAILURES=2
+termux_wait_for_runtime 5 1 0 2>"$tmp/runtime-stderr" || {
+  printf 'termux adb test failed: runtime ready after two misses was not accepted\n' >&2
+  exit 1
+}
+if grep -Fq 'infra-stall:' "$tmp/runtime-stderr"; then
+  printf 'termux adb test failed: recovered bootstrap printed an infra marker\n' >&2
+  exit 1
+fi
+[[ "$(wc -l <"$ADB_CALLS")" -eq 3 ]] || {
+  printf 'termux adb test failed: ready runtime kept probing after success\n' >&2
   exit 1
 }
 

@@ -55,12 +55,13 @@ jobs:
   termux:
     name: Android / Termux x86_64
     runs-on: ubuntu-24.04
-    # Inner limits reserve at most 600s for boot and 2269s for sequential ADB
-    # work, including the 1200s caller command, the bounded package-service
+    # Inner limits reserve at most 690s for SDK package installs (three 190s
+    # attempts plus 120s of backoff), 600s for boot, and 2269s for sequential
+    # ADB work, including the 1200s caller command, the bounded package-service
     # wait (about 119s), and two 120s install attempts. Keep at least five
     # minutes of outer headroom for checkout, downloads, host setup, and runner
     # overhead.
-    timeout-minutes: 55
+    timeout-minutes: 67
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         # Name checkout's throwaway initial branch so Git skips its hint.
@@ -129,6 +130,21 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      # The emulator runner installs these itself with one unretried attempt
+      # per package group, and a truncated archive download fails the job.
+      # Installing them first with bounded retries leaves its own installs
+      # only the small manifest fetch. Keep api-level, target, and arch equal
+      # to the runner's; build-tools-version mirrors BUILD_TOOLS_VERSION in
+      # lib/sdk-installer.js at the runner's pinned commit.
+      # test/workflow-contract-test ties all four to that step and pin.
+      - name: Install Android SDK packages
+        uses: cgraf78/actions/.github/actions/android-sdk-packages@db62d9a6ae066894e710afe4edcdc6508a942c90
+        with:
+          api-level: 31
+          target: default
+          arch: x86_64
+          build-tools-version: 37.0.0
+
       - name: Stage bounded Termux ADB helper
         uses: cgraf78/actions/.github/actions/termux-adb@db62d9a6ae066894e710afe4edcdc6508a942c90
 
@@ -164,8 +180,14 @@ jobs:
           esac
           payload_name_b64=$(printf '%s' "$payload_name" | base64 --wrap=0)
           printf '%s' "$TERMUX_CI_COMMAND" >"$RUNNER_TEMP/termux-ci-command"
+          # The runner echoes this script into the job log, so the in-sandbox
+          # retry marker must arrive as data: written here literally, it would
+          # make every failure after this step look retryable.
+          # shellcheck source=/dev/null  # Provider helper, resolved at runtime.
+          source "$TERMUX_ADB_HELPER"
           {
             printf '%s\n' '#!/data/data/com.termux/files/usr/bin/bash' 'set -euo pipefail'
+            printf 'package_stall_marker=%q\n' "${TERMUX_PACKAGE_COMMAND_MARKER:?}"
             printf "profiles_b64='%s'\n" "$profiles_b64"
             printf "policy_b64='%s'\n" "$policy_b64"
             printf "setup_b64='%s'\n" "$setup_b64"
@@ -250,7 +272,7 @@ jobs:
             # Only the supervisor deadline opts the workflow into one failed-
             # job rerun; dependency/conflict failures remain terminal.
             if [[ "$rc" -eq 124 ]]; then
-              echo 'infra-stall: Termux package command exhausted bounded retries' >&2
+              printf '%s\n' "$package_stall_marker" >&2
             fi
             return "$rc"
           }
@@ -347,7 +369,9 @@ jobs:
 
           echo "Waiting for Termux bootstrap"
           if ! termux_wait_for_runtime 30 3 1; then
-            echo "Termux bootstrap did not become ready" >&2
+            # Older infra-retry controllers matched the former wording of
+            # this line in the echoed script, retrying every later failure.
+            echo "Termux bootstrap was not ready after bounded polling" >&2
             exit 1
           fi
 

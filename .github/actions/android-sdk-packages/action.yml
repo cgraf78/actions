@@ -1,0 +1,28 @@
+name: Install Android SDK packages
+description: Pre-install the SDK packages reactivecircus/android-emulator-runner installs, with bounded retries.
+
+inputs:
+  api-level:
+    description: Android API level; must equal the emulator runner's api-level.
+    required: true
+  target:
+    description: System image target; must equal the emulator runner's target.
+    required: true
+  arch:
+    description: System image CPU architecture; must equal the emulator runner's arch.
+    required: true
+  build-tools-version:
+    description: BUILD_TOOLS_VERSION from the pinned emulator runner's lib/sdk-installer.js.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install Android SDK packages
+      shell: bash
+      env:
+        ANDROID_SDK_API_LEVEL: ${{ inputs.api-level }}
+        ANDROID_SDK_ARCH: ${{ inputs.arch }}
+        ANDROID_SDK_BUILD_TOOLS_VERSION: ${{ inputs.build-tools-version }}
+        ANDROID_SDK_TARGET: ${{ inputs.target }}
+      run: "$GITHUB_ACTION_PATH/install.sh"
