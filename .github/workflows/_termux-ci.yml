@@ -56,11 +56,11 @@ jobs:
     name: Android / Termux x86_64
     runs-on: ubuntu-24.04
     # Inner limits reserve at most 690s for SDK package installs (three 190s
-    # attempts plus 120s of backoff), 600s for boot, and 2269s for sequential
+    # attempts plus 120s of backoff), 600s for boot, and 2304s for sequential
     # ADB work, including the 1200s caller command, the bounded package-service
-    # wait (about 119s), and two 120s install attempts. Keep at least five
-    # minutes of outer headroom for checkout, downloads, host setup, and runner
-    # overhead.
+    # wait (about 119s), two 120s install attempts, and the 35s failure-only
+    # crash-log dump. Keep at least five minutes of outer headroom for
+    # checkout, downloads, host setup, and runner overhead.
     timeout-minutes: 67
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -353,6 +353,7 @@ jobs:
             printf "payload_name_b64='%s'\n" "$payload_name_b64"
             cat <<'SCRIPT'
           source "$TERMUX_ADB_HELPER"
+          trap 'termux_dump_crash_log 30' EXIT
           apk="$RUNNER_TEMP/termux.apk"
           echo "Waiting for the package manager service"
           if ! termux_wait_for_package_service 20 5 1; then

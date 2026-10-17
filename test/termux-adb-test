@@ -38,6 +38,9 @@ cat >"$tmp/adb" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >>"$ADB_CALLS"
+if [[ $1 == logcat && ${ADB_BEHAVIOR:-success} == success ]]; then
+  echo 'F DEBUG   : signal 11 (SIGSEGV), code 128 (SI_KERNEL), fault addr 0x0'
+fi
 case ${ADB_BEHAVIOR:-success} in
   success) exit 0 ;;
   fail-then-succeed)
@@ -475,5 +478,134 @@ grep -Fxq "$TERMUX_PACKAGE_SERVICE_MARKER" "$tmp/install-stderr" || {
   printf 'termux adb test failed: install did not stop after three attempts\n' >&2
   exit 1
 }
+# Crash-log dump: an EXIT trap that runs only on failure, stays bounded, and
+# never changes the host script's exit status. The harness uses the host
+# script's own strict mode, where an unguarded failure inside the trap would
+# replace that status; the body is evaluated after the trap is armed.
+run_trapped() {
+  local body=$1
+  bash -c '
+    set -euo pipefail
+    source "$1"
+    trap "termux_dump_crash_log 1" EXIT
+    eval "$2"
+  ' crash-trap "$GITHUB_ACTION_PATH/termux-adb.sh" "$body" \
+    >"$tmp/crash-stdout" 2>"$tmp/crash-stderr"
+}
+
+# The dump must sit inside one closed group, in order, so the emulator
+# runner's teardown output is not folded into it.
+assert_crash_group() {
+  local context=$1 body=$2
+  # Byte-exact: `::endgroup::` needs its own newline, or the runner's next
+  # output joins its line and the group never closes.
+  printf '%s\n' "::group::Android crash log (host script exit $3)" "$body" \
+    '::endgroup::' >"$tmp/crash-expected"
+  cmp -s "$tmp/crash-expected" "$tmp/crash-stdout" || {
+    printf 'termux adb test failed: %s: unexpected crash dump output:\n' \
+      "$context" >&2
+    cat "$tmp/crash-stdout" >&2
+    exit 1
+  }
+}
+
+: >"$ADB_CALLS"
+export ADB_BEHAVIOR=success
+crash_line='F DEBUG   : signal 11 (SIGSEGV), code 128 (SI_KERNEL), fault addr 0x0'
+if run_trapped 'exit 7'; then
+  rc=0
+else
+  rc=$?
+fi
+[[ "$rc" -eq 7 ]] || {
+  printf 'termux adb test failed: crash dump changed exit 7 to %s\n' "$rc" >&2
+  exit 1
+}
+grep -Fxq 'logcat -b crash -d' "$ADB_CALLS" || {
+  printf 'termux adb test failed: failed host script did not dump the crash buffer\n' >&2
+  exit 1
+}
+assert_crash_group 'explicit exit' "$crash_line" 7
+
+# errexit failures and the caller command's 124 timeout reach the trap with
+# their own status.
+for case_status in 1 124; do
+  : >"$ADB_CALLS"
+  if run_trapped "(exit $case_status)"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  [[ "$rc" -eq "$case_status" ]] || {
+    printf 'termux adb test failed: errexit status %s became %s\n' \
+      "$case_status" "$rc" >&2
+    exit 1
+  }
+  assert_crash_group "errexit $case_status" "$crash_line" "$case_status"
+done
+
+: >"$ADB_CALLS"
+run_trapped 'exit 0' || {
+  printf 'termux adb test failed: crash trap failed a successful host script\n' >&2
+  exit 1
+}
+[[ ! -s "$ADB_CALLS" && ! -s "$tmp/crash-stdout" ]] || {
+  printf 'termux adb test failed: successful host script dumped the crash buffer\n' >&2
+  exit 1
+}
+
+# A failing dump is reported inside the group and cannot replace the status,
+# even under errexit.
+: >"$ADB_CALLS"
+export ADB_BEHAVIOR=fail
+if run_trapped 'exit 7'; then
+  rc=0
+else
+  rc=$?
+fi
+[[ "$rc" -eq 7 ]] || {
+  printf 'termux adb test failed: failing crash dump changed exit 7 to %s\n' "$rc" >&2
+  exit 1
+}
+assert_crash_group 'failing dump' 'Android crash log unavailable' 7
+
+# Even an unwritable log (here a closed stdout) cannot replace the status.
+if run_trapped 'exec >&-; exit 7'; then
+  rc=0
+else
+  rc=$?
+fi
+[[ "$rc" -eq 7 ]] || {
+  printf 'termux adb test failed: unwritable crash dump changed exit 7 to %s\n' "$rc" >&2
+  exit 1
+}
+
+# A wedged device cannot hold the job: the dump is cut off and reported, and
+# the original status survives.
+: >"$ADB_CALLS"
+export ADB_BEHAVIOR=hang
+started=$SECONDS
+if run_trapped 'exit 3'; then
+  rc=0
+else
+  rc=$?
+fi
+elapsed=$((SECONDS - started))
+[[ "$rc" -eq 3 ]] || {
+  printf 'termux adb test failed: hung crash dump changed exit 3 to %s\n' "$rc" >&2
+  exit 1
+}
+# The fake dies on TERM at the caller's 1s bound, so a longer hard-coded
+# timeout would overrun this.
+[[ "$elapsed" -lt 4 ]] || {
+  printf 'termux adb test failed: hung crash dump ran for %ss\n' "$elapsed" >&2
+  exit 1
+}
+assert_crash_group 'hung dump' 'Android crash log unavailable' 3
+if grep -Fq 'infra-stall:' "$tmp/crash-stdout" "$tmp/crash-stderr"; then
+  printf 'termux adb test failed: crash dump printed an infra marker\n' >&2
+  exit 1
+fi
+export ADB_BEHAVIOR=success
 
 printf 'termux adb tests passed\n'

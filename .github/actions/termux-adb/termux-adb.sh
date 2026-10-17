@@ -95,3 +95,30 @@ termux_install_apk() {
   printf '%s\n' "$TERMUX_PACKAGE_SERVICE_MARKER" >&2
   return 1
 }
+
+# EXIT trap for the emulator host script: on failure, print Android's crash
+# buffer so a native crash in caller code arrives with its crash summary
+# (signal, abort message, backtrace). It must run inside the emulator
+# runner's script, because the runner kills the emulator as soon as the
+# script returns, so a later `if: failure()` step would find no device. The
+# buffer also holds any system crashes since boot. A cancelled job gets no
+# dump, since the signal never reaches this trap as a failure status; no
+# caller failure needs explaining there.
+#
+# Diagnostics only: the dump is bounded, and the whole block is guarded
+# because under the host script's `set -e` any failing command in a trap
+# would replace the script's exit status.
+termux_dump_crash_log() {
+  local rc=$?
+  local timeout_seconds=$1
+
+  if ((rc != 0)); then
+    {
+      printf '::group::Android crash log (host script exit %s)\n' "$rc"
+      termux_adb "$timeout_seconds" logcat -b crash -d ||
+        printf 'Android crash log unavailable\n'
+      printf '::endgroup::\n'
+    } || true
+  fi
+  return "$rc"
+}

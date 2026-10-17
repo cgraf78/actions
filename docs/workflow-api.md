@@ -624,7 +624,13 @@ check. It forwards typed inputs to the internal `_termux-ci.yml` worker, which
 installs the checksum-pinned official Termux APK, copies the caller checkout to
 `$HOME/project`, and runs the caller's command under Termux Bash with `errexit`,
 `nounset`, and `pipefail` enabled. Callers do not depend on the emulator,
-bootstrap, or sandbox-transport implementation.
+bootstrap, or sandbox-transport implementation. When the worker's emulator
+script fails after boot, including through the caller command, it prints
+Android's crash log buffer (`adb logcat -b crash -d`, bounded to about 30
+seconds) in a collapsed group before the emulator shuts down, so a native
+crash arrives with its signal, abort message, and backtrace. The buffer also
+holds any system crashes since boot. The dump never changes the job's result,
+and boot, SDK, or AVD failures and cancelled jobs get none.
 
 For `setup: dotfiles`, the worker reads the checked-out client's cutover lock on
 the Ubuntu host, stages that exact standalone Dot engine, and installs it with

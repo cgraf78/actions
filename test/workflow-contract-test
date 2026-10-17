@@ -414,6 +414,11 @@ contracts() {
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("source \"$TERMUX_ADB_HELPER\"")' _termux-ci.yml
   check '[.jobs.termux.steps[] | select((.run? // "") | contains("$GITHUB_WORKSPACE/.github/scripts/termux-adb.sh"))] | length == 0' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("termux_wait_for_runtime 30 3 1")' _termux-ci.yml
+  # The emulator runner kills the device when its script returns, so the
+  # failure-only crash dump must be armed inside the host script, before the
+  # first emulator command can fail.
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("source \"$TERMUX_ADB_HELPER\"\ntrap '\''termux_dump_crash_log 30'\'' EXIT\napk=")' _termux-ci.yml
+  check '[.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | match("(^|\n) *trap "; "g")] | length == 1' _termux-ci.yml
   check_no_unsupervised_adb _termux-ci.yml
   check_file '.runs.using == "composite"' .github/actions/termux-adb/action.yml
   check_file '.runs.steps[0].run | contains("$GITHUB_ACTION_PATH/termux-adb.sh")' .github/actions/termux-adb/action.yml
