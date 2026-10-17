@@ -415,7 +415,13 @@ jobs:
       - name: Run caller tests in Termux
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
-          api-level: 30
+          # Android 11's GWP-ASan samples about 1 in 128 processes and
+          # right-aligns about half of its guarded `malloc` blocks against a
+          # guard page with only 8-byte alignment. Rust's System allocator
+          # trusts `malloc` for 16-byte alignment, so hashbrown's aligned SSE2
+          # loads (`movdqa`) fault at random on x86_64. Android 12's bionic
+          # asks GWP-ASan for 16-byte alignment.
+          api-level: 31
           arch: x86_64
           target: default
           disable-animations: true
