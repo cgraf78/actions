@@ -6,6 +6,10 @@ logic used by `cgraf78` Rust repositories that publish release archives.
 Consumers vendor these files verbatim into their own `scripts/` directory and
 describe only what genuinely differs between projects in `scripts/release.conf`.
 
+After publication, follow
+[Verifying Published Attestations](../docs/workflow-api.md#verifying-published-attestations)
+to check the artifact's consumer source commit and shared signing workflow.
+
 ## Why vendored instead of fetched
 
 `release.sh` is a local maintainer tool that never runs in CI, and the packaging

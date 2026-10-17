@@ -256,6 +256,11 @@ above. An attestation or build failure keeps the release as a draft; successful
 matrix legs may already have uploaded assets, matching the workflow's existing
 retry-safe partial-draft behavior.
 
+For manual artifact checks, follow
+[Verifying Published Attestations](docs/workflow-api.md#verifying-published-attestations).
+It covers the consumer source identity, shared signer workflow, release-time
+commit pins, and the opaque `sigstore.dev` signer-mismatch error.
+
 ## Release scripts
 
 The workflow owns release mechanics; the scripts it invokes are shared

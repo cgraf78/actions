@@ -751,3 +751,47 @@ CI so a divergent copy fails on pull requests rather than at release time:
     persist-credentials: false
 - uses: cgraf78/actions/.github/actions/verify-consumer-sync@FULL_COMMIT_SHA
 ```
+
+### Verifying Published Attestations
+
+The artifact's source repository and its signing workflow have separate
+identities. For releases built by this reusable workflow, the source is the
+consumer repository and the signer is
+`cgraf78/actions/.github/workflows/rust-release.yml`.
+
+After downloading an archive, replace the placeholders below with its source
+repository and the full commit SHAs reviewed for that release:
+
+```sh
+gh attestation verify ./release-archive.tar.gz \
+  --repo OWNER/REPO \
+  --source-digest SOURCE_COMMIT_SHA \
+  --signer-workflow cgraf78/actions/.github/workflows/rust-release.yml \
+  --signer-digest ACTIONS_COMMIT_SHA
+```
+
+`SOURCE_COMMIT_SHA` is the consumer commit targeted by the release tag.
+`ACTIONS_COMMIT_SHA` is the full SHA in the release workflow's
+`uses: cgraf78/actions/.github/workflows/rust-release.yml@...` at that consumer
+commit; consumers using the sync contract also record it in
+`.github/cgraf78-actions.lock`. Use the release's pin, which can differ from
+the consumer's current `main`.
+
+`--repo` selects the source repository and attestation lookup. Without an
+explicit signer, GitHub CLI also expects the signing workflow to belong to
+that repository, so it rejects a certificate issued to this shared workflow.
+The two digest flags additionally constrain the source and signer revisions.
+Repeat verification for every archive being distributed, alongside its
+published SHA-256 checksum.
+
+GitHub CLI 2.102.0 can report this signer mismatch only as
+`Error: verifying with issuer "sigstore.dev"`. When that happens, check the
+expected signer workflow and its release-time pin first. The issuer message
+alone does not identify a corrupt trust cache or an invalid published artifact.
+If verification still fails with the expected source and signer, investigate
+that failure with the same identity constraints in place.
+
+The [generated release installer](../release-installer/README.md#user-interface)
+already supplies `--signer-repo cgraf78/actions` for its online verification.
+The command above provides the narrower workflow and commit constraints for
+manual release verification.
