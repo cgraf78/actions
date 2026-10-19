@@ -121,7 +121,7 @@ on:
         default: ""
     secrets:
       DEPENDENCY_GH_TOKEN:
-        description: Optional GitHub token exposed to caller commands as GH_TOKEN and GITHUB_TOKEN for private dependency downloads or rate-limit avoidance.
+        description: Optional GitHub token exposed to caller commands as GH_TOKEN, and as GITHUB_TOKEN in place of the read-only workflow token, for private dependency downloads or rate-limit avoidance.
         required: false
 
 permissions:
@@ -182,8 +182,13 @@ jobs:
         timeout-minutes: 15
         shell: bash
         env:
+          # Caller commands get the explicit dependency token as GH_TOKEN and,
+          # failing that, the read-only workflow token as GITHUB_TOKEN, so GitHub
+          # API calls never fall back to the shared 60/hour anonymous quota (see
+          # docs/workflow-api.md, Dependency Token). Every caller-command step here
+          # follows it.
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN || github.token }}
           MATRIX_NAME: Ubuntu
           SETUP_COMMAND: ${{ inputs.setup-command }}
           WORKING_DIRECTORY: ${{ inputs.working-directory }}
@@ -200,7 +205,7 @@ jobs:
         env:
           FMT_COMMAND: ${{ inputs.fmt-command }}
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN || github.token }}
           WORKING_DIRECTORY: ${{ inputs.working-directory }}
         run: |
           cd "$WORKING_DIRECTORY"
@@ -213,7 +218,7 @@ jobs:
         env:
           CLIPPY_COMMAND: ${{ inputs.clippy-command }}
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN || github.token }}
           WORKING_DIRECTORY: ${{ inputs.working-directory }}
         run: |
           cd "$WORKING_DIRECTORY"
@@ -226,7 +231,7 @@ jobs:
         env:
           BUILD_COMMAND: ${{ inputs.build-command }}
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN || github.token }}
           WORKING_DIRECTORY: ${{ inputs.working-directory }}
         # Build is a separate quality gate from tests because binary repos need
         # to prove the optimized artifact compiles even when unit tests use the
@@ -257,7 +262,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN || github.token }}
           PACKAGE_SMOKE_SETUP_COMMAND: ${{ inputs.package-smoke-setup-command }}
           WORKING_DIRECTORY: ${{ inputs.working-directory }}
         # Keep package-specific prerequisites caller-owned. The shared workflow
@@ -273,7 +278,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN || github.token }}
           PACKAGE_SMOKE_COMMAND: ${{ inputs.package-smoke-command }}
           RUST_TARGET: ${{ inputs.package-smoke-musl-target }}
           WORKING_DIRECTORY: ${{ inputs.working-directory }}
@@ -291,7 +296,7 @@ jobs:
         env:
           DOC_COMMAND: ${{ inputs.doc-command }}
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN || github.token }}
           WORKING_DIRECTORY: ${{ inputs.working-directory }}
         run: |-
           cd "$WORKING_DIRECTORY"
@@ -314,7 +319,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN || github.token }}
           MSRV_COMMAND: ${{ inputs.msrv-command }}
           WORKING_DIRECTORY: ${{ inputs.working-directory }}
         run: |-
@@ -425,6 +430,8 @@ jobs:
         shell: bash
         env:
           AUDIT_COMMAND: ${{ inputs.audit-command }}
+          GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN || github.token }}
           WORKING_DIRECTORY: ${{ inputs.working-directory }}
         run: |-
           cd "$WORKING_DIRECTORY"
@@ -458,7 +465,7 @@ jobs:
           ANDROID_PACKAGE_SMOKE_COMMAND: ${{ inputs.android-package-smoke-command }}
           ASSET_PLATFORM: android-aarch64
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN || github.token }}
           RUST_TARGET: aarch64-linux-android
           WORKING_DIRECTORY: ${{ inputs.working-directory }}
         run: |-

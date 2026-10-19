@@ -45,7 +45,7 @@ on:
         default: .
     secrets:
       DEPENDENCY_GH_TOKEN:
-        description: Optional GitHub token exposed to the host command.
+        description: Optional GitHub token exposed to the host command and the sandbox command as GH_TOKEN, and as GITHUB_TOKEN in place of the read-only workflow token.
         required: false
 
 permissions:
@@ -100,7 +100,7 @@ jobs:
         env:
           ASSET_PLATFORM: android-x86_64
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN || github.token }}
           HOST_COMMAND: ${{ inputs.host-command }}
           RUST_TARGET: x86_64-linux-android
           WORKING_DIRECTORY: ${{ inputs.working-directory }}
@@ -156,6 +156,12 @@ jobs:
           PROFILES: ${{ inputs.profiles }}
           SETUP: ${{ inputs.setup }}
           TERMUX_CI_COMMAND: ${{ inputs.command }}
+          # The sandbox command gets the same tokens as host commands. A
+          # caller command that installs dependencies there (dotfiles runs
+          # `dot update` with its provider) otherwise shares GitHub's
+          # 60/hour anonymous quota with every job behind the runner's IP.
+          TERMUX_CI_GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          TERMUX_CI_GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN || github.token }}
           TERMUX_CI_WORKING_DIRECTORY: ${{ inputs.working-directory }}
         run: |
           case "$DOTFILES_SHDEPS_UPDATE_POLICY" in
@@ -180,6 +186,14 @@ jobs:
           esac
           payload_name_b64=$(printf '%s' "$payload_name" | base64 --wrap=0)
           printf '%s' "$TERMUX_CI_COMMAND" >"$RUNNER_TEMP/termux-ci-command"
+          # Tokens travel as owner-only files in the same copy as the command,
+          # never in the runner script, which the job log echoes. The runner
+          # exports and deletes them inside the sandbox before the command runs.
+          (
+            umask 077
+            printf '%s' "$TERMUX_CI_GH_TOKEN" >"$RUNNER_TEMP/termux-ci-gh-token"
+            printf '%s' "$TERMUX_CI_GITHUB_TOKEN" >"$RUNNER_TEMP/termux-ci-github-token"
+          )
           # The runner echoes this script into the job log, so the in-sandbox
           # retry marker must arrive as data: written here literally, it would
           # make every failure after this step look retryable.
@@ -197,6 +211,11 @@ jobs:
           export HOME=/data/data/com.termux/files/home
           export PREFIX=/data/data/com.termux/files/usr
           export TMPDIR=$PREFIX/tmp
+          # Take the copied tokens off disk first, so a setup failure below
+          # cannot leave them behind; they are exported only for the command.
+          gh_token=$(<"$TMPDIR/termux-ci-gh-token")
+          github_token=$(<"$TMPDIR/termux-ci-github-token")
+          rm -f "$TMPDIR/termux-ci-gh-token" "$TMPDIR/termux-ci-github-token"
           # Do not let the copied caller checkout substitute Bash or Git before
           # the exact staged runtime is installed. Keep bootstrap lookup limited
           # to Termux-owned tools; invoke the tracked client front door only
@@ -343,6 +362,12 @@ jobs:
             *) echo "working-directory escapes checkout" >&2; exit 1 ;;
           esac
           cd "$workdir_path"
+          # Empty files mean no token; GH_TOKEN stays the explicit dependency
+          # token and GITHUB_TOKEN may be the read-only workflow fallback, the
+          # same precedence host commands get.
+          [[ -z "$gh_token" ]] || export GH_TOKEN="$gh_token"
+          [[ -z "$github_token" ]] || export GITHUB_TOKEN="$github_token"
+          unset gh_token github_token
           bash -euo pipefail "$TMPDIR/termux-ci-command"
           RUNNER
           } >"$RUNNER_TEMP/termux-ci-runner"
@@ -353,7 +378,9 @@ jobs:
             printf "payload_name_b64='%s'\n" "$payload_name_b64"
             cat <<'SCRIPT'
           source "$TERMUX_ADB_HELPER"
-          trap 'termux_dump_crash_log 30' EXIT
+          # The host copies of the tokens go on every exit path, including a
+          # failed copy into the sandbox.
+          trap 'rm -f "$RUNNER_TEMP/termux-ci-gh-token" "$RUNNER_TEMP/termux-ci-github-token"; termux_dump_crash_log 30' EXIT
           apk="$RUNNER_TEMP/termux.apk"
           echo "Waiting for the package manager service"
           if ! termux_wait_for_package_service 20 5 1; then
@@ -427,7 +454,8 @@ jobs:
           fi
 
           echo "Copying Termux runner"
-          tar -C "$RUNNER_TEMP" -cf - termux-ci-command termux-ci-runner |
+          tar -C "$RUNNER_TEMP" -cf - termux-ci-command termux-ci-runner \
+            termux-ci-gh-token termux-ci-github-token |
             termux_adb 30 shell run-as com.termux tar -C files/usr/tmp -xf -
 
           echo "Running caller command inside Termux"
