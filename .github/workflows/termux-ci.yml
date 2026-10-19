@@ -45,7 +45,7 @@ on:
         default: .
     secrets:
       DEPENDENCY_GH_TOKEN:
-        description: Optional GitHub token exposed to the host command.
+        description: Optional GitHub token exposed to the host command and the sandbox command as GH_TOKEN, and as GITHUB_TOKEN in place of the read-only workflow token.
         required: false
 
 permissions:

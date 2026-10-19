@@ -19,7 +19,7 @@ on:
         type: string
     secrets:
       DEPENDENCY_GH_TOKEN:
-        description: Optional GitHub token exposed to caller commands as GH_TOKEN and GITHUB_TOKEN for private dependency downloads or rate-limit avoidance.
+        description: Optional GitHub token exposed to caller commands as GH_TOKEN, and as GITHUB_TOKEN in place of the read-only workflow token, for private dependency downloads or rate-limit avoidance.
         required: false
 
 permissions:
@@ -45,6 +45,8 @@ jobs:
         timeout-minutes: 5
         shell: /bin/bash {0}
         env:
+          GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN || github.token }}
           PRE_PROVISION_COMMAND: ${{ inputs.pre_provision_command }}
         run: eval "$PRE_PROVISION_COMMAND"
 
@@ -70,8 +72,13 @@ jobs:
         shell: /bin/bash {0}
         env:
           BASH32_COMMAND: ${{ inputs.command }}
+          # Caller commands get the explicit dependency token as GH_TOKEN and,
+          # failing that, the read-only workflow token as GITHUB_TOKEN, so GitHub
+          # API calls never fall back to the shared 60/hour anonymous quota (see
+          # docs/workflow-api.md, Dependency Token). Every caller-command step here
+          # follows it.
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN || github.token }}
         # Keep this as a separate reusable workflow instead of an optional job in
         # shell-ci. GitHub shows skipped reusable-workflow jobs in every caller,
         # so splitting the contract keeps normal shell repos visually clean while

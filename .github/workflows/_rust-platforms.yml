@@ -45,7 +45,7 @@ on:
         default: ""
     secrets:
       DEPENDENCY_GH_TOKEN:
-        description: Optional GitHub token exposed to caller commands as GH_TOKEN and GITHUB_TOKEN for private dependency downloads or rate-limit avoidance.
+        description: Optional GitHub token exposed to caller commands as GH_TOKEN, and as GITHUB_TOKEN in place of the read-only workflow token, for private dependency downloads or rate-limit avoidance.
         required: false
 
 permissions:
@@ -170,8 +170,13 @@ jobs:
         if: inputs.setup-command != ''
         shell: bash
         env:
+          # Caller commands get the explicit dependency token as GH_TOKEN and,
+          # failing that, the read-only workflow token as GITHUB_TOKEN, so GitHub
+          # API calls never fall back to the shared 60/hour anonymous quota (see
+          # docs/workflow-api.md, Dependency Token). Every caller-command step here
+          # follows it.
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN || github.token }}
           MATRIX_NAME: ${{ matrix.name }}
           SETUP_COMMAND: ${{ inputs.setup-command }}
           WORKING_DIRECTORY: ${{ inputs.working-directory }}
@@ -185,7 +190,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN || github.token }}
           MATRIX_NAME: ${{ matrix.name }}
           TEST_COMMAND: ${{ matrix.shard && matrix['shard-command'] || inputs.test-command }}
           WORKING_DIRECTORY: ${{ inputs.working-directory }}

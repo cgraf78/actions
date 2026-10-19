@@ -382,6 +382,32 @@ contracts() {
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env.GH_TOKEN == "${{ secrets.DEPENDENCY_GH_TOKEN }}"' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env.GITHUB_TOKEN == "${{ inputs.dotfiles-provider && github.token || '"'"''"'"' }}"' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env.MISE_GITHUB_TOKEN == "${{ github.token }}"' _shell-platforms.yml
+  # Fleet token rule (docs/workflow-api.md, Dependency Token): every step that
+  # runs caller code (any *_COMMAND env key) gets the explicit dependency token
+  # as GH_TOKEN and the read-only workflow token as the GITHUB_TOKEN fallback,
+  # so no platform falls back to GitHub's shared anonymous quota. Keying on the
+  # command, not on an existing token, also catches a new step with no tokens.
+  # The dotfiles bootstrap keeps its documented provider-conditional fallback,
+  # checked above, and runs no caller command. The Termux "Prepare" step only
+  # ships the sandbox command, with its tokens checked below under their own
+  # names.
+  for workflow in bash32-ci.yml _shell-platforms.yml _rust-platforms.yml rust-ci.yml _termux-ci.yml; do
+    check '[(.jobs[].steps // [])[] | select((.env // {}) | keys | any_c(test("_COMMAND$")))] | length > 0' "$workflow"
+    check '[(.jobs[].steps // [])[] | select((.env // {}) | keys | any_c(test("_COMMAND$"))) | select(.name != "Prepare Termux host runner") | select(.env.GH_TOKEN != "${{ secrets.DEPENDENCY_GH_TOKEN }}" or .env.GITHUB_TOKEN != "${{ secrets.DEPENDENCY_GH_TOKEN || github.token }}")] | length == 0' "$workflow"
+  done
+  # rust-release jobs run with contents: write and id-token: write, so their
+  # caller commands must never receive a token; only the upload steps use one.
+  check '[(.jobs[].steps // [])[] | select((.env // {}) | keys | any_c(test("_COMMAND$"))) | select((.env | has("GH_TOKEN")) or (.env | has("GITHUB_TOKEN")))] | length == 0' rust-release.yml
+  # The Termux sandbox command gets the same tokens, carried as owner-only
+  # files beside the command rather than in the echoed runner script, taken
+  # off disk before setup runs, and removed from the host on every exit path.
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").env.TERMUX_CI_GH_TOKEN == "${{ secrets.DEPENDENCY_GH_TOKEN }}"' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").env.TERMUX_CI_GITHUB_TOKEN == "${{ secrets.DEPENDENCY_GH_TOKEN || github.token }}"' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("termux-ci-gh-token termux-ci-github-token |")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("export TMPDIR=$PREFIX/tmp\n# Take the copied tokens off disk first")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("rm -f \"$TMPDIR/termux-ci-gh-token\" \"$TMPDIR/termux-ci-github-token\"")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("export GH_TOKEN=\"$gh_token\"")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("export GITHUB_TOKEN=\"$github_token\"")' _termux-ci.yml
   check '.jobs.platform.steps[] | select(.name == "Bootstrap dotfiles dependencies").env | has("DOT_INIT_SKIP_PROVIDER") | not' _shell-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Install pinned Mise").if == "(inputs.setup == '\''checkrun'\'' || inputs.setup == '\''dotfiles'\'') && matrix.name != '\''Alpine'\''"' _shell-platforms.yml
   check '[.jobs.platform.steps[] | select((.uses // "") | contains("actions/cache@"))] | length == 2' _shell-platforms.yml
@@ -417,7 +443,7 @@ contracts() {
   # The emulator runner kills the device when its script returns, so the
   # failure-only crash dump must be armed inside the host script, before the
   # first emulator command can fail.
-  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("source \"$TERMUX_ADB_HELPER\"\ntrap '\''termux_dump_crash_log 30'\'' EXIT\napk=")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("trap '\''rm -f \"$RUNNER_TEMP/termux-ci-gh-token\" \"$RUNNER_TEMP/termux-ci-github-token\"; termux_dump_crash_log 30'\'' EXIT\napk=")' _termux-ci.yml
   check '[.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | match("(^|\n) *trap "; "g")] | length == 1' _termux-ci.yml
   check_no_unsupervised_adb _termux-ci.yml
   check_file '.runs.using == "composite"' .github/actions/termux-adb/action.yml

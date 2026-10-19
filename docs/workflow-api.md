@@ -322,17 +322,27 @@ public workflow owns event-policy decisions.
 
 ### Dependency Token
 
-Public CI workflows accept optional secret `DEPENDENCY_GH_TOKEN`. When supplied,
-caller-owned host commands receive it as both `GH_TOKEN` and `GITHUB_TOKEN`.
-Commands executed inside the Termux app sandbox do not receive this token.
+Public CI workflows accept optional secret `DEPENDENCY_GH_TOKEN`. Every
+caller-owned command in the CI workflows (`shell-ci`, `rust-ci`, `bash32-ci`,
+`termux-ci`), on every platform and inside the Termux app sandbox, receives it
+as `GH_TOKEN`, and receives `DEPENDENCY_GH_TOKEN` or else the
+caller's read-only workflow token as `GITHUB_TOKEN`. Without that fallback, a
+command that installs dependencies or reads release metadata shares GitHub's
+60/hour anonymous quota with every job behind the runner's IP and fails
+intermittently. Shdeps and `gh` prefer `GH_TOKEN`, so an explicit token still
+wins, and private dependencies still require it. The Termux sandbox receives
+the tokens as owner-only files copied with the command, never in the runner
+script the job log echoes, and the runner deletes them before the command runs.
 
 Use this for private dependency downloads or GitHub API rate-limit avoidance.
 Do not use it for release upload permissions; `rust-release.yml` uses
-`github.token` only at its write boundaries.
+`github.token` only at its write boundaries, and its caller commands, which run
+with write and attestation permissions, receive no token at all.
 
 With `setup: dotfiles` and `dotfiles-provider: true`, the dependency bootstrap
-also exposes the caller's read-only workflow token as Shdeps' `GITHUB_TOKEN`
-fallback. This keeps parallel public-repository installs out of GitHub's shared
+step likewise exposes the caller's read-only workflow token as Shdeps'
+`GITHUB_TOKEN` fallback; without the provider it installs nothing that needs
+it. This keeps parallel public-repository installs out of GitHub's shared
 anonymous quota. A supplied `DEPENDENCY_GH_TOKEN` remains `GH_TOKEN` and wins
 under Shdeps' documented credential precedence, so private dependencies still
 require an explicit cross-repository credential.
@@ -460,7 +470,7 @@ manifest/lock drift.
 
 | Secret                | Contract                                                                    |
 | --------------------- | --------------------------------------------------------------------------- |
-| `DEPENDENCY_GH_TOKEN` | Optional token exposed to caller commands as `GH_TOKEN` and `GITHUB_TOKEN`. |
+| `DEPENDENCY_GH_TOKEN` | Optional token exposed to caller commands as `GH_TOKEN`; `GITHUB_TOKEN` is it or else the read-only workflow token. |
 
 ## `bash32-ci.yml`
 
@@ -487,7 +497,7 @@ repo actually tests.
 
 | Secret                | Contract                                                                    |
 | --------------------- | --------------------------------------------------------------------------- |
-| `DEPENDENCY_GH_TOKEN` | Optional token exposed to caller commands as `GH_TOKEN` and `GITHUB_TOKEN`. |
+| `DEPENDENCY_GH_TOKEN` | Optional token exposed to caller commands as `GH_TOKEN`; `GITHUB_TOKEN` is it or else the read-only workflow token. |
 
 ### Bash 3.2 Contract
 
@@ -655,7 +665,7 @@ committed provider configuration.
 
 | Secret                | Contract                                                                       |
 | --------------------- | ------------------------------------------------------------------------------ |
-| `DEPENDENCY_GH_TOKEN` | Optional token exposed only to `host-command` as `GH_TOKEN` and `GITHUB_TOKEN`. |
+| `DEPENDENCY_GH_TOKEN` | Optional token exposed to `host-command` and the sandbox `command` as `GH_TOKEN`; `GITHUB_TOKEN` is it or else the read-only workflow token. |
 
 ## `rust-release.yml`
 

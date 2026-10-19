@@ -69,7 +69,7 @@ on:
         default: ""
     secrets:
       DEPENDENCY_GH_TOKEN:
-        description: Optional GitHub token exposed to caller commands as GH_TOKEN and GITHUB_TOKEN for private dependency downloads or rate-limit avoidance.
+        description: Optional GitHub token exposed to caller commands as GH_TOKEN, and as GITHUB_TOKEN in place of the read-only workflow token, for private dependency downloads or rate-limit avoidance.
         required: false
 
 permissions:
