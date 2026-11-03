@@ -863,7 +863,14 @@ acquire_checkout_lock_v1() {
           lock_owner_dir=
           lock_claim_dir=
           checkout_lock_prepare_owner || return 1
-          if ln -s "$lock_owner_target" "$lock_dir"; then
+          # A v1 winner can publish its canonical symlink after the missing
+          # classification. Without `-n`, uutils ln (the Ubuntu 26.04 default)
+          # follows that symlink, strips the trailing `/.`, and succeeds by
+          # nesting this owner's link inside the winner's private directory,
+          # corrupting the live generation. `-n` makes GNU, BSD, BusyBox, and
+          # uutils 0.8+ ln fail on an existing symlink instead. uutils before
+          # 0.8 honors `-n` only with `-f`; no supported host ships it.
+          if ln -sn "$lock_owner_target" "$lock_dir"; then
             if [[ -L "$lock_dir" &&
               $(readlink "$lock_dir") == "$lock_owner_target" ]]; then
               checkout_lock_load_record \
