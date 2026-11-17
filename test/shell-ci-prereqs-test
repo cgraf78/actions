@@ -163,7 +163,7 @@ assert_eq python3.11 "$dnf_pkgs" \
 printf 'ok - CentOS Python profile selects a tomllib-capable runtime\n'
 
 # The plain tmux profile keeps every distribution's package, CentOS Stream's
-# 3.2a included: its other consumers rely on that.
+# older one included: its other consumers rely on that.
 export PROFILES=tmux
 floor_tmux_calls=0 floor_exports=0
 install_profile_prereqs
@@ -227,6 +227,32 @@ done
 rm -f "$floor_env"
 
 printf 'ok - tmux-floor names its floor and marks the leg that built it\n'
+
+# tmux-floor-check reads versions by the consumers' shared rule. The rows are
+# built from TMUX_FLOOR_VERSION, so they hold across floor bumps.
+# shellcheck disable=SC2031 # The subshell above re-sources the same value.
+floor=$TMUX_FLOOR_VERSION
+floor_major=${floor%%.*}
+floor_minor=${floor#*.}
+floor_minor=${floor_minor%%[!0-9]*}
+floor_mm=$floor_major.$floor_minor
+older=$floor_major.$((floor_minor - 1))
+for row in \
+  "pass:$floor" "pass:$floor_mm" "pass:$floor_mm-rc" \
+  "pass:next-$floor_mm" "pass:$floor_major.$((floor_minor + 1))" \
+  "pass:$floor_major.10" "pass:$((floor_major + 7)).0" "pass:master" \
+  "pass:openbsd-7.6" "pass:openbsd-2.9" "pass:openbsd-7.6-current" "pass:" "pass:garbage" \
+  "pass:tmux $floor" "fail:$older" "fail:${older}a" \
+  "fail:$older-rc3" "fail:next-$older" "fail:2.9a" "fail:tmux $older"; do
+  expect=${row%%:*} version=${row#*:}
+  if sh "$REPO_ROOT/test/tmux-floor-check" --meets "$version"; then
+    got=pass
+  else
+    got=fail
+  fi
+  assert_eq "$expect" "$got" "tmux-floor-check reads <$version>"
+done
+printf 'ok - tmux-floor-check applies the shared version rule\n'
 
 export MATRIX_NAME=Ubuntu
 export PROFILES=shellcheck

@@ -195,10 +195,13 @@ install_yq_v4() {
 
 # The oldest tmux the repositories that opt into the `tmux-floor` profile
 # support. That profile gives every leg a tmux at least this new: the
-# distribution's, except on CentOS Stream 9, whose tmux 3.2a is older, so that
-# leg builds this release from source and tests the floor itself. The plain
-# `tmux` profile keeps every distribution's own package.
+# distribution's, except where tmux_floor_builds_here says that tmux is older
+# than the floor, so that leg builds this release from source and tests the
+# floor itself. The plain `tmux` profile keeps every distribution's own package.
 # test/tmux-floor-check and test/shell-ci-prereqs-test read these values.
+# A floor bump changes the version and checksum; if tmux-floor-check then fails
+# on another leg, add that leg to tmux_floor_builds_here and give its package
+# manager the build packages.
 TMUX_FLOOR_VERSION=3.3a
 TMUX_FLOOR_SHA256=e4fd347843bd0772c4f48d6dde625b0b109b7a380ff15db21e97c11a4dcdf93f
 # Everything the build needs on a minimal CentOS Stream 9 image, all from its
@@ -229,7 +232,11 @@ install_floor_tmux() {
   # shellcheck disable=SC2086
   retry_pkg curl -fsSL $CURL_NET_OPTS \
     "$url" -o "$archive"
-  verify_sha256 "$TMUX_FLOOR_SHA256" "$archive"
+  # Explicit, so a caller that tests this function cannot suspend the check.
+  if ! verify_sha256 "$TMUX_FLOOR_SHA256" "$archive"; then
+    echo "tmux $TMUX_FLOOR_VERSION source does not match its checksum" >&2
+    exit 1
+  fi
   tar -xzf "$archive" -C "$RUNNER_TEMP"
   rm -f "$archive"
   # The build is quiet unless it fails, when its whole log is the diagnostic.
@@ -246,7 +253,10 @@ install_floor_tmux() {
   fi
   rm -rf "$source_dir" "$build_log"
 
-  "$install_dir/bin/tmux" -V | grep -Fx "tmux $TMUX_FLOOR_VERSION" >/dev/null
+  if ! "$install_dir/bin/tmux" -V | grep -Fx "tmux $TMUX_FLOOR_VERSION" >/dev/null; then
+    echo "the built tmux does not report tmux $TMUX_FLOOR_VERSION" >&2
+    exit 1
+  fi
   printf '%s\n' "$install_dir/bin" >>"${GITHUB_PATH:?}"
 }
 

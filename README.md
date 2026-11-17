@@ -342,8 +342,8 @@ than one worker are split into first-party composite actions:
   installation. It is split into profile packages, checkrun prereqs, and the
   exact dotfiles bootstrap package list. The opt-in `tmux-floor` profile
   gives every leg a tmux at least `TMUX_FLOOR_VERSION` (in `lib.sh`): the
-  distribution's package, except on CentOS Stream, whose tmux 3.2a is older,
-  so that leg builds the checksum-pinned floor release and tests it.
+  distribution's package, except on CentOS Stream, whose tmux is older than
+  the floor, so that leg builds the checksum-pinned floor release and tests it.
 - `.github/actions/shellcheck-inventory/` validates each caller's reviewed
   program/fixture inventory and runs ShellCheck without guessing which fixture
   fragments are standalone programs.
