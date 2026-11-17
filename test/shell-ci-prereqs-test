@@ -229,19 +229,24 @@ rm -f "$floor_env"
 printf 'ok - tmux-floor names its floor and marks the leg that built it\n'
 
 # tmux-floor-check reads versions by the consumers' shared rule. The rows are
-# built from TMUX_FLOOR_VERSION, so they hold across floor bumps.
+# built from TMUX_FLOOR_VERSION, so they hold across floor bumps, X.0 included.
 # shellcheck disable=SC2031 # The subshell above re-sources the same value.
 floor=$TMUX_FLOOR_VERSION
 floor_major=${floor%%.*}
 floor_minor=${floor#*.}
 floor_minor=${floor_minor%%[!0-9]*}
 floor_mm=$floor_major.$floor_minor
-older=$floor_major.$((floor_minor - 1))
+if [ "$floor_minor" -eq 0 ]; then
+  older=$((floor_major - 1)).9
+else
+  older=$floor_major.$((floor_minor - 1))
+fi
 for row in \
   "pass:$floor" "pass:$floor_mm" "pass:$floor_mm-rc" \
   "pass:next-$floor_mm" "pass:$floor_major.$((floor_minor + 1))" \
-  "pass:$floor_major.10" "pass:$((floor_major + 7)).0" "pass:master" \
-  "pass:openbsd-7.6" "pass:openbsd-2.9" "pass:openbsd-7.6-current" "pass:" "pass:garbage" \
+  "pass:$floor_major.$((floor_minor + 10))" "pass:$((floor_major + 7)).0" \
+  "pass:master" "pass:openbsd-7.6" "pass:openbsd-2.9" \
+  "pass:openbsd-7.6-current" "pass:foo-2.9" "pass:" "pass:garbage" \
   "pass:tmux $floor" "fail:$older" "fail:${older}a" \
   "fail:$older-rc3" "fail:next-$older" "fail:2.9a" "fail:tmux $older"; do
   expect=${row%%:*} version=${row#*:}
