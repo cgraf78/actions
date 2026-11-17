@@ -396,14 +396,23 @@ jobs:
 | `termux-profiles`     | `""`     | Android override. Empty reuses `profiles`, then falls back to `runtime`.            |
 
 Supported generic profiles are `base`, `jq`, `python`, `zsh`, `lua`, `neovim`,
-`tmux`, `openssh-netcat-lsof`, `procps`, `cron`, `fd`, `ripgrep`, `hostname`,
-and `shellcheck`. Termux additionally supports `runtime` as a lightweight
-alternative to `base`: both provide Bash and `termux-exec`, while `base` also
-provides Git and curl. The `procps` profile provides a full procps-compatible
-`ps` on Linux; macOS uses its system `ps` without an additional Homebrew
-package. The command-oriented profiles intentionally follow platform naming:
-for example, `fd` installs Debian's `fdfind`, while platforms that package the
-command as `fd` keep that name.
+`tmux`, `tmux-floor`, `openssh-netcat-lsof`, `procps`, `cron`, `fd`, `ripgrep`,
+`hostname`, and `shellcheck`. `tmux` installs each platform's own tmux.
+`tmux-floor` does the same wherever that tmux is at least the supported floor
+(`TMUX_FLOOR_VERSION` in `shell-ci-prereqs/lib.sh`); on CentOS Stream, whose
+tmux is older, it builds that release from its checksum-pinned source instead.
+It also exports `CI_TMUX_FLOOR` to later steps on conventional platforms, so a
+caller's suites can check their own declared minimum against it, and, where it
+built the floor, `CI_TMUX_FLOOR_EXACT=1`, so they can check they run exactly
+that release. Termux installs its own tmux for either profile. With
+`setup: dotfiles`, the named setup installs its own fixed package list and
+ignores the caller's `profiles`, these included. Termux additionally supports
+`runtime` as a lightweight alternative to `base`: both provide Bash and
+`termux-exec`, while `base` also provides Git and curl. The `procps` profile
+provides a full procps-compatible `ps` on Linux; macOS uses its system `ps`
+without an additional Homebrew package. The command-oriented profiles
+intentionally follow platform naming: for example, `fd` installs Debian's
+`fdfind`, while platforms that package the command as `fd` keep that name.
 
 Termux installs the Android equivalents of generic profile capabilities from
 the same profile list, including when a named setup mode is selected. Its job

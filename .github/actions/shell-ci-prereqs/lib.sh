@@ -193,6 +193,84 @@ install_yq_v4() {
   sudo_if_available mv "$tmp" /usr/local/bin/yq
 }
 
+# The oldest tmux the repositories that opt into the `tmux-floor` profile
+# support. That profile gives every leg a tmux at least this new: the
+# distribution's, except where tmux_floor_builds_here says that tmux is older
+# than the floor, so that leg builds this release from source and tests the
+# floor itself. The plain `tmux` profile keeps every distribution's own package.
+# test/tmux-floor-check and test/shell-ci-prereqs-test read these values.
+# A floor bump changes the version and checksum; if tmux-floor-check then fails
+# on another leg, add that leg to tmux_floor_builds_here and give its package
+# manager the build packages.
+TMUX_FLOOR_VERSION=3.3a
+TMUX_FLOOR_SHA256=e4fd347843bd0772c4f48d6dde625b0b109b7a380ff15db21e97c11a4dcdf93f
+# Everything the build needs on a minimal CentOS Stream 9 image, all from its
+# default BaseOS and AppStream repositories. profiles.sh installs them.
+# shellcheck disable=SC2034
+TMUX_FLOOR_BUILD_PKGS="gcc make bison pkgconf-pkg-config libevent-devel ncurses-devel tar gzip"
+
+# Whether this leg's distribution tmux is older than the floor, so that
+# `tmux-floor` builds the floor release there instead.
+tmux_floor_builds_here() {
+  case "$MATRIX_NAME" in
+    CentOS*) return 0 ;;
+  esac
+  return 1
+}
+
+install_floor_tmux() {
+  archive="${RUNNER_TEMP:?}/tmux-$TMUX_FLOOR_VERSION.tar.gz"
+  source_dir="$RUNNER_TEMP/tmux-$TMUX_FLOOR_VERSION"
+  install_dir="$RUNNER_TEMP/tmux-floor"
+  build_log="$RUNNER_TEMP/tmux-floor-build.log"
+  url="https://github.com/tmux/tmux/releases/download/$TMUX_FLOOR_VERSION/tmux-$TMUX_FLOOR_VERSION.tar.gz"
+
+  rm -rf "$source_dir" "$install_dir"
+  mkdir -p "$RUNNER_TEMP"
+  # The bounded retry reports an exhausted deadline as an infrastructure
+  # stall, so infra-retry can rerun the job.
+  # shellcheck disable=SC2086
+  retry_pkg curl -fsSL $CURL_NET_OPTS \
+    "$url" -o "$archive"
+  # Explicit, so a caller that tests this function cannot suspend the check.
+  if ! verify_sha256 "$TMUX_FLOOR_SHA256" "$archive"; then
+    echo "tmux $TMUX_FLOOR_VERSION source does not match its checksum" >&2
+    exit 1
+  fi
+  tar -xzf "$archive" -C "$RUNNER_TEMP"
+  rm -f "$archive"
+  # The build is quiet unless it fails, when its whole log is the diagnostic.
+  # There is no fallback to the distribution's older tmux.
+  if ! (
+    cd "$source_dir" &&
+      ./configure --prefix="$install_dir" &&
+      make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" &&
+      make install
+  ) >"$build_log" 2>&1; then
+    cat "$build_log" >&2
+    echo "tmux $TMUX_FLOOR_VERSION did not build" >&2
+    exit 1
+  fi
+  rm -rf "$source_dir" "$build_log"
+
+  if ! "$install_dir/bin/tmux" -V | grep -Fx "tmux $TMUX_FLOOR_VERSION" >/dev/null; then
+    echo "the built tmux does not report tmux $TMUX_FLOOR_VERSION" >&2
+    exit 1
+  fi
+  printf '%s\n' "$install_dir/bin" >>"${GITHUB_PATH:?}"
+}
+
+# Name the floor this job provides, so the caller's suites can check that
+# their own declared minimum matches it. Where this leg built the floor,
+# CI_TMUX_FLOOR_EXACT=1 also tells them the tmux they run must be exactly
+# that release, so no newer tmux earlier on PATH can stand in for it.
+export_tmux_floor() {
+  printf 'CI_TMUX_FLOOR=%s\n' "$TMUX_FLOOR_VERSION" >>"${GITHUB_ENV:?}"
+  if tmux_floor_builds_here; then
+    printf 'CI_TMUX_FLOOR_EXACT=1\n' >>"$GITHUB_ENV"
+  fi
+}
+
 install_pinned_shellcheck() {
   version=0.11.0
   checksum=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198

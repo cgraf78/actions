@@ -64,11 +64,18 @@ collect_profile_prereqs() {
     add_pkg dnf_pkgs "neovim"
     add_pkg apk_pkgs "neovim"
   fi
-  if has_profile tmux; then
+  if has_profile tmux || has_profile tmux-floor; then
     add_pkg brew_pkgs "tmux"
     add_pkg apt_pkgs "tmux"
     add_pkg arch_pkgs "tmux"
-    add_pkg dnf_pkgs "tmux"
+    # `tmux-floor` is `tmux` with a supported floor: where the distribution's
+    # tmux is older, it installs the floor's build dependencies instead of
+    # that package, and install_floor_tmux builds the floor release.
+    if has_profile tmux-floor && tmux_floor_builds_here; then
+      add_pkg dnf_pkgs "$TMUX_FLOOR_BUILD_PKGS"
+    else
+      add_pkg dnf_pkgs "tmux"
+    fi
     add_pkg apk_pkgs "tmux"
   fi
   if has_profile openssh-netcat-lsof; then
@@ -136,6 +143,12 @@ install_profile_prereqs() {
   fi
   if has_profile lua; then
     ensure_lua_command
+  fi
+  if has_profile tmux-floor; then
+    if tmux_floor_builds_here; then
+      install_floor_tmux
+    fi
+    export_tmux_floor
   fi
   if has_profile shellcheck && [ "$MATRIX_NAME" = Ubuntu ]; then
     install_pinned_shellcheck

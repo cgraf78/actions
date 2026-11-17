@@ -60,10 +60,11 @@ jobs:
     uses: ./.github/workflows/shell-ci.yml
     with:
       matrix-set: full
-      profiles: base,procps,python
+      profiles: base,procps,python,tmux-floor
       shellcheck-inventory-path: .github/shellcheck-files.txt
       test-command: |
         python3 -c 'import tomllib'
+        sh test/tmux-floor-check
         test -f .github/workflows/shell-ci.yml
         test -f .github/workflows/_termux-ci.yml
         bash test/checkout-installer-test
@@ -259,7 +260,7 @@ jobs:
           persist-credentials: false
 
       - name: Verify internal Actions sync
-        uses: cgraf78/actions/.github/actions/verify-consumer-sync@4fc302ac73cd253ded4eb3a82b8942245874457f
+        uses: cgraf78/actions/.github/actions/verify-consumer-sync@5d1d6938d6fdb972bedddde95175ef29d4cffa92
 
       - name: Verify internal action implementations
         shell: bash

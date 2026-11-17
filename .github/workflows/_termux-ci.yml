@@ -74,7 +74,7 @@ jobs:
 
       - name: Stage exact Dot bootstrap payload
         if: inputs.setup == 'dotfiles'
-        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@4fc302ac73cd253ded4eb3a82b8942245874457f
+        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@5d1d6938d6fdb972bedddde95175ef29d4cffa92
         env:
           HOME: ${{ github.workspace }}
         with:
@@ -90,7 +90,7 @@ jobs:
 
       - name: Configure host Android NDK toolchain
         if: inputs.host-command != '' && inputs.rust-toolchain != ''
-        uses: cgraf78/actions/.github/actions/android-rust-toolchain@4fc302ac73cd253ded4eb3a82b8942245874457f
+        uses: cgraf78/actions/.github/actions/android-rust-toolchain@5d1d6938d6fdb972bedddde95175ef29d4cffa92
         with:
           rust-target: x86_64-linux-android
 
@@ -138,7 +138,7 @@ jobs:
       # lib/sdk-installer.js at the runner's pinned commit.
       # test/workflow-contract-test ties all four to that step and pin.
       - name: Install Android SDK packages
-        uses: cgraf78/actions/.github/actions/android-sdk-packages@4fc302ac73cd253ded4eb3a82b8942245874457f
+        uses: cgraf78/actions/.github/actions/android-sdk-packages@5d1d6938d6fdb972bedddde95175ef29d4cffa92
         with:
           api-level: 31
           target: default
@@ -146,7 +146,7 @@ jobs:
           build-tools-version: 37.0.0
 
       - name: Stage bounded Termux ADB helper
-        uses: cgraf78/actions/.github/actions/termux-adb@4fc302ac73cd253ded4eb3a82b8942245874457f
+        uses: cgraf78/actions/.github/actions/termux-adb@5d1d6938d6fdb972bedddde95175ef29d4cffa92
 
       - name: Prepare Termux host runner
         shell: bash
@@ -268,7 +268,7 @@ jobs:
           has_profile zsh && packages+=(zsh)
           has_profile lua && packages+=(lua54)
           has_profile neovim && packages+=(neovim)
-          has_profile tmux && packages+=(tmux)
+          { has_profile tmux || has_profile tmux-floor; } && packages+=(tmux)
           has_profile openssh-netcat-lsof &&
             packages+=(openssh netcat-openbsd lsof)
           has_profile procps && packages+=(procps)

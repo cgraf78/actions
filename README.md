@@ -340,7 +340,10 @@ than one worker are split into first-party composite actions:
   supervision, and retry policy shared by Rust, musl, and shell prerequisites.
 - `.github/actions/shell-ci-prereqs/` owns shell-CI pre-checkout OS package
   installation. It is split into profile packages, checkrun prereqs, and the
-  exact dotfiles bootstrap package list.
+  exact dotfiles bootstrap package list. The opt-in `tmux-floor` profile
+  gives every leg a tmux at least `TMUX_FLOOR_VERSION` (in `lib.sh`): the
+  distribution's package, except on CentOS Stream, whose tmux is older than
+  the floor, so that leg builds the checksum-pinned floor release and tests it.
 - `.github/actions/shellcheck-inventory/` validates each caller's reviewed
   program/fixture inventory and runs ShellCheck without guessing which fixture
   fragments are standalone programs.

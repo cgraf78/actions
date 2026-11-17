@@ -665,7 +665,9 @@ contracts() {
   check '.jobs.shell-smoke.with.termux-command | contains("bash test/release-installer-termux-test --require-termux")' test.yml
   check '.jobs.shell-smoke.with.termux-command | contains("bash test/consumer-installer-canary run .termux-ci/installer-canary")' test.yml
   check '.jobs.shell-smoke.with."termux-host-command" | contains("bash test/consumer-installer-canary prepare .termux-ci/installer-canary")' test.yml
-  check '.jobs.shell-smoke.with.profiles == "base,procps,python"' test.yml
+  check '.jobs.shell-smoke.with.profiles == "base,procps,python,tmux-floor"' test.yml
+  # Every platform leg runs the live tmux floor check; CentOS builds the floor.
+  check '.jobs.shell-smoke.with.test-command | contains("sh test/tmux-floor-check")' test.yml
   check '.jobs.shell-smoke.with.termux-profiles == "base,procps"' test.yml
   check '.jobs.shell-smoke.with.test-command | contains("bash test/checkout-installer-test")' test.yml
   check '.jobs.shell-smoke.with.test-command | contains("python3 -c '\''import tomllib'\''")' test.yml
