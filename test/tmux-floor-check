@@ -1,0 +1,47 @@
+#!/bin/sh
+# tmux-floor-check - the tmux-floor profile gives every leg a supported tmux.
+#
+# CI_TMUX_FLOOR, which the profile exports, names the floor in
+# shell-ci-prereqs/lib.sh, and the tmux on PATH is at least that floor. Where
+# the profile built the floor, CI_TMUX_FLOOR_EXACT=1, and tmux is exactly it.
+# Versions read as everywhere else: master and openbsd-* are newer than any
+# release, one leading next- is ignored, the leading MAJOR.MINOR compares, and
+# anything unreadable counts as newest.
+set -eu
+
+REPO_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+# shellcheck source=.github/actions/shell-ci-prereqs/lib.sh
+. "$REPO_ROOT/.github/actions/shell-ci-prereqs/lib.sh"
+
+fail() {
+  printf 'not ok - %s\n' "$1" >&2
+  exit 1
+}
+
+# "MAJOR MINOR", or nothing for a build newer than any release.
+major_minor() {
+  case $1 in master | openbsd-*) return 0 ;; esac
+  printf '%s\n' "${1#next-}" | sed -n 's/^\([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2/p'
+}
+
+[ -n "${CI_TMUX_FLOOR-}" ] || fail 'CI_TMUX_FLOOR is not set'
+[ "$CI_TMUX_FLOOR" = "$TMUX_FLOOR_VERSION" ] ||
+  fail "CI_TMUX_FLOOR is <$CI_TMUX_FLOOR>, not $TMUX_FLOOR_VERSION"
+reported=$(tmux -V) || fail 'tmux is not on PATH'
+version=${reported#tmux }
+if [ "${CI_TMUX_FLOOR_EXACT-}" = 1 ]; then
+  [ "$version" = "$TMUX_FLOOR_VERSION" ] ||
+    fail "this leg built tmux $TMUX_FLOOR_VERSION, but runs tmux $version"
+fi
+# shellcheck disable=SC2046 # Split into the two numbers.
+set -- $(major_minor "$version")
+if [ $# -eq 2 ]; then
+  have_major=$1 have_minor=$2
+  # shellcheck disable=SC2046 # Split into the two numbers.
+  set -- $(major_minor "$TMUX_FLOOR_VERSION")
+  if [ "$have_major" -lt "$1" ] ||
+    { [ "$have_major" -eq "$1" ] && [ "$have_minor" -lt "$2" ]; }; then
+    fail "tmux $version is below the floor $TMUX_FLOOR_VERSION"
+  fi
+fi
+printf 'ok - tmux %s meets the floor %s\n' "$version" "$TMUX_FLOOR_VERSION"

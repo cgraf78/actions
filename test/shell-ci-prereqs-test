@@ -25,6 +25,18 @@ ensure_lua_command() {
   :
 }
 
+floor_tmux_calls=0
+# shellcheck disable=SC2329 # The tmux-floor profile invokes this test seam indirectly.
+install_floor_tmux() {
+  floor_tmux_calls=$((floor_tmux_calls + 1))
+}
+
+floor_exports=0
+# shellcheck disable=SC2329 # The tmux-floor profile invokes this test seam indirectly.
+export_tmux_floor() {
+  floor_exports=$((floor_exports + 1))
+}
+
 pinned_shellcheck_calls=0
 install_pinned_shellcheck() {
   pinned_shellcheck_calls=$((pinned_shellcheck_calls + 1))
@@ -149,6 +161,72 @@ assert_eq python3.11 "$dnf_pkgs" \
   'CentOS Python profile provides the supported runtime floor'
 
 printf 'ok - CentOS Python profile selects a tomllib-capable runtime\n'
+
+# The plain tmux profile keeps every distribution's package, CentOS Stream's
+# 3.2a included: its other consumers rely on that.
+export PROFILES=tmux
+floor_tmux_calls=0 floor_exports=0
+install_profile_prereqs
+assert_eq tmux "$dnf_pkgs" 'CentOS tmux profile keeps the distribution tmux'
+assert_eq 0 "$floor_tmux_calls" 'CentOS tmux profile builds no floor tmux'
+assert_eq 0 "$floor_exports" 'the tmux profile names no floor'
+
+# tmux-floor builds the floor where the distribution's tmux is older, and only
+# there, and names the floor on every leg.
+for profiles in tmux-floor tmux,tmux-floor; do
+  export PROFILES=$profiles
+  floor_tmux_calls=0 floor_exports=0
+  install_profile_prereqs
+  assert_eq "$TMUX_FLOOR_BUILD_PKGS" "$dnf_pkgs" \
+    "CentOS $profiles installs the floor build dependencies, not tmux"
+  assert_eq 1 "$floor_tmux_calls" "CentOS $profiles builds the floor tmux"
+  assert_eq 1 "$floor_exports" "CentOS $profiles names the floor"
+done
+export PROFILES=tmux-floor
+for matrix in Fedora Debian Ubuntu Arch Alpine macOS WSL; do
+  export MATRIX_NAME=$matrix
+  floor_tmux_calls=0 floor_exports=0
+  install_profile_prereqs
+  assert_eq 0 "$floor_tmux_calls" "$matrix tmux-floor builds no floor tmux"
+  assert_eq 1 "$floor_exports" "$matrix tmux-floor names the floor"
+  assert_eq tmux "$dnf_pkgs" "$matrix tmux-floor keeps the distribution package"
+done
+case $TMUX_FLOOR_VERSION in
+  [0-9]*.[0-9]*) ;;
+  *)
+    printf 'not ok - tmux floor version <%s> is not a release\n' "$TMUX_FLOOR_VERSION" >&2
+    exit 1
+    ;;
+esac
+case $TMUX_FLOOR_SHA256 in
+  *[!0-9a-f]*)
+    printf 'not ok - tmux floor checksum is not hex\n' >&2
+    exit 1
+    ;;
+esac
+assert_eq 64 "${#TMUX_FLOOR_SHA256}" 'tmux floor checksum is a SHA-256'
+
+printf 'ok - only tmux-floor on CentOS builds the floor tmux\n'
+
+# The real export names the floor everywhere, and marks the leg that built it.
+# A subshell keeps the test seams above in place for the checks below.
+floor_env=$(mktemp)
+for matrix in 'CentOS Stream' Debian; do
+  : >"$floor_env"
+  (
+    # shellcheck source=.github/actions/shell-ci-prereqs/lib.sh
+    . "$PREREQS_DIR/lib.sh"
+    MATRIX_NAME=$matrix GITHUB_ENV=$floor_env export_tmux_floor
+  )
+  # shellcheck disable=SC2031 # The subshell re-sources the same value.
+  expected="CI_TMUX_FLOOR=$TMUX_FLOOR_VERSION"
+  [ "$matrix" = Debian ] || expected="$expected
+CI_TMUX_FLOOR_EXACT=1"
+  assert_eq "$expected" "$(cat "$floor_env")" "$matrix tmux-floor environment"
+done
+rm -f "$floor_env"
+
+printf 'ok - tmux-floor names its floor and marks the leg that built it\n'
 
 export MATRIX_NAME=Ubuntu
 export PROFILES=shellcheck

@@ -268,7 +268,7 @@ jobs:
           has_profile zsh && packages+=(zsh)
           has_profile lua && packages+=(lua54)
           has_profile neovim && packages+=(neovim)
-          has_profile tmux && packages+=(tmux)
+          { has_profile tmux || has_profile tmux-floor; } && packages+=(tmux)
           has_profile openssh-netcat-lsof &&
             packages+=(openssh netcat-openbsd lsof)
           has_profile procps && packages+=(procps)
