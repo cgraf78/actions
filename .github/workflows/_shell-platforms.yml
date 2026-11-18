@@ -11,6 +11,11 @@ name: Shell Platforms
 on:
   workflow_call:
     inputs:
+      linux-runner:
+        description: Optional JSON runner label or label array. Empty preserves hosted defaults.
+        required: false
+        type: string
+        default: ""
       force-dotfiles-update:
         description: Refresh the shdeps bootstrap before dotfiles dependency resolution.
         required: false
@@ -54,10 +59,10 @@ permissions:
 
 jobs:
   select-platforms:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.linux-runner || '"ubuntu-latest"') }}
     timeout-minutes: 5
     outputs:
-      matrix: ${{ steps.platforms.outputs.matrix }}
+      matrix: ${{ steps.runners.outputs.matrix }}
     steps:
       - name: Select platform matrix
         id: platforms
@@ -67,6 +72,36 @@ jobs:
         uses: cgraf78/actions/.github/actions/platform-matrix@5d1d6938d6fdb972bedddde95175ef29d4cffa92
         with:
           matrix-set: ${{ inputs.matrix-set }}
+
+      - name: Route Linux jobs
+        id: runners
+        shell: bash
+        env:
+          LINUX_RUNNER: ${{ inputs.linux-runner }}
+          PLATFORM_MATRIX: ${{ steps.platforms.outputs.matrix }}
+        run: |
+          set -euo pipefail
+          matrix=$PLATFORM_MATRIX
+          if [[ -n $LINUX_RUNNER ]]; then
+            # Accept GitHub's two label forms, but reject empty or malformed
+            # selectors rather than silently dropping or rerouting coverage.
+            if ! runner=$(jq -cse '
+              def valid_label: type == "string" and test("\\S");
+              if length != 1 then error("expected one JSON runner selector") else .[0] end |
+              if valid_label or (type == "array" and length > 0 and all(.[]; valid_label))
+              then . else error("expected a runner label or nonempty label array") end
+            ' <<<"$LINUX_RUNNER"); then
+              echo 'linux-runner must be a JSON label string or nonempty array of nonblank strings' >&2
+              exit 2
+            fi
+            # The shared matrix remains the platform source of truth. Only
+            # change Linux execution placement; retain every image and macOS.
+            matrix=$(jq -c --argjson runner "$runner" '
+              .include |= map(if (.runner | startswith("ubuntu-"))
+                then .runner = $runner else . end)
+            ' <<<"$matrix")
+          fi
+          printf 'matrix=%s\n' "$matrix" >>"$GITHUB_OUTPUT"
 
   platform:
     needs: select-platforms

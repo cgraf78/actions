@@ -85,6 +85,116 @@ check_platform_matrices() {
   done
 }
 
+# Exercise the published selection script against the actual full matrix. A
+# runner override changes placement only: dropping or rewriting a platform
+# would otherwise silently weaken a caller's coverage.
+check_linux_runner_routing() {
+  local action_script route_script tmp baseline matrix override invalid output
+
+  action_script=$(yq -r '.runs.steps[] | select(.id == "select").run' \
+    "$root/.github/actions/platform-matrix/action.yml")
+  route_script=$(yq -r '.jobs.select-platforms.steps[] | select(.id == "runners").run' \
+    "$root/.github/workflows/_shell-platforms.yml")
+  [[ -n $route_script ]] || {
+    echo 'workflow contract failed: missing Linux runner routing' >&2
+    return 1
+  }
+  tmp=$(mktemp -d)
+  trap 'rm -rf -- "$tmp"' RETURN
+  MATRIX_SET=full GITHUB_OUTPUT=$tmp/base bash -c "$action_script"
+  baseline=$(sed -n 's/^matrix=//p' "$tmp/base")
+
+  PLATFORM_MATRIX=$baseline LINUX_RUNNER='' GITHUB_OUTPUT=$tmp/default \
+    bash -c "$route_script"
+  matrix=$(sed -n 's/^matrix=//p' "$tmp/default")
+  [[ $matrix == "$baseline" ]] || {
+    echo 'workflow contract failed: default Linux routing changed the matrix' >&2
+    return 1
+  }
+
+  for override in '"custom-linux"' '["self-hosted","Linux","X64","ci"]'; do
+    output=$tmp/routed
+    : >"$output"
+    PLATFORM_MATRIX=$baseline LINUX_RUNNER=$override GITHUB_OUTPUT=$output \
+      bash -c "$route_script"
+    matrix=$(sed -n 's/^matrix=//p' "$output")
+    jq -e --argjson base "$baseline" --argjson runner "$override" '
+      (.include | length) == ($base.include | length) and
+      .include == ($base.include | map(
+        if .name == "macOS" then . else .runner = $runner end))
+    ' <<<"$matrix" >/dev/null || {
+      echo 'workflow contract failed: Linux routing changed platform coverage' >&2
+      return 1
+    }
+  done
+
+  for invalid in 'not json' 'null' 'true' '1' '{}' '[]' '""' '"  "' \
+    '["self-hosted",null]' '["self-hosted",1]' '["self-hosted",""]' \
+    '["self-hosted","  "]' '"first" "second"'; do
+    output=$tmp/invalid
+    : >"$output"
+    if PLATFORM_MATRIX=$baseline LINUX_RUNNER=$invalid GITHUB_OUTPUT=$output \
+      bash -c "$route_script" >/dev/null 2>&1; then
+      printf 'workflow contract failed: invalid linux-runner accepted: %s\n' "$invalid" >&2
+      return 1
+    fi
+    [[ ! -s $output ]] || {
+      echo 'workflow contract failed: invalid Linux routing published a matrix' >&2
+      return 1
+    }
+  done
+}
+
+# Stub only device permissions and udev so the real workflow control flow can
+# be tested without changing host device rules or requiring KVM hardware.
+check_kvm_setup() {
+  local script tmp harness rc
+  script=$(yq -r '.jobs.termux.steps[] | select(.name == "Enable KVM acceleration").run' \
+    "$root/.github/workflows/_termux-ci.yml")
+  tmp=$(mktemp -d)
+  trap 'rm -rf -- "$tmp"' RETURN
+  # Expanded in the child shell after the isolated device stubs are installed.
+  # shellcheck disable=SC2016
+  harness='
+    udevadm() { return 0; }
+    test() {
+      case "$1 $2" in
+        "-r /dev/kvm") [[ $KVM_TEST_READ == 1 ]] ;;
+        "-w /dev/kvm") [[ $KVM_TEST_WRITE == 1 ]] ;;
+        *) builtin test "$@" ;;
+      esac
+    }
+    sudo() {
+      printf "%s\n" "$*" >>"$KVM_TEST_EVENTS"
+      if [[ $1 == tee ]]; then cat >/dev/null; fi
+      if [[ $* == "udevadm trigger --name-match=kvm" && $KVM_TEST_FIX == 1 ]]; then
+        KVM_TEST_READ=1
+        KVM_TEST_WRITE=1
+      fi
+      return 0
+    }
+  '
+  KVM_TEST_READ=1 KVM_TEST_WRITE=1 KVM_TEST_FIX=0 KVM_TEST_EVENTS=$tmp/ready \
+    bash -e -c "$harness"$'\n'"$script" >/dev/null
+  [[ ! -e $tmp/ready ]] || {
+    echo 'workflow contract failed: accessible KVM unnecessarily invokes udev' >&2
+    return 1
+  }
+  KVM_TEST_READ=1 KVM_TEST_WRITE=0 KVM_TEST_FIX=1 KVM_TEST_EVENTS=$tmp/fixed \
+    bash -e -c "$harness"$'\n'"$script" >/dev/null
+  [[ -s $tmp/fixed ]] || {
+    echo 'workflow contract failed: read-only KVM skipped the permissions fallback' >&2
+    return 1
+  }
+  rc=0
+  KVM_TEST_READ=0 KVM_TEST_WRITE=0 KVM_TEST_FIX=0 KVM_TEST_EVENTS=$tmp/denied \
+    bash -e -c "$harness"$'\n'"$script" >"$tmp/failure" 2>&1 || rc=$?
+  if [[ $rc -eq 0 ]] || ! grep -Fq '/dev/kvm must be readable and writable' "$tmp/failure"; then
+    echo 'workflow contract failed: inaccessible KVM did not fail with a useful error' >&2
+    return 1
+  fi
+}
+
 # Rust test shards cross every platform with caller-named commands. Execute the
 # inline selection script directly so both the unsharded pass-through (every
 # existing caller) and the strict validation are behavior-tested, not just
@@ -225,6 +335,25 @@ shell_platform_test_window=$((shell_platform_job_window - \
 # neither language should be expanded by this test process.
 # shellcheck disable=SC2016
 contracts() {
+  local linux_default linux_latest workflow
+  linux_default="\${{ fromJSON(inputs.linux-runner || '\"ubuntu-24.04\"') }}"
+  linux_latest="\${{ fromJSON(inputs.linux-runner || '\"ubuntu-latest\"') }}"
+  for workflow in shell-ci.yml termux-ci.yml _shell-platforms.yml _termux-ci.yml dependabot-automerge.yml; do
+    check '.on.workflow_call.inputs.linux-runner.default == ""' "$workflow"
+    check '.on.workflow_call.inputs.linux-runner.required == false' "$workflow"
+    check '.on.workflow_call.inputs.linux-runner.type == "string"' "$workflow"
+  done
+  check '.jobs.platforms.with.linux-runner == "${{ inputs.linux-runner }}"' shell-ci.yml
+  check '.jobs.termux.with.linux-runner == "${{ inputs.linux-runner }}"' shell-ci.yml
+  check '.jobs.runtime.with.linux-runner == "${{ inputs.linux-runner }}"' termux-ci.yml
+  check ".jobs.required.runs-on == $(jq -Rn --arg value "$linux_default" '$value')" shell-ci.yml
+  check ".jobs.required.runs-on == $(jq -Rn --arg value "$linux_default" '$value')" termux-ci.yml
+  check ".jobs.enable.runs-on == $(jq -Rn --arg value "$linux_default" '$value')" dependabot-automerge.yml
+  check ".jobs.termux.runs-on == $(jq -Rn --arg value "$linux_default" '$value')" _termux-ci.yml
+  check ".jobs.select-platforms.runs-on == $(jq -Rn --arg value "$linux_latest" '$value')" _shell-platforms.yml
+  check '.jobs.select-platforms.outputs.matrix == "${{ steps.runners.outputs.matrix }}"' _shell-platforms.yml
+  check '.jobs.select-platforms.steps[] | select(.id == "runners").env.LINUX_RUNNER == "${{ inputs.linux-runner }}"' _shell-platforms.yml
+  check '.jobs.select-platforms.steps[] | select(.id == "runners").env.PLATFORM_MATRIX == "${{ steps.platforms.outputs.matrix }}"' _shell-platforms.yml
   local workflow
 
   # Third-party pins stay consistent but never absolute: Dependabot bumps
@@ -338,7 +467,7 @@ contracts() {
   check '.jobs.platforms.with.dotfiles-provider == "${{ inputs.dotfiles-provider }}"' shell-ci.yml
   check '.jobs.shellcheck.name == "ShellCheck"' shell-ci.yml
   check '.jobs.shellcheck.if == "${{ inputs.shellcheck-inventory-path != '"'"''"'"' }}"' shell-ci.yml
-  check '.jobs.shellcheck.runs-on == "ubuntu-24.04"' shell-ci.yml
+  check ".jobs.shellcheck.runs-on == $(jq -Rn --arg value "$linux_default" '$value')" shell-ci.yml
   check '.jobs.shellcheck.timeout-minutes == 25' shell-ci.yml
   check '.jobs.shellcheck.steps[] | select(.name == "Install ShellCheck prerequisites")."timeout-minutes" == 20' shell-ci.yml
   check ".jobs.shellcheck.steps[] | select(.name == \"Install ShellCheck prerequisites\").uses == \"cgraf78/actions/.github/actions/shell-ci-prereqs@$actions_lock\"" shell-ci.yml
@@ -873,6 +1002,8 @@ contracts
 check_android_sdk_packages
 check_no_literal_infra_markers
 check_platform_matrices
+check_linux_runner_routing
+check_kvm_setup
 check_rust_test_shards
 check_checkout_initial_branch
 printf 'workflow-contract-test: ok\n'

@@ -2,6 +2,12 @@ name: Dependabot Auto-merge
 
 on:
   workflow_call:
+    inputs:
+      linux-runner:
+        description: Optional JSON runner label or label array. Empty preserves the hosted default.
+        required: false
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -16,7 +22,7 @@ jobs:
       github.event_name == 'pull_request_target' &&
       github.event.pull_request.user.login == 'dependabot[bot]' &&
       github.event.pull_request.draft == false
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(inputs.linux-runner || '"ubuntu-24.04"') }}
     timeout-minutes: 5
     permissions:
       contents: write
