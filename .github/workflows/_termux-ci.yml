@@ -156,6 +156,9 @@ jobs:
               sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
             sudo udevadm control --reload-rules
             sudo udevadm trigger --name-match=kvm
+            # Trigger queues events; the permissions are not guaranteed until
+            # udev has applied the rule. Keep that synchronization bounded.
+            sudo udevadm settle --timeout=10
           fi
           if ! test -r /dev/kvm || ! test -w /dev/kvm; then
             echo '/dev/kvm must be readable and writable; provision KVM access on the runner' >&2

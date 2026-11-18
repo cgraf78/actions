@@ -156,6 +156,7 @@ check_kvm_setup() {
   # Expanded in the child shell after the isolated device stubs are installed.
   # shellcheck disable=SC2016
   harness='
+    KVM_TEST_PENDING=0
     udevadm() { return 0; }
     test() {
       case "$1 $2" in
@@ -167,9 +168,19 @@ check_kvm_setup() {
     sudo() {
       printf "%s\n" "$*" >>"$KVM_TEST_EVENTS"
       if [[ $1 == tee ]]; then cat >/dev/null; fi
-      if [[ $* == "udevadm trigger --name-match=kvm" && $KVM_TEST_FIX == 1 ]]; then
+      if [[ $* == "udevadm trigger --name-match=kvm" ]]; then
+        KVM_TEST_PENDING=1
+      fi
+      if [[ $* == "udevadm settle --timeout=10" && $KVM_TEST_PENDING == 1 && $KVM_TEST_FIX == 1 ]]; then
         KVM_TEST_READ=1
         KVM_TEST_WRITE=1
+      fi
+      if [[ $* == "udevadm settle --timeout=10" && $KVM_TEST_FIX == timeout ]]; then
+        # A different queued event can time out even after KVM is accessible.
+        # Prove that the settle failure itself is preserved.
+        KVM_TEST_READ=1
+        KVM_TEST_WRITE=1
+        return 1
       fi
       return 0
     }
@@ -184,6 +195,17 @@ check_kvm_setup() {
     bash -e -c "$harness"$'\n'"$script" >/dev/null
   [[ -s $tmp/fixed ]] || {
     echo 'workflow contract failed: read-only KVM skipped the permissions fallback' >&2
+    return 1
+  }
+  grep -Fxq 'udevadm settle --timeout=10' "$tmp/fixed" || {
+    echo 'workflow contract failed: KVM permissions did not wait for bounded udev settlement' >&2
+    return 1
+  }
+  rc=0
+  KVM_TEST_READ=0 KVM_TEST_WRITE=0 KVM_TEST_FIX=timeout KVM_TEST_EVENTS=$tmp/timeout \
+    bash -e -c "$harness"$'\n'"$script" >"$tmp/timeout-failure" 2>&1 || rc=$?
+  [[ $rc -ne 0 ]] || {
+    echo 'workflow contract failed: udev settlement timeout was ignored' >&2
     return 1
   }
   rc=0
