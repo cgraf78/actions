@@ -2528,18 +2528,21 @@ lock_race_ready="$tmp/lock-race.ready"
 blocking_release="$tmp/lock-race.release"
 lock_race_bin="$tmp/lock-race-bin"
 lock_race_sync="$tmp/lock-race-sync"
+lock_race_timeout="$lock_race_sync/timeout"
 lock_race_real_mv=$(PATH="$platform_tool_path" command -v mv)
 mkdir -p "$lock_race_bin" "$lock_race_sync"
 cat >"$lock_race_bin/mv" <<'EOF'
 #!/usr/bin/env bash
 
 set -euo pipefail
+timeout_marker=${CHECKOUT_TEST_RACE_TIMEOUT:?}
 
 wait_for_path() {
   local path=$1 description=$2 started=$SECONDS
 
   while [[ ! -e "$path" ]]; do
     if [[ $((SECONDS - started)) -ge 10 ]]; then
+      : >"$timeout_marker"
       printf 'mv fixture: timed out waiting for %s\n' "$description" >&2
       return 1
     fi
@@ -2552,6 +2555,7 @@ wait_for_absent_path() {
 
   while [[ -e "$path" || -L "$path" ]]; do
     if [[ $((SECONDS - started)) -ge 10 ]]; then
+      : >"$timeout_marker"
       printf 'mv fixture: timed out waiting for %s\n' "$description" >&2
       return 1
     fi
@@ -2560,10 +2564,20 @@ wait_for_absent_path() {
 }
 
 wait_for_absent_glob() {
-  local pattern=$1 description=$2 started=$SECONDS
+  local pattern=$1 description=$2 excluded=$3 started=$SECONDS candidate pending
 
-  while compgen -G "$pattern" >/dev/null; do
+  # The losing wrapper's empty claim is cleaned only after it returns. Waiting
+  # for that claim would deadlock instead of synchronizing with the winner.
+  while :; do
+    pending=0
+    while IFS= read -r candidate; do
+      [[ "$candidate" == "$excluded" ]] && continue
+      pending=1
+      break
+    done < <(compgen -G "$pattern" || true)
+    [[ "$pending" -eq 0 ]] && return 0
     if [[ $((SECONDS - started)) -ge 10 ]]; then
+      : >"$timeout_marker"
       printf 'mv fixture: timed out waiting for %s\n' "$description" >&2
       return 1
     fi
@@ -2602,7 +2616,7 @@ case ${1:-}:$2 in
     wait_for_absent_path "${CHECKOUT_TEST_LOCK_CANONICAL:?}" \
       'the winning generation to release'
     wait_for_absent_glob "${CHECKOUT_TEST_LOCK_CLAIMS:?}" \
-      'the winning generation to clean its claim'
+      'the winning generation to clean its claim' "${2%/*}"
     exit "$status"
     ;;
 esac
@@ -2614,6 +2628,7 @@ CHECKOUT_TEST_LOG="$tmp/lock-race-one.log" \
   PATH="$lock_race_bin:$platform_tool_path" \
   CHECKOUT_TEST_REAL_MV="$lock_race_real_mv" \
   CHECKOUT_TEST_RACE_SYNC="$lock_race_sync" \
+  CHECKOUT_TEST_RACE_TIMEOUT="$lock_race_timeout" \
   CHECKOUT_TEST_LOCK_CANONICAL="$lock_race_path" \
   CHECKOUT_TEST_LOCK_CLAIMS="$lock_race_parent/.example-tool.install.lock.claim.*" \
   CHECKOUT_TEST_BLOCK_READY="$lock_race_ready" \
@@ -2628,6 +2643,7 @@ CHECKOUT_TEST_LOG="$tmp/lock-race-two.log" \
   PATH="$lock_race_bin:$platform_tool_path" \
   CHECKOUT_TEST_REAL_MV="$lock_race_real_mv" \
   CHECKOUT_TEST_RACE_SYNC="$lock_race_sync" \
+  CHECKOUT_TEST_RACE_TIMEOUT="$lock_race_timeout" \
   CHECKOUT_TEST_LOCK_CANONICAL="$lock_race_path" \
   CHECKOUT_TEST_LOCK_CLAIMS="$lock_race_parent/.example-tool.install.lock.claim.*" \
   CHECKOUT_TEST_BLOCK_READY="$lock_race_ready" \
@@ -2667,6 +2683,13 @@ wait "$lock_wait_pid" || {
 }
 lock_wait_pid=
 blocking_release=
+# Installer recovery can absorb a failed mv. A fixture synchronization timeout
+# must still fail this test instead of being hidden by that valid recovery.
+if [[ -e "$lock_race_timeout" ]]; then
+  sed -n '1,120p' "$tmp/lock-race-one.out" >&2
+  sed -n '1,120p' "$tmp/lock-race-two.out" >&2
+  fail "competing stale-lock fixture timed out internally"
+fi
 grep -Fqx 'checkout_lock_kind=v1' "$tmp/lock-race-one.log" ||
   fail "first competing writer did not acquire v1"
 grep -Fqx 'checkout_lock_kind=v1' "$tmp/lock-race-two.log" ||
