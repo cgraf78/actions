@@ -3,6 +3,11 @@ name: Shell CI
 on:
   workflow_call:
     inputs:
+      linux-runner:
+        description: Optional JSON runner label or label array for all Linux jobs. Empty preserves hosted defaults.
+        required: false
+        type: string
+        default: ""
       concurrency-scope:
         description: Stable identity that distinguishes multiple shell CI calls in one caller workflow.
         required: false
@@ -91,6 +96,7 @@ jobs:
     secrets:
       DEPENDENCY_GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
     with:
+      linux-runner: ${{ inputs.linux-runner }}
       dotfiles-provider: ${{ inputs.dotfiles-provider }}
       dotfiles-shdeps-update-policy: ${{ inputs.dotfiles-shdeps-update-policy }}
       force-dotfiles-update: ${{ inputs.force-dotfiles-update }}
@@ -102,7 +108,7 @@ jobs:
   shellcheck:
     name: ShellCheck
     if: ${{ inputs.shellcheck-inventory-path != '' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(inputs.linux-runner || '"ubuntu-24.04"') }}
     # This path only installs prerequisites, checks out the caller, and runs
     # ShellCheck. A cap catches a silent prerequisite download without letting
     # it hold the required aggregate indefinitely.
@@ -140,6 +146,7 @@ jobs:
     secrets:
       DEPENDENCY_GH_TOKEN: ${{ secrets.DEPENDENCY_GH_TOKEN }}
     with:
+      linux-runner: ${{ inputs.linux-runner }}
       command: ${{ inputs.termux-command != '' && inputs.termux-command || inputs.test-command }}
       dotfiles-shdeps-update-policy: ${{ inputs.dotfiles-shdeps-update-policy }}
       host-command: ${{ inputs.termux-host-command }}
@@ -150,7 +157,7 @@ jobs:
     name: Required
     if: ${{ always() }}
     needs: [platforms, shellcheck, termux]
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(inputs.linux-runner || '"ubuntu-24.04"') }}
     env:
       PLATFORMS_RESULT: ${{ needs.platforms.result }}
       SHELLCHECK_ENABLED: ${{ inputs.shellcheck-inventory-path != '' }}

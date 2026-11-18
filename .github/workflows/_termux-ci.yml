@@ -9,6 +9,11 @@ name: Termux Runtime
 on:
   workflow_call:
     inputs:
+      linux-runner:
+        description: Optional JSON runner label or label array. Empty preserves the hosted default.
+        required: false
+        type: string
+        default: ""
       command:
         description: Bash command to execute inside the Termux app sandbox.
         required: true
@@ -54,7 +59,7 @@ permissions:
 jobs:
   termux:
     name: Android / Termux x86_64
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(inputs.linux-runner || '"ubuntu-24.04"') }}
     # Inner limits reserve at most 690s for SDK package installs (three 190s
     # attempts plus 120s of backoff), 600s for boot, and 2304s for sequential
     # ADB work, including the 1200s caller command, the bounded package-service
@@ -125,10 +130,22 @@ jobs:
       - name: Enable KVM acceleration
         shell: bash
         run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
-            sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
+          set -euo pipefail
+          # Container runners receive device permissions from their owner and
+          # usually have no udev daemon. Do not require it for an accessible KVM.
+          if test -r /dev/kvm && test -w /dev/kvm; then
+            exit 0
+          fi
+          if command -v udevadm >/dev/null 2>&1; then
+            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+              sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+            sudo udevadm control --reload-rules
+            sudo udevadm trigger --name-match=kvm
+          fi
+          if ! test -r /dev/kvm || ! test -w /dev/kvm; then
+            echo '/dev/kvm must be readable and writable; provision KVM access on the runner' >&2
+            exit 1
+          fi
 
       # The emulator runner installs these itself with one unretried attempt
       # per package group, and a truncated archive download fails the job.

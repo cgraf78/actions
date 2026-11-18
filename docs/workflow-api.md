@@ -66,6 +66,10 @@ holds the PR until required checks pass. Callers must enable repository
 auto-merge and grant the reusable job `contents: write` plus
 `pull-requests: write`; keep every other workflow permission empty.
 
+The optional `linux-runner` input accepts a JSON runner label string or label
+array, for example `'["self-hosted","Linux","X64","shell-ci"]'`. Empty retains
+`ubuntu-24.04`. A custom runner must provide Bash and the `gh` CLI.
+
 An example caller is available at `examples/dependabot-automerge.yml`. Use
 `examples/dependabot.yml` for GitHub Actions updates, or
 `examples/dependabot-rust.yml` for a Rust repository that should also receive
@@ -389,11 +393,27 @@ jobs:
 | `shellcheck-inventory-path` | `""` | Repository-relative typed inventory for one Ubuntu ShellCheck gate. Empty disables it. |
 | `shellcheck-exclude-codes` | `""` | Validated comma-separated ShellCheck codes excluded from the shared lint invocation. |
 | `matrix-set`          | `auto`   | Platform matrix policy. See [Matrix Sets](#matrix-sets).                           |
+| `linux-runner`        | `""`     | JSON runner label string or label array for every Linux job; empty retains hosted defaults. |
 | `setup`               | `none`   | Named setup mode. Supported values are `none`, `checkrun`, and `dotfiles`.         |
 | `test-command`        | required | Caller-owned Bash command run on every conventional platform and, by default, Termux. |
 | `termux-command`      | `""`     | Android-specific command override. Empty reuses `test-command`; it never skips CI. |
 | `termux-host-command` | `""`     | Optional Ubuntu-host preparation for artifacts copied into Termux.                 |
 | `termux-profiles`     | `""`     | Android override. Empty reuses `profiles`, then falls back to `runtime`.            |
+
+For example, `linux-runner: '["self-hosted","Linux","X64","shell-ci"]'`
+routes the selector, conventional Linux platforms, ShellCheck, Termux, and
+aggregate jobs to matching runners. The macOS runner, selected matrix entries,
+and distribution container images are unchanged. An empty input preserves each
+job's original hosted runner label. A nonempty input must contain one JSON
+string or a nonempty array of nonblank label strings.
+
+Custom runners must supply an Ubuntu-compatible environment, Bash, Git, jq,
+Docker for distribution containers, and the Java/Android SDK tools needed by
+the emulator. Termux requires readable and writable `/dev/kvm`; a container
+with that access already configured does not need a udev daemon. The WSL
+simulation requires permission to bind-mount `/proc/version`. Use clean runner
+environments between jobs so that package installs and that simulated kernel
+identity cannot leak into subsequent platforms.
 
 Supported generic profiles are `base`, `jq`, `python`, `zsh`, `lua`, `neovim`,
 `tmux`, `tmux-floor`, `openssh-netcat-lsof`, `procps`, `cron`, `fd`, `ripgrep`,
@@ -669,6 +689,7 @@ committed provider configuration.
 | `rust-toolchain`    | `""`     | Optional toolchain enabling the fixed x86_64 Android NDK host build.   |
 | `setup`             | `none`   | Shell setup mode composed with the requested prerequisite profiles.   |
 | `working-directory` | `.`      | Checkout-relative directory used by the host and Termux commands.     |
+| `linux-runner`      | `""`     | JSON runner label string or label array for the runtime and required jobs; empty retains hosted defaults. |
 
 ### Secrets
 

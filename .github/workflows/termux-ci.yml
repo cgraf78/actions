@@ -9,6 +9,11 @@ name: Termux CI
 on:
   workflow_call:
     inputs:
+      linux-runner:
+        description: Optional JSON runner label or label array for all Linux jobs. Empty preserves hosted defaults.
+        required: false
+        type: string
+        default: ""
       command:
         description: Bash command to execute inside the Termux app sandbox.
         required: true
@@ -56,6 +61,7 @@ jobs:
     name: Runtime
     uses: ./.github/workflows/_termux-ci.yml
     with:
+      linux-runner: ${{ inputs.linux-runner }}
       command: ${{ inputs.command }}
       dotfiles-shdeps-update-policy: ${{ inputs.dotfiles-shdeps-update-policy }}
       host-command: ${{ inputs.host-command }}
@@ -70,7 +76,7 @@ jobs:
     name: Required
     if: ${{ always() }}
     needs: runtime
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(inputs.linux-runner || '"ubuntu-24.04"') }}
     env:
       RUNTIME_RESULT: ${{ needs.runtime.result }}
     steps:
