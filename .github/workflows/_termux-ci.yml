@@ -18,6 +18,11 @@ on:
         description: Bash command to execute inside the Termux app sandbox.
         required: true
         type: string
+      cores:
+        description: Positive number of virtual CPU cores assigned to the Android emulator.
+        required: false
+        type: number
+        default: 2
       dotfiles-shdeps-update-policy:
         description: Dotfiles Shdeps policy override. Supported values are config, pinned, and latest.
         required: false
@@ -68,6 +73,16 @@ jobs:
     # checkout, downloads, host setup, and runner overhead.
     timeout-minutes: 67
     steps:
+      - name: Validate emulator CPU allocation
+        shell: bash
+        env:
+          EMULATOR_CORES: ${{ inputs.cores }}
+        run: |
+          if [[ ! $EMULATOR_CORES =~ ^[1-9][0-9]*$ ]]; then
+            echo 'cores must be a positive integer' >&2
+            exit 2
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         # Name checkout's throwaway initial branch so Git skips its hint.
         env:
@@ -141,6 +156,9 @@ jobs:
               sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
             sudo udevadm control --reload-rules
             sudo udevadm trigger --name-match=kvm
+            # Trigger queues events; the permissions are not guaranteed until
+            # udev has applied the rule. Keep that synchronization bounded.
+            sudo udevadm settle --timeout=10
           fi
           if ! test -r /dev/kvm || ! test -w /dev/kvm; then
             echo '/dev/kvm must be readable and writable; provision KVM access on the runner' >&2
@@ -396,8 +414,9 @@ jobs:
             cat <<'SCRIPT'
           source "$TERMUX_ADB_HELPER"
           # The host copies of the tokens go on every exit path, including a
-          # failed copy into the sandbox.
-          trap 'rm -f "$RUNNER_TEMP/termux-ci-gh-token" "$RUNNER_TEMP/termux-ci-github-token"; termux_dump_crash_log 30' EXIT
+          # failed copy into the sandbox. Dump first so successful cleanup
+          # cannot hide the original status; a failed dump must not skip cleanup.
+          trap 'termux_dump_crash_log 30 || :; rm -f "$RUNNER_TEMP/termux-ci-gh-token" "$RUNNER_TEMP/termux-ci-github-token"' EXIT
           apk="$RUNNER_TEMP/termux.apk"
           echo "Waiting for the package manager service"
           if ! termux_wait_for_package_service 20 5 1; then
@@ -493,6 +512,7 @@ jobs:
           # asks GWP-ASan for 16-byte alignment.
           api-level: 31
           arch: x86_64
+          cores: ${{ inputs.cores }}
           target: default
           disable-animations: true
           emulator-boot-timeout: 600

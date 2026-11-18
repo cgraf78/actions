@@ -397,6 +397,7 @@ jobs:
 | `setup`               | `none`   | Named setup mode. Supported values are `none`, `checkrun`, and `dotfiles`.         |
 | `test-command`        | required | Caller-owned Bash command run on every conventional platform and, by default, Termux. |
 | `termux-command`      | `""`     | Android-specific command override. Empty reuses `test-command`; it never skips CI. |
+| `termux-cores`        | `2`      | Positive integer number of virtual CPU cores assigned to the Android emulator. |
 | `termux-host-command` | `""`     | Optional Ubuntu-host preparation for artifacts copied into Termux.                 |
 | `termux-profiles`     | `""`     | Android override. Empty reuses `profiles`, then falls back to `runtime`.            |
 
@@ -414,6 +415,12 @@ with that access already configured does not need a udev daemon. The WSL
 simulation requires permission to bind-mount `/proc/version`. Use clean runner
 environments between jobs so that package installs and that simulated kernel
 identity cannot leak into subsequent platforms.
+
+`termux-cores` changes only the emulator's CPU allocation. For example,
+`termux-cores: 4` allows a runner with enough CPU capacity to keep Termux's
+bootstrap within the existing bounded readiness checks. Omitting it retains
+two cores; Android API level, platform coverage, and timeout budgets do not
+change.
 
 Supported generic profiles are `base`, `jq`, `python`, `zsh`, `lua`, `neovim`,
 `tmux`, `tmux-floor`, `openssh-netcat-lsof`, `procps`, `cron`, `fd`, `ripgrep`,
@@ -670,6 +677,9 @@ seconds) in a collapsed group before the emulator shuts down, so a native
 crash arrives with its signal, abort message, and backtrace. The buffer also
 holds any system crashes since boot. The dump never changes the job's result,
 and boot, SDK, or AVD failures and cancelled jobs get none.
+The host failure trap captures diagnostics before token cleanup so successful
+cleanup cannot hide the failed command's status; cleanup still runs when the
+diagnostic command fails.
 
 For `setup: dotfiles`, the worker reads the checked-out client's cutover lock on
 the Ubuntu host, stages that exact standalone Dot engine, and installs it with
@@ -683,6 +693,7 @@ committed provider configuration.
 | Input               | Default  | Contract                                                              |
 | ------------------- | -------- | --------------------------------------------------------------------- |
 | `command`           | required | Bash command executed inside Termux.                                  |
+| `cores`             | `2`      | Positive integer number of virtual CPU cores assigned to the Android emulator. |
 | `dotfiles-shdeps-update-policy` | `config` | Dot policy override for `setup: dotfiles`; supports `config`, `pinned`, and `latest`. |
 | `host-command`      | `""`     | Optional command that prepares checkout artifacts on the Ubuntu host. |
 | `profiles`          | `runtime` | Termux profiles; `runtime` is lightweight, while `base` adds Git/curl. |

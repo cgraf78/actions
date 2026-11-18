@@ -156,6 +156,7 @@ check_kvm_setup() {
   # Expanded in the child shell after the isolated device stubs are installed.
   # shellcheck disable=SC2016
   harness='
+    KVM_TEST_PENDING=0
     udevadm() { return 0; }
     test() {
       case "$1 $2" in
@@ -167,9 +168,19 @@ check_kvm_setup() {
     sudo() {
       printf "%s\n" "$*" >>"$KVM_TEST_EVENTS"
       if [[ $1 == tee ]]; then cat >/dev/null; fi
-      if [[ $* == "udevadm trigger --name-match=kvm" && $KVM_TEST_FIX == 1 ]]; then
+      if [[ $* == "udevadm trigger --name-match=kvm" ]]; then
+        KVM_TEST_PENDING=1
+      fi
+      if [[ $* == "udevadm settle --timeout=10" && $KVM_TEST_PENDING == 1 && $KVM_TEST_FIX == 1 ]]; then
         KVM_TEST_READ=1
         KVM_TEST_WRITE=1
+      fi
+      if [[ $* == "udevadm settle --timeout=10" && $KVM_TEST_FIX == timeout ]]; then
+        # A different queued event can time out even after KVM is accessible.
+        # Prove that the settle failure itself is preserved.
+        KVM_TEST_READ=1
+        KVM_TEST_WRITE=1
+        return 1
       fi
       return 0
     }
@@ -186,6 +197,17 @@ check_kvm_setup() {
     echo 'workflow contract failed: read-only KVM skipped the permissions fallback' >&2
     return 1
   }
+  grep -Fxq 'udevadm settle --timeout=10' "$tmp/fixed" || {
+    echo 'workflow contract failed: KVM permissions did not wait for bounded udev settlement' >&2
+    return 1
+  }
+  rc=0
+  KVM_TEST_READ=0 KVM_TEST_WRITE=0 KVM_TEST_FIX=timeout KVM_TEST_EVENTS=$tmp/timeout \
+    bash -e -c "$harness"$'\n'"$script" >"$tmp/timeout-failure" 2>&1 || rc=$?
+  [[ $rc -ne 0 ]] || {
+    echo 'workflow contract failed: udev settlement timeout was ignored' >&2
+    return 1
+  }
   rc=0
   KVM_TEST_READ=0 KVM_TEST_WRITE=0 KVM_TEST_FIX=0 KVM_TEST_EVENTS=$tmp/denied \
     bash -e -c "$harness"$'\n'"$script" >"$tmp/failure" 2>&1 || rc=$?
@@ -193,6 +215,70 @@ check_kvm_setup() {
     echo 'workflow contract failed: inaccessible KVM did not fail with a useful error' >&2
     return 1
   fi
+}
+
+# Use the real generated host script's trap, rather than a helper-only trap:
+# successful token cleanup used to overwrite the failed script's exit status
+# before the crash logger could observe it.
+check_termux_host_cleanup() {
+  local script trap_line tmp result dump_result rc
+  script=$(yq -r '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run' \
+    "$root/.github/workflows/_termux-ci.yml")
+  trap_line=$(sed -n '/^trap /p' <<<"$script")
+  tmp=$(mktemp -d)
+  trap 'rm -rf -- "$tmp"' RETURN
+  for result in 0 7; do
+    for dump_result in 0 23; do
+      printf 'fixture\n' >"$tmp/termux-ci-gh-token"
+      printf 'fixture\n' >"$tmp/termux-ci-github-token"
+      : >"$tmp/calls"
+      rc=0
+      RUNNER_TEMP=$tmp DUMP_CALLS=$tmp/calls DUMP_RESULT=$dump_result \
+        bash -c '
+          set -euo pipefail
+          source "$1"
+          termux_adb() { printf "dump\n" >>"$DUMP_CALLS"; return "$DUMP_RESULT"; }
+          eval "$2"
+          exit "$3"
+        ' host-trap "$root/.github/actions/termux-adb/termux-adb.sh" \
+        "$trap_line" "$result" >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
+      [[ $rc -eq $result && ! -e $tmp/termux-ci-gh-token && ! -e $tmp/termux-ci-github-token ]] || {
+        echo 'workflow contract failed: Termux host trap changed status or left tokens' >&2
+        return 1
+      }
+      if [[ $result -eq 0 ]]; then
+        [[ ! -s $tmp/calls && ! -s $tmp/stdout ]] || {
+          echo 'workflow contract failed: successful Termux host dumped crash logs' >&2
+          return 1
+        }
+      elif [[ ! -s $tmp/calls ]] || ! grep -Fq 'Android crash log (host script exit 7)' "$tmp/stdout"; then
+        echo 'workflow contract failed: failed Termux host lost its diagnostic status' >&2
+        return 1
+      fi
+    done
+  done
+}
+
+check_termux_cores() {
+  local script cores
+  script=$(yq -r '.jobs.termux.steps[] | select(.name == "Validate emulator CPU allocation").run' \
+    "$root/.github/workflows/_termux-ci.yml")
+  [[ -n $script ]] || {
+    echo 'workflow contract failed: missing emulator CPU validation' >&2
+    return 1
+  }
+  for cores in 1 2 4; do
+    EMULATOR_CORES=$cores bash -c "$script" || {
+      printf 'workflow contract failed: valid emulator CPU count rejected: %s\n' "$cores" >&2
+      return 1
+    }
+  done
+  for cores in '' 0 -1 1.5 not-a-number; do
+    if EMULATOR_CORES=$cores bash -c "$script" >/dev/null 2>&1; then
+      printf 'workflow contract failed: invalid emulator CPU count accepted: %s\n' "$cores" >&2
+      return 1
+    fi
+  done
 }
 
 # Rust test shards cross every platform with caller-named commands. Execute the
@@ -354,6 +440,18 @@ contracts() {
   check '.jobs.select-platforms.outputs.matrix == "${{ steps.runners.outputs.matrix }}"' _shell-platforms.yml
   check '.jobs.select-platforms.steps[] | select(.id == "runners").env.LINUX_RUNNER == "${{ inputs.linux-runner }}"' _shell-platforms.yml
   check '.jobs.select-platforms.steps[] | select(.id == "runners").env.PLATFORM_MATRIX == "${{ steps.platforms.outputs.matrix }}"' _shell-platforms.yml
+  check '.on.workflow_call.inputs.termux-cores.default == 2' shell-ci.yml
+  check '.on.workflow_call.inputs.termux-cores.required == false' shell-ci.yml
+  check '.on.workflow_call.inputs.termux-cores.type == "number"' shell-ci.yml
+  check '.jobs.termux.with.cores == "${{ inputs.termux-cores }}"' shell-ci.yml
+  for workflow in termux-ci.yml _termux-ci.yml; do
+    check '.on.workflow_call.inputs.cores.default == 2' "$workflow"
+    check '.on.workflow_call.inputs.cores.required == false' "$workflow"
+    check '.on.workflow_call.inputs.cores.type == "number"' "$workflow"
+  done
+  check '.jobs.runtime.with.cores == "${{ inputs.cores }}"' termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Run caller tests in Termux").with.cores == "${{ inputs.cores }}"' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Validate emulator CPU allocation").env.EMULATOR_CORES == "${{ inputs.cores }}"' _termux-ci.yml
   local workflow
 
   # Third-party pins stay consistent but never absolute: Dependabot bumps
@@ -572,7 +670,7 @@ contracts() {
   # The emulator runner kills the device when its script returns, so the
   # failure-only crash dump must be armed inside the host script, before the
   # first emulator command can fail.
-  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("trap '\''rm -f \"$RUNNER_TEMP/termux-ci-gh-token\" \"$RUNNER_TEMP/termux-ci-github-token\"; termux_dump_crash_log 30'\'' EXIT\napk=")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("trap '\''termux_dump_crash_log 30 || :; rm -f \"$RUNNER_TEMP/termux-ci-gh-token\" \"$RUNNER_TEMP/termux-ci-github-token\"'\'' EXIT\napk=")' _termux-ci.yml
   check '[.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | match("(^|\n) *trap "; "g")] | length == 1' _termux-ci.yml
   check_no_unsupervised_adb _termux-ci.yml
   check_file '.runs.using == "composite"' .github/actions/termux-adb/action.yml
@@ -998,7 +1096,9 @@ check_no_literal_infra_markers() {
   fi
 }
 
+check_termux_host_cleanup
 contracts
+check_termux_cores
 check_android_sdk_packages
 check_no_literal_infra_markers
 check_platform_matrices
