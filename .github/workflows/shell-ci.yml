@@ -62,6 +62,11 @@ on:
         required: false
         type: string
         default: ""
+      termux-cores:
+        description: Positive number of virtual CPU cores assigned to the Termux emulator.
+        required: false
+        type: number
+        default: 2
       termux-host-command:
         description: Optional command that prepares checkout artifacts for Termux.
         required: false
@@ -148,6 +153,7 @@ jobs:
     with:
       linux-runner: ${{ inputs.linux-runner }}
       command: ${{ inputs.termux-command != '' && inputs.termux-command || inputs.test-command }}
+      cores: ${{ inputs.termux-cores }}
       dotfiles-shdeps-update-policy: ${{ inputs.dotfiles-shdeps-update-policy }}
       host-command: ${{ inputs.termux-host-command }}
       profiles: ${{ inputs.termux-profiles != '' && inputs.termux-profiles || (inputs.profiles != '' && inputs.profiles || 'runtime') }}

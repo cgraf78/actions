@@ -18,6 +18,11 @@ on:
         description: Bash command to execute inside the Termux app sandbox.
         required: true
         type: string
+      cores:
+        description: Positive number of virtual CPU cores assigned to the Android emulator.
+        required: false
+        type: number
+        default: 2
       dotfiles-shdeps-update-policy:
         description: Dotfiles Shdeps policy override. Supported values are config, pinned, and latest.
         required: false
@@ -63,6 +68,7 @@ jobs:
     with:
       linux-runner: ${{ inputs.linux-runner }}
       command: ${{ inputs.command }}
+      cores: ${{ inputs.cores }}
       dotfiles-shdeps-update-policy: ${{ inputs.dotfiles-shdeps-update-policy }}
       host-command: ${{ inputs.host-command }}
       profiles: ${{ inputs.profiles }}
