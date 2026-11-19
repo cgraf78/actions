@@ -109,6 +109,38 @@ if grep -Fq 'infra-stall:' "$tmp/semantic.err"; then
   exit 1
 fi
 
+# `apt-get update` installs nothing. In the prereq actions its sources
+# are runner-owned, so an exhausted exit 100 is classified as
+# infrastructure: a mirror answering with a 5xx page instead of
+# stalling to the deadline must carry the same stall token, or the
+# retry controller cannot recover it. This deliberately covers a
+# permanent update failure too; the controller reruns at most once
+# and it stays red after that. Any other update exit keeps its native
+# status. Exercise the real invocation shape, with the `sudo` prefix
+# and transport options the prereq actions pass.
+BOUNDED_STATUS=100
+if retry_pkg sudo env DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update >"$tmp/update100.out" 2>"$tmp/update100.err"; then
+  echo 'package-manager-test: update failure unexpectedly passed' >&2
+  exit 1
+else
+  status=$?
+fi
+[[ $status -eq 100 ]]
+grep -Fxq "$PACKAGE_COMMAND_STALL_MARKER" "$tmp/update100.err"
+
+BOUNDED_STATUS=1
+if retry_pkg apt-get update >"$tmp/update1.out" 2>"$tmp/update1.err"; then
+  echo 'package-manager-test: update usage failure unexpectedly passed' >&2
+  exit 1
+else
+  status=$?
+fi
+[[ $status -eq 1 ]]
+if grep -Fq 'infra-stall:' "$tmp/update1.err"; then
+  echo 'package-manager-test: update usage failure was infrastructure-classified' >&2
+  exit 1
+fi
+
 BOUNDED_STATUS=124
 if retry_pkg apt-get update >"$tmp/timeout.out" 2>"$tmp/timeout.err"; then
   echo 'package-manager-test: timeout unexpectedly passed' >&2
