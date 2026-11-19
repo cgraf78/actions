@@ -25,6 +25,41 @@ printf '%s\n' 'https://deb.debian.org/debian' >"$APT_MIRROR_LIST"
 configure_ubuntu_archive_mirror
 [[ $(<"$APT_MIRROR_LIST") == https://deb.debian.org/debian ]]
 
+# AWS-hosted runners ship an EC2 regional mirrorlist instead of Azure's.
+# The same stall applies: the mirror accepts connections but trickles, so
+# the install dies on the bounded timeout. It must be replaced the same way.
+printf '%s\n' 'http://us-east-2.ec2.archive.ubuntu.com/ubuntu' \
+  >"$APT_MIRROR_LIST"
+configure_ubuntu_archive_mirror
+[[ $(<"$APT_MIRROR_LIST") == https://archive.ubuntu.com/ubuntu ]]
+
+# The same class covers GCE regional mirrors and port-qualified entries:
+# the guard matches the cloud host, not the URL path.
+printf '%s\n' 'http://us-central1.gce.archive.ubuntu.com/ubuntu' \
+  >"$APT_MIRROR_LIST"
+configure_ubuntu_archive_mirror
+[[ $(<"$APT_MIRROR_LIST") == https://archive.ubuntu.com/ubuntu ]]
+printf '%s\n' 'http://us-east-2.ec2.archive.ubuntu.com:80/ubuntu' \
+  >"$APT_MIRROR_LIST"
+configure_ubuntu_archive_mirror
+[[ $(<"$APT_MIRROR_LIST") == https://archive.ubuntu.com/ubuntu ]]
+
+# A mirrorlist already pointing at the official archive stays intact. The
+# fixture carries a second entry so a guard firing on it (collapsing the
+# file to the single archive line) fails the assertion instead of passing
+# vacuously: rewriting an already-official file is a content no-op.
+cat >"$APT_MIRROR_LIST" <<'EOF'
+https://archive.ubuntu.com/ubuntu
+https://deb.debian.org/debian
+EOF
+configure_ubuntu_archive_mirror
+[[ $(<"$APT_MIRROR_LIST") == $'https://archive.ubuntu.com/ubuntu\nhttps://deb.debian.org/debian' ]]
+
+# Official country mirrors are not cloud mirrors: they stay intact.
+printf '%s\n' 'http://fr.archive.ubuntu.com/ubuntu' >"$APT_MIRROR_LIST"
+configure_ubuntu_archive_mirror
+[[ $(<"$APT_MIRROR_LIST") == http://fr.archive.ubuntu.com/ubuntu ]]
+
 sleep() { :; }
 
 # Log invocations so retry-path behavior (including dpkg recovery) can be
@@ -45,6 +80,15 @@ cat >"$APT_MIRROR_LIST" <<'EOF'
 http://azure.archive.ubuntu.com/ubuntu
 https://archive.ubuntu.com/ubuntu
 EOF
+BOUNDED_STATUS=0
+retry_pkg sudo apt-get update
+[[ $(<"$APT_MIRROR_LIST") == https://archive.ubuntu.com/ubuntu ]]
+
+# The retry path must rewrite the EC2 mirrorlist too: `apt-get update` is
+# the only call that runs the mirror guard, so an install that follows it
+# inherits the official archive.
+printf '%s\n' 'http://us-east-2.ec2.archive.ubuntu.com/ubuntu' \
+  >"$APT_MIRROR_LIST"
 BOUNDED_STATUS=0
 retry_pkg sudo apt-get update
 [[ $(<"$APT_MIRROR_LIST") == https://archive.ubuntu.com/ubuntu ]]

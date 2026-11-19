@@ -46,12 +46,21 @@ configure_ubuntu_archive_mirror() {
   _mirror_list=${APT_MIRROR_LIST:-/etc/apt/apt-mirrors.txt}
   _archive_mirror=https://archive.ubuntu.com/ubuntu
 
-  # GitHub's Ubuntu runner mirrorlist currently prefers the Azure mirror. When
-  # that endpoint accepts connections but stops serving indexes, apt's fallback
-  # still leaves package requests assigned to Azure. Use Ubuntu's official
-  # archive directly; non-Azure and non-mirrorlist configurations stay intact.
+  # GitHub's Ubuntu runner mirrorlist currently prefers a cloud regional
+  # mirror (Azure, or the EC2 mirror on AWS-hosted runners). When that
+  # endpoint accepts connections but stops serving, apt's fallback still
+  # leaves package requests assigned to it, so a slow mirror stalls the
+  # whole install past the bounded command timeout. Use Ubuntu's official
+  # archive directly. A file naming a cloud regional mirror is replaced
+  # wholesale with the official archive; official country mirrors,
+  # mirrorlists that already point at the official archive, and
+  # non-mirrorlist configurations stay intact.
+  # Match the host, not the path, so port-qualified entries are caught too;
+  # the match is case-insensitive because DNS hostnames are.
   if [ ! -f "$_mirror_list" ] || [ -L "$_mirror_list" ] ||
-    ! grep -Fq 'azure.archive.ubuntu.com/ubuntu' "$_mirror_list"; then
+    ! grep -Fiq -e 'azure.archive.ubuntu.com' \
+      -e '.ec2.archive.ubuntu.com' -e '.gce.archive.ubuntu.com' \
+      "$_mirror_list"; then
     return 0
   fi
 
@@ -64,7 +73,7 @@ configure_ubuntu_archive_mirror() {
       "$_mirror_list" >&2
     return 1
   fi
-  printf 'package manager: using %s instead of Azure mirrorlist\n' \
+  printf 'package manager: using %s instead of cloud mirrorlist\n' \
     "$_archive_mirror" >&2
 }
 
