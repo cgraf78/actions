@@ -33,10 +33,22 @@ read_job_log() {
   gh api --allow-escape-sequences "$endpoint" >"$log" 2>"$error"
 }
 
-is_required_aggregate() {
+is_derived_aggregate() {
   local name=$1
 
-  [[ "$name" == Required || "$name" == *' / Required' ]]
+  # Derived aggregates fail exactly when a job they depend on fails, and
+  # carry no failure evidence of their own: `Required` gates on the leaf
+  # jobs, and `dotfiles`' `installed-profiles.yml` `Result` job
+  # (`if: always()` over the composition legs, also reached by
+  # `dotfiles-dev` and `dotfiles-nvim` through that workflow) reports a
+  # failed leg. Counting either as a leaf leaves every run with an
+  # aggregate red, because the aggregate can never be classified from its
+  # own log. A real leaf job that merely ends in one of these words is
+  # still ignored here: if it fails alongside a leaf, that leaf is
+  # classified on its own; if it fails alone, the run stays red for a
+  # human to inspect rather than gaining a retry on no evidence.
+  [[ "$name" == Required || "$name" == *' / Required' ||
+    "$name" == Result || "$name" == *' / Result' ]]
 }
 
 is_retryable_docker_pull() {
@@ -86,6 +98,39 @@ is_retryable_shellcheck_download() {
       ;;
   esac
   return 1
+}
+
+is_retryable_apt_mirror_failure() {
+  local log=$1 final_apt final_fetch final_exit
+
+  # A mirror answering an `apt-get` index or package fetch with a 5xx
+  # error page makes `retry_pkg` exit 100 instead of stalling to the 124
+  # deadline. On pins predating the library's update-100 stall token,
+  # and for installs (whose exit 100 is semantically ambiguous, so the
+  # library prints no token for them), this classifier recovers the
+  # same outage from the log. Like the ShellCheck classifier, require
+  # the prereq action boundary, the shared library's own
+  # exhausted-retries diagnostic for an apt command, and a final exit
+  # of 100 that agrees with it. The 5xx status must sit on the last
+  # `Failed to fetch` line: attempts log in order, so an early transient
+  # 525 superseded by a permanent 404 on a later attempt, or a stray 5xx
+  # token from another step, must not retry. A permanent fetch failure
+  # (404), a held-broken-package install (no fetch failure), and any
+  # other exit keep the job red.
+  grep -Eq \
+    '/\.github/actions/(shell-ci-prereqs|rust-ci-prereqs|musl-build-prereqs)(@|$)' \
+    "$log" || return 1
+  final_apt=$(grep -E \
+    'package command failed after [0-9]+ attempts \(exit 100\): .*apt-get.*( update$| install )' \
+    "$log" | tail -n 1) || return 1
+  [[ -n "$final_apt" ]] || return 1
+  final_fetch=$(grep -F 'Failed to fetch' "$log" | tail -n 1) || return 1
+  if ! printf '%s\n' "$final_fetch" | grep -Eq ' 5[0-9][0-9]( |$)'; then
+    return 1
+  fi
+  final_exit=$(grep -E 'Process completed with exit code 100\.' "$log" |
+    tail -n 1) || return 1
+  [[ -n "$final_exit" ]]
 }
 
 # Sets `stall_marker` to the matched token so the caller can report it.
@@ -181,7 +226,7 @@ main() {
   local unclassified_leaf=0
   local job_id name log stall_marker
   while IFS=$'\t' read -r job_id name; do
-    if is_required_aggregate "$name"; then
+    if is_derived_aggregate "$name"; then
       notice "ignoring derived aggregate failure: $name"
       continue
     fi
@@ -200,6 +245,9 @@ main() {
       retryable_leaf=$((retryable_leaf + 1))
     elif is_retryable_shellcheck_download "$log"; then
       notice "allowlisted ShellCheck prerequisite download failure: $name"
+      retryable_leaf=$((retryable_leaf + 1))
+    elif is_retryable_apt_mirror_failure "$log"; then
+      notice "allowlisted apt mirror failure: $name"
       retryable_leaf=$((retryable_leaf + 1))
     elif is_retryable_bounded_stall "$log"; then
       notice "allowlisted bounded infrastructure stall ($stall_marker): $name"

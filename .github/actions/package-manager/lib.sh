@@ -8,6 +8,12 @@ PKG_COMMAND_TIMEOUT=${PKG_COMMAND_TIMEOUT:-120}
 PKG_COMMAND_KILL_AFTER=${PKG_COMMAND_KILL_AFTER:-5}
 PKG_RETRIES=${PKG_RETRIES:-3}
 
+# Provider-owned stall token. This POSIX library cannot locate the shared
+# marker file, so the literal is defined once here; keep it identical to
+# PACKAGE_COMMAND_STALL_MARKER in shared/infra-stall-markers.sh, which the
+# infrastructure retry classifier matches on.
+PKG_STALL_MARKER='infra-stall: package command exhausted bounded retries'
+
 # These globals are the sourceable library's public interface.
 # shellcheck disable=SC2034
 APT_NET_OPTS="-o Acquire::http::Timeout=$PKG_NETWORK_TIMEOUT -o Acquire::https::Timeout=$PKG_NETWORK_TIMEOUT -o Acquire::Retries=$PKG_RETRIES"
@@ -144,10 +150,21 @@ PY
   fi
 }
 
-retry_pkg() {
+# Whether the requested command is an `apt-get update`: the one
+# `apt-get` invocation whose failure modes are index-fetch failures
+# rather than package semantics. Both the mirror guard and the stall
+# classification use this single definition so they cannot diverge.
+apt_get_update_command() {
   case "$*" in
-    *apt-get*' update') configure_ubuntu_archive_mirror ;;
+    *apt-get*' update') return 0 ;;
+    *) return 1 ;;
   esac
+}
+
+retry_pkg() {
+  if apt_get_update_command "$@"; then
+    configure_ubuntu_archive_mirror
+  fi
   _attempt=1
   while :; do
     if bounded "$@"; then
@@ -160,7 +177,24 @@ retry_pkg() {
       # failures keep their native status and must not opt a workflow into an
       # infrastructure rerun.
       if [ "$_rc" -eq 124 ]; then
-        echo "infra-stall: package command exhausted bounded retries" >&2
+        echo "$PKG_STALL_MARKER" >&2
+      fi
+      if apt_get_update_command "$@"; then
+        # `apt-get update` fetches indexes and installs nothing. In the
+        # prereq actions its sources are runner-owned, so an exhausted
+        # exit 100 is treated as infrastructure: a mirror answering an
+        # InRelease with a 5xx page exits 100 instead of stalling to
+        # the 124 deadline, which is the same transient outage. This
+        # deliberately does not distinguish a permanent update failure
+        # (404, malformed sources) from a transient one: the retry
+        # controller reruns at most once, and a permanent failure stays
+        # red after it. The log classifier still applies its 5xx
+        # discrimination to pre-token logs and to installs, whose exit
+        # 100 means held or broken packages and keeps its native
+        # status here. Other update exits keep theirs too.
+        if [ "$_rc" -eq 100 ]; then
+          echo "$PKG_STALL_MARKER" >&2
+        fi
       fi
       echo "package command failed after $PKG_RETRIES attempts (exit $_rc): $*" >&2
       return "$_rc"

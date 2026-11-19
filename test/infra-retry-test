@@ -554,6 +554,109 @@ if grep -Fq 'rerun-failed-jobs' "$tmp/shellcheck-lint/gh-calls"; then
   fail "repository ShellCheck finding was rerun"
 fi
 
+# A mirror answering `apt-get update` with a 5xx error page exhausts the
+# bounded retries with exit 100, not the exit-124 stall marker. Without a
+# classifier for that shape, the retry controller leaves the run red even
+# though the cause is the same transient mirror outage. Modeled on the
+# 2026-11-19 nvim-workspace Ubuntu failure: two attempts timed out, the
+# third got 525s from archive.ubuntu.com.
+mkdir -p "$tmp/apt-mirror-logs" "$tmp/apt-permanent-logs" "$tmp/apt-conflict-logs"
+write_jobs "$tmp/apt-mirror-jobs.json" \
+  '71:shell / Platforms / Ubuntu:failure' \
+  '72:shell / Required:failure'
+{
+  printf '%s\n' \
+    'Run cgraf78/actions/.github/actions/shell-ci-prereqs@68f56575338cdde734cc9c8984260a1c0b1976a1' \
+    '  matrix-name: Ubuntu' \
+    '  profiles: base,lua,neovim,python' \
+    '  setup: none' \
+    'package manager: using https://archive.ubuntu.com/ubuntu instead of cloud mirrorlist' \
+    'package command failed (attempt 1/3, exit 124); retrying in 5s...' \
+    'package command failed (attempt 2/3, exit 124); retrying in 10s...' \
+    'Err:3 https://archive.ubuntu.com/ubuntu resolute-updates InRelease' \
+    '  525  <none> [IP: 172.66.152.176 443]' \
+    'E: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/dists/resolute-updates/InRelease  525  <none> [IP: 172.66.152.176 443]' \
+    "E: The repository 'mirror+file:/etc/apt/apt-mirrors.txt resolute-updates InRelease' is no longer signed." \
+    'package command failed after 3 attempts (exit 100): sudo env DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update' \
+    '##[error]Process completed with exit code 100.'
+} | stamp >"$tmp/apt-mirror-logs/71.log"
+run_case apt-mirror-525 "$tmp/apt-mirror-jobs.json" "$tmp/apt-mirror-logs"
+grep -Fq 'rerun-failed-jobs' "$tmp/apt-mirror-525/gh-calls" ||
+  fail "apt mirror 5xx failure was not rerun"
+grep -Fq 'allowlisted apt mirror failure' "$tmp/apt-mirror-525/stdout" ||
+  fail "apt mirror retry decision was not reported"
+
+# A permanent fetch failure keeps the same shape but a 404 status: the
+# mirror answered, the index does not exist, and retrying cannot help.
+{
+  printf '%s\n' \
+    'Run cgraf78/actions/.github/actions/shell-ci-prereqs@68f56575338cdde734cc9c8984260a1c0b1976a1' \
+    'E: Failed to fetch https://archive.ubuntu.com/ubuntu/dists/bogus/InRelease  404  Not Found [IP: 91.189.91.83 443]' \
+    'package command failed after 3 attempts (exit 100): sudo env DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::http::Timeout=30 update' \
+    '##[error]Process completed with exit code 100.'
+} | stamp >"$tmp/apt-permanent-logs/71.log"
+run_case apt-mirror-404 "$tmp/apt-mirror-jobs.json" "$tmp/apt-permanent-logs"
+if grep -Fq 'rerun-failed-jobs' "$tmp/apt-mirror-404/gh-calls"; then
+  fail "permanent apt 404 failure was rerun"
+fi
+grep -Fq 'not an allowlisted infrastructure failure' \
+  "$tmp/apt-mirror-404/stdout" ||
+  fail "permanent apt 404 decision was not reported"
+
+# A 5xx on an early attempt does not license retrying a permanent
+# failure: attempts log in order, and only the last fetch failure
+# decides. The stray `503` and package count must not stand in for it.
+mkdir -p "$tmp/apt-stale-logs"
+{
+  printf '%s\n' \
+    'Run cgraf78/actions/.github/actions/shell-ci-prereqs@68f56575338cdde734cc9c8984260a1c0b1976a1' \
+    'E: Failed to fetch https://archive.ubuntu.com/ubuntu/dists/resolute/InRelease  525  <none>' \
+    'curl: (22) The requested URL returned error: 503' \
+    'Reading package lists... 512 packages' \
+    'E: Failed to fetch https://archive.ubuntu.com/ubuntu/dists/bogus/InRelease  404  Not Found [IP: 91.189.91.83 443]' \
+    'package command failed after 3 attempts (exit 100): sudo env DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::http::Timeout=30 update' \
+    '##[error]Process completed with exit code 100.'
+} | stamp >"$tmp/apt-stale-logs/71.log"
+run_case apt-stale-525 "$tmp/apt-mirror-jobs.json" "$tmp/apt-stale-logs"
+if grep -Fq 'rerun-failed-jobs' "$tmp/apt-stale-525/gh-calls"; then
+  fail "stale 525 with a final 404 failure was rerun"
+fi
+grep -Fq 'not an allowlisted infrastructure failure' \
+  "$tmp/apt-stale-525/stdout" ||
+  fail "stale 525 decision was not reported"
+
+# This repository's own CI invokes the prereq action as a local path,
+# with no `@<sha>` in the log header. The boundary must not require one.
+mkdir -p "$tmp/apt-local-logs"
+{
+  printf '%s\n' \
+    'Run ./.github/actions/shell-ci-prereqs' \
+    'E: Failed to fetch https://archive.ubuntu.com/ubuntu/dists/resolute/InRelease  525  <none> [IP: 172.66.152.176 443]' \
+    'package command failed after 3 attempts (exit 100): sudo env DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::http::Timeout=30 update' \
+    '##[error]Process completed with exit code 100.'
+} | stamp >"$tmp/apt-local-logs/71.log"
+run_case apt-local-action "$tmp/apt-mirror-jobs.json" "$tmp/apt-local-logs"
+grep -Fq 'rerun-failed-jobs' "$tmp/apt-local-action/gh-calls" ||
+  fail "apt mirror failure from a local prereq action was not rerun"
+
+# An install that fails on held broken packages also exits 100, but with
+# no fetch failure: the package set, not the mirror, is at fault.
+{
+  printf '%s\n' \
+    'Run cgraf78/actions/.github/actions/shell-ci-prereqs@68f56575338cdde734cc9c8984260a1c0b1976a1' \
+    'E: Unable to correct problems, you have held broken packages.' \
+    'package command failed after 3 attempts (exit 100): sudo env DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::http::Timeout=30 install -y tmux' \
+    '##[error]Process completed with exit code 100.'
+} | stamp >"$tmp/apt-conflict-logs/71.log"
+run_case apt-install-conflict "$tmp/apt-mirror-jobs.json" \
+  "$tmp/apt-conflict-logs"
+if grep -Fq 'rerun-failed-jobs' "$tmp/apt-install-conflict/gh-calls"; then
+  fail "apt broken-package failure was rerun"
+fi
+grep -Fq 'not an allowlisted infrastructure failure' \
+  "$tmp/apt-install-conflict/stdout" ||
+  fail "apt broken-package decision was not reported"
+
 write_jobs "$tmp/termux-partial-jobs.json" \
   '19:rust / Termux runtime / Runtime / Android / Termux x86_64:failure' \
   '20:rust / Required:failure'
@@ -655,6 +758,52 @@ if grep -Fq 'rerun-failed-jobs' "$tmp/aggregate-only/gh-calls"; then
 fi
 grep -Fq 'no failed leaf jobs' "$tmp/aggregate-only/stdout" ||
   fail "aggregate-only decision was not reported"
+
+# A consumer `Result` job is a derived aggregate like `Required`: it fails
+# whenever any composition leg fails and its log carries no evidence of
+# its own. Counting it as a leaf blocked the retry of the 2026-11-19
+# dotfiles-dev run, whose only real failures were bounded package stalls.
+# The Result job's log must not even be fetched.
+write_jobs "$tmp/result-aggregate-jobs.json" \
+  '81:Installed profiles / Composition (dev):failure' \
+  '82:Installed profiles / Result:failure' \
+  '83:shell / Required:failure'
+printf '%s\n' "$PACKAGE_COMMAND_STALL_MARKER" \
+  'Error: Process completed with exit code 124.' | stamp \
+  >"$tmp/infra-logs/81.log"
+run_case result-aggregate "$tmp/result-aggregate-jobs.json" "$tmp/infra-logs"
+grep -Fq 'rerun-failed-jobs' "$tmp/result-aggregate/gh-calls" ||
+  fail "stall with a Result aggregate was not rerun"
+if grep -Fq '/actions/jobs/82/logs' "$tmp/result-aggregate/gh-calls"; then
+  fail "Result aggregate log was fetched"
+fi
+grep -Fq 'ignoring derived aggregate failure: Installed profiles / Result' \
+  "$tmp/result-aggregate/stdout" ||
+  fail "Result aggregate decision was not reported"
+
+# A `Result` job failing alone has no leaf to classify: the run stays
+# red for a human, and no retry is attempted on no evidence.
+write_jobs "$tmp/result-only-jobs.json" \
+  '84:Installed profiles / Result:failure' \
+  '85:shell / Required:failure'
+mkdir -p "$tmp/result-only-logs"
+run_case result-only "$tmp/result-only-jobs.json" "$tmp/result-only-logs"
+if grep -Fq 'rerun-failed-jobs' "$tmp/result-only/gh-calls"; then
+  fail "Result-only failure was rerun"
+fi
+grep -Fq 'no failed leaf jobs' "$tmp/result-only/stdout" ||
+  fail "Result-only decision was not reported"
+
+# The real dotfiles-dev shape: an apt mirror failure beside the
+# `Result` aggregate must retry the leaf, not be blocked by it.
+write_jobs "$tmp/result-apt-jobs.json" \
+  '86:shell / Platforms / Ubuntu:failure' \
+  '87:Installed profiles / Result:failure' \
+  '88:shell / Required:failure'
+cp "$tmp/apt-mirror-logs/71.log" "$tmp/apt-mirror-logs/86.log"
+run_case result-apt "$tmp/result-apt-jobs.json" "$tmp/apt-mirror-logs"
+grep -Fq 'rerun-failed-jobs' "$tmp/result-apt/gh-calls" ||
+  fail "apt mirror failure beside a Result aggregate was not rerun"
 
 jq '.total_count = 101' "$tmp/infra-jobs.json" >"$tmp/incomplete-jobs.json"
 run_case incomplete "$tmp/incomplete-jobs.json" "$tmp/infra-logs"
