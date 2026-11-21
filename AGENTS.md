@@ -77,3 +77,6 @@ lock, not at HEAD. Changes outside `.github/actions/**` don't need the cycle.
 No releases. After merge, roll a change out by running
 `consumer-ci/sync.sh <consumer checkout>` from a clean checkout at the
 reviewed commit, one PR per consumer.
+
+For the shared tmux pin, follow
+[Updating the managed tmux build](docs/workflow-api.md#updating-the-managed-tmux-build).
