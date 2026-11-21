@@ -133,6 +133,45 @@ is_retryable_apt_mirror_failure() {
   [[ -n "$final_exit" ]]
 }
 
+is_retryable_termux_apt_network_failure() {
+  local log=$1 final_fetch final_exit
+
+  # The Termux worker gives apt two transport retries per supervised
+  # attempt and prints a stall marker only on the supervisor's 124
+  # deadline. When the emulator loses its network outright, apt fails
+  # fast instead: a package fetch exhausts its retries and the install
+  # exits 100, or `apt-get update` only warns and the install then
+  # cannot locate any package. Exit 100 alone is ambiguous (dependency
+  # and conflict errors share it), so mirror the apt mirror classifier:
+  # require the runner's `Uses:` line for the Termux reusable workflow
+  # (a job-setup line, never echoed step prose), a network-level
+  # transport error on the LAST `Failed to fetch` line, apt's own
+  # fetch-related error as the LAST `E:` line, and a final step exit of
+  # 100. An HTTP status on the last fetch (the mirror answered), a
+  # transient `update` error superseded by a later install's 404, and
+  # a dependency error with no fetch failure all stay red. The `E:`
+  # check ties the exit to apt: the caller command runs in the same
+  # step, so a warning-only `update` failure followed by a caller's own
+  # exit 100 must not retry. Within one install apt lists its final
+  # fetch errors in package order, not failure order, so a mid-transfer
+  # read error counts as transport too. The emulator action reports
+  # the step's exit as `The process '...' failed`, a plain step as
+  # `Process completed`; accept either, last one wins.
+  grep -Eq 'Uses: [^ ]+/\.github/workflows/_termux-ci\.yml@' "$log" ||
+    return 1
+  final_fetch=$(grep -F 'Failed to fetch' "$log" | tail -n 1) || return 1
+  printf '%s\n' "$final_fetch" | grep -Eiq \
+    'cannot initiate the connection|network is unreachable|something wicked happened resolving|temporary failure resolving|could not resolve|connection timed out|error reading from server' ||
+    return 1
+  grep -E '(^| )E: ' "$log" | tail -n 1 | grep -Eq \
+    'E: (Failed to fetch|Unable to fetch some archives|Unable to locate package)' ||
+    return 1
+  final_exit=$(grep -E \
+    "##\\[error\\](The process '[^']+' failed with exit code|Process completed with exit code) [0-9]+" \
+    "$log" | tail -n 1) || return 1
+  [[ "$final_exit" =~ exit\ code\ 100\.?$ ]]
+}
+
 # Sets `stall_marker` to the matched token so the caller can report it.
 is_retryable_bounded_stall() {
   local log=$1 marker
@@ -248,6 +287,9 @@ main() {
       retryable_leaf=$((retryable_leaf + 1))
     elif is_retryable_apt_mirror_failure "$log"; then
       notice "allowlisted apt mirror failure: $name"
+      retryable_leaf=$((retryable_leaf + 1))
+    elif is_retryable_termux_apt_network_failure "$log"; then
+      notice "allowlisted Termux apt network failure: $name"
       retryable_leaf=$((retryable_leaf + 1))
     elif is_retryable_bounded_stall "$log"; then
       notice "allowlisted bounded infrastructure stall ($stall_marker): $name"

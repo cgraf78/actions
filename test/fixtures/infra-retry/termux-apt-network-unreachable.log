@@ -1,0 +1,26 @@
+2026-11-20T23:30:31.2730084Z Uses: cgraf78/actions/.github/workflows/_termux-ci.yml@3e8e6d0f23dedfa2374f9f87efdcc5d8b392004b
+2026-11-20T23:31:58.4028203Z [command]/usr/bin/sh -c bash "$RUNNER_TEMP/termux-ci-host.sh"
+2026-11-20T23:32:06.7002671Z Running caller command inside Termux
+2026-11-20T23:32:25.5873784Z 0 upgraded, 37 newly installed, 0 to remove and 0 not upgraded.
+2026-11-20T23:32:25.5874105Z Need to get 117 MB of archives.
+2026-11-20T23:32:37.6783880Z Get:9 https://packages.termux.dev/apt/termux-main stable/main x86_64 gdbm x86_64 1.26-1 [155 kB]
+2026-11-20T23:32:46.5790581Z Ign:9 https://packages.termux.dev/apt/termux-main stable/main x86_64 gdbm x86_64 1.26-1
+2026-11-20T23:32:46.5792907Z Err:10 https://packages.termux.dev/apt/termux-main stable/main x86_64 libexpat x86_64 2.10.0
+2026-11-20T23:32:46.5797398Z   Cannot initiate the connection to packages.termux.dev:443 (5.75.242.194). - connect (101: Network is unreachable) Cannot initiate the connection to packages.termux.dev:443 (2a01:4f8:c012:726e::1). - connect (101: Network is unreachable) [IP: 5.75.242.194 443]
+2026-11-20T23:32:46.5973810Z Err:37 https://packages.termux.dev/apt/termux-main stable/main x86_64 zsh-completions all 0.36.0
+2026-11-20T23:32:46.5975154Z   Cannot initiate the connection to packages.termux.dev:443 (5.75.242.194). - connect (101: Network is unreachable) Cannot initiate the connection to packages.termux.dev:443 (2a01:4f8:c012:726e::1). - connect (101: Network is unreachable) [IP: 5.75.242.194 443]
+2026-11-20T23:32:47.5810691Z Err:9 https://packages.termux.dev/apt/termux-main stable/main x86_64 gdbm x86_64 1.26-1
+2026-11-20T23:32:47.5811208Z   Error reading from server - read (5: I/O error) [IP: 5.75.242.194 443]
+2026-11-20T23:32:47.5825195Z Fetched 92.6 MB in 23s (4035 kB/s)
+2026-11-20T23:32:47.5825893Z E: Failed to fetch https://packages.termux.dev/apt/termux-main/pool/main/g/gdbm/gdbm_1.26-1_x86_64.deb  Error reading from server - read (5: I/O error) [IP: 5.75.242.194 443]
+2026-11-20T23:32:47.5831492Z E: Failed to fetch https://packages.termux.dev/apt/termux-main/pool/main/g/git/git_2.56.1_x86_64.deb  Cannot initiate the connection to packages.termux.dev:443 (5.75.242.194). - connect (101: Network is unreachable) Cannot initiate the connection to packages.termux.dev:443 (2a01:4f8:c012:726e::1). - connect (101: Network is unreachable) [IP: 5.75.242.194 443]
+2026-11-20T23:32:47.5847836Z E: Failed to fetch https://packages.termux.dev/apt/termux-main/pool/main/j/jq/jq_1.8.2_x86_64.deb  Cannot initiate the connection to packages.termux.dev:443 (5.75.242.194). - connect (101: Network is unreachable) Cannot initiate the connection to packages.termux.dev:443 (2a01:4f8:c012:726e::1). - connect (101: Network is unreachable) [IP: 5.75.242.194 443]
+2026-11-20T23:32:47.5893225Z E: Failed to fetch https://packages.termux.dev/apt/termux-main/pool/main/z/zsh-completions/zsh-completions_0.36.0_all.deb  Cannot initiate the connection to packages.termux.dev:443 (5.75.242.194). - connect (101: Network is unreachable) Cannot initiate the connection to packages.termux.dev:443 (2a01:4f8:c012:726e::1). - connect (101: Network is unreachable) [IP: 5.75.242.194 443]
+2026-11-20T23:32:47.5895010Z E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?
+2026-11-20T23:32:47.5895681Z ##[group]Android crash log (host script exit 100)
+2026-11-20T23:32:47.6053404Z ##[endgroup]
+2026-11-20T23:32:47.7642314Z ##[error]The process '/usr/bin/sh' failed with exit code 100
+2026-11-20T23:32:47.7649488Z ##[group]Terminate Emulator
+2026-11-20T23:32:47.7649780Z [command]/opt/android-sdk/platform-tools/adb -s emulator-5554 emu kill
+2026-11-20T23:32:47.9889157Z OK: killing emulator, bye bye
+2026-11-20T23:32:47.9893394Z ##[endgroup]

@@ -1,0 +1,30 @@
+2026-11-21T03:28:18.7534427Z Uses: cgraf78/actions/.github/workflows/_termux-ci.yml@3e8e6d0f23dedfa2374f9f87efdcc5d8b392004b
+2026-11-21T03:29:59.0015671Z [command]/usr/bin/sh -c bash "$RUNNER_TEMP/termux-ci-host.sh"
+2026-11-21T03:30:07.7460520Z Running caller command inside Termux
+2026-11-21T03:30:07.8339577Z Ign:1 https://packages.termux.dev/apt/termux-main stable InRelease
+2026-11-21T03:30:08.8382170Z Ign:1 https://packages.termux.dev/apt/termux-main stable InRelease
+2026-11-21T03:30:10.8461974Z Err:1 https://packages.termux.dev/apt/termux-main stable InRelease
+2026-11-21T03:30:10.8463465Z   Something wicked happened resolving 'packages.termux.dev:https' (7 - No address associated with hostname)
+2026-11-21T03:30:10.8849124Z Reading package lists...
+2026-11-21T03:30:10.9094854Z W: Failed to fetch https://packages.termux.dev/apt/termux-main/dists/stable/InRelease  Something wicked happened resolving 'packages.termux.dev:https' (7 - No address associated with hostname)
+2026-11-21T03:30:10.9096459Z W: Some index files failed to download. They have been ignored, or old ones used instead.
+2026-11-21T03:30:10.9726845Z Reading package lists...
+2026-11-21T03:30:10.9727255Z Building dependency tree...
+2026-11-21T03:30:10.9825002Z Calculating upgrade...
+2026-11-21T03:30:10.9843845Z 0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.
+2026-11-21T03:30:11.0202183Z Reading package lists...
+2026-11-21T03:30:11.0228215Z Building dependency tree...
+2026-11-21T03:30:11.0235003Z E: Unable to locate package git
+2026-11-21T03:30:11.0237048Z E: Unable to locate package jq
+2026-11-21T03:30:11.0237444Z E: Unable to locate package python
+2026-11-21T03:30:11.0237714Z E: Unable to locate package zsh
+2026-11-21T03:30:11.0237936Z E: Unable to locate package openssh
+2026-11-21T03:30:11.0238181Z E: Unable to locate package netcat-openbsd
+2026-11-21T03:30:11.0238424Z E: Unable to locate package ripgrep
+2026-11-21T03:30:11.0247815Z ##[group]Android crash log (host script exit 100)
+2026-11-21T03:30:11.0644059Z ##[endgroup]
+2026-11-21T03:30:11.0718972Z ##[error]The process '/usr/bin/sh' failed with exit code 100
+2026-11-21T03:30:11.0738554Z ##[group]Terminate Emulator
+2026-11-21T03:30:11.0739431Z [command]/opt/android-sdk/platform-tools/adb -s emulator-5554 emu kill
+2026-11-21T03:30:11.0823637Z OK: killing emulator, bye bye
+2026-11-21T03:30:11.0850889Z ##[endgroup]
