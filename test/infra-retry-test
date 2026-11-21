@@ -657,6 +657,72 @@ grep -Fq 'not an allowlisted infrastructure failure' \
   "$tmp/apt-install-conflict/stdout" ||
   fail "apt broken-package decision was not reported"
 
+# The Termux emulator losing its network makes apt fail fast with exit
+# 100 rather than stall to the supervisor's 124 marker. Both 2026-11-20
+# consumer failures are recorded: package downloads that could
+# not connect, and an `apt-get update` DNS failure that left the install
+# unable to locate any package.
+mkdir -p "$tmp/termux-apt-logs"
+termux_apt_boundary='Uses: cgraf78/actions/.github/workflows/_termux-ci.yml@3e8e6d0f23dedfa2374f9f87efdcc5d8b392004b'
+termux_apt_exit="##[error]The process '/usr/bin/sh' failed with exit code 100"
+termux_apt_unreachable='E: Failed to fetch https://packages.termux.dev/apt/termux-main/pool/main/g/git/git_2.56.1_x86_64.deb  Cannot initiate the connection to packages.termux.dev:443 (5.75.242.194). - connect (101: Network is unreachable) [IP: 5.75.242.194 443]'
+termux_apt_404='E: Failed to fetch https://packages.termux.dev/apt/termux-main/pool/main/g/git/git_2.56.1_x86_64.deb  404  Not Found [IP: 5.75.242.194 443]'
+
+for fixture in termux-apt-network-unreachable termux-apt-dns-failure; do
+  cp "$root/test/fixtures/infra-retry/$fixture.log" "$tmp/termux-apt-logs/19.log"
+  run_case "$fixture" "$tmp/termux-package-jobs.json" "$tmp/termux-apt-logs"
+  grep -Fq 'rerun-failed-jobs' "$tmp/$fixture/gh-calls" ||
+    fail "recorded $fixture was not rerun"
+  grep -Fq 'allowlisted Termux apt network failure' "$tmp/$fixture/stdout" ||
+    fail "recorded $fixture retry decision was not reported"
+done
+
+# Runs one Termux apt case that must stay red; its log lines are the
+# remaining arguments.
+expect_termux_apt_red() {
+  local name=$1
+  shift
+  printf '%s\n' "$@" | stamp >"$tmp/termux-apt-logs/19.log"
+  run_case "$name" "$tmp/termux-package-jobs.json" "$tmp/termux-apt-logs"
+  if grep -Fq 'rerun-failed-jobs' "$tmp/$name/gh-calls"; then
+    fail "$name was rerun"
+  fi
+  grep -Fq 'not an allowlisted infrastructure failure' "$tmp/$name/stdout" ||
+    fail "$name decision was not reported"
+}
+
+# The mirror answered: the package is gone, and a rerun cannot help.
+expect_termux_apt_red termux-apt-404 "$termux_apt_boundary" \
+  "$termux_apt_404" 'E: Unable to fetch some archives' "$termux_apt_exit"
+# Only the last fetch failure decides: an earlier transport error does
+# not license retrying a later permanent 404.
+expect_termux_apt_red termux-apt-stale-unreachable "$termux_apt_boundary" \
+  "$termux_apt_unreachable" "$termux_apt_404" \
+  'E: Unable to fetch some archives' "$termux_apt_exit"
+# The same apt lines outside the Termux reusable workflow are not ours
+# to classify.
+expect_termux_apt_red termux-apt-other-workflow \
+  'Uses: cgraf78/actions/.github/workflows/_shell-platforms.yml@3e8e6d0f23dedfa2374f9f87efdcc5d8b392004b' \
+  "$termux_apt_unreachable" 'E: Unable to fetch some archives' \
+  "$termux_apt_exit"
+# A dependency error exits 100 with no fetch failure at all.
+expect_termux_apt_red termux-apt-dependency "$termux_apt_boundary" \
+  'E: Unable to correct problems, you have held broken packages.' \
+  "$termux_apt_exit"
+# apt recovered from a warning-only update failure and the caller's own
+# tests then failed: the final exit no longer agrees.
+expect_termux_apt_red termux-apt-caller-failure "$termux_apt_boundary" \
+  "$termux_apt_unreachable" 'Running caller command inside Termux' \
+  'Results: 230 passed, 1 failed' \
+  "##[error]The process '/usr/bin/sh' failed with exit code 1"
+# The same warning-only update failure, then a caller exit 100 of its
+# own: the last `E:` line is not apt's fetch error, so it stays red.
+expect_termux_apt_red termux-apt-caller-exit-100 "$termux_apt_boundary" \
+  "W: Failed to fetch https://packages.termux.dev/apt/termux-main/dists/stable/InRelease  Temporary failure resolving 'packages.termux.dev'" \
+  'Running caller command inside Termux' \
+  'E: Unable to correct problems, you have held broken packages.' \
+  "$termux_apt_exit"
+
 write_jobs "$tmp/termux-partial-jobs.json" \
   '19:rust / Termux runtime / Runtime / Android / Termux x86_64:failure' \
   '20:rust / Required:failure'
