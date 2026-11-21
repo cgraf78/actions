@@ -254,7 +254,7 @@ jobs:
       - name: Install package smoke musl linker
         if: inputs.package-smoke-command != '' && inputs.package-smoke-musl-target != '' && inputs.package-smoke-install-musl-tools
         timeout-minutes: 10
-        uses: cgraf78/actions/.github/actions/musl-build-prereqs@c248ddaa54916c00b1f8ad3f9aeb5ac286f5b81b
+        uses: cgraf78/actions/.github/actions/musl-build-prereqs@36cab924e7f738e0167ab932b57cbb6f9d3d1cc7
 
       - name: Prepare package smoke
         if: inputs.package-smoke-command != '' && inputs.package-smoke-setup-command != ''
@@ -457,7 +457,7 @@ jobs:
           targets: aarch64-linux-android
 
       - name: Configure Android NDK toolchain
-        uses: cgraf78/actions/.github/actions/android-rust-toolchain@c248ddaa54916c00b1f8ad3f9aeb5ac286f5b81b
+        uses: cgraf78/actions/.github/actions/android-rust-toolchain@36cab924e7f738e0167ab932b57cbb6f9d3d1cc7
 
       - name: Build and smoke Android package
         shell: bash
