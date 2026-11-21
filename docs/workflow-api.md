@@ -423,15 +423,37 @@ two cores; Android API level, platform coverage, and timeout budgets do not
 change.
 
 Supported generic profiles are `base`, `jq`, `python`, `zsh`, `lua`, `neovim`,
-`tmux`, `tmux-floor`, `openssh-netcat-lsof`, `procps`, `cron`, `fd`, `ripgrep`,
-`hostname`, and `shellcheck`. `tmux` installs each platform's own tmux.
+`tmux`, `tmux-pinned`, `tmux-floor`, `tmux-floor-exact`, `openssh-netcat-lsof`,
+`procps`, `cron`, `fd`, `ripgrep`, `hostname`, and `shellcheck`.
+
+`tmux-pinned` is the profile for testing the managed build on Linux, macOS, and
+WSL. It selects the OS and architecture archive from
+[`shell-ci-prereqs/tmux-build.lock`](../.github/actions/shell-ci-prereqs/tmux-build.lock),
+verifies its SHA-256, and adds the executable to `PATH`. It exports
+`CI_TMUX_PINNED_BIN` (absolute path), `CI_TMUX_PINNED_VERSION` (upstream version),
+and `CI_TMUX_PINNED_RELEASE` (downstream tag including the leading `v`).
+Standalone jobs can request it directly through the `shell-ci-prereqs`
+composite action. Keep the upstream version, tag, and four digests in that
+one file. For upgrades, use the reviewed tmux-builds release's
+`SHA256SUMS`, then update consumers with `consumer-ci/sync.sh`.
+For consumers with a Shdeps tmux hook, the same sync copies the lock next to
+the hook. `verify-consumer-sync` checks the copy against the pinned Actions
+commit, including the archive digests for platforms outside the current job.
+
+`tmux` installs each platform's own tmux.
 `tmux-floor` does the same wherever that tmux is at least the supported floor
 (`TMUX_FLOOR_VERSION` in `shell-ci-prereqs/lib.sh`); on CentOS Stream, whose
 tmux is older, it builds that release from its checksum-pinned source instead.
 It also exports `CI_TMUX_FLOOR` to later steps on conventional platforms, so a
 caller's suites can check their own declared minimum against it, and, where it
 built the floor, `CI_TMUX_FLOOR_EXACT=1`, so they can check they run exactly
-that release. Termux installs its own tmux for either profile. With
+that release. `tmux-floor-exact` builds that same floor on Ubuntu and exports
+both variables for a focused minimum-version job.
+
+Termux installs its own tmux for `tmux` or the legacy `tmux-floor` profile.
+When using `tmux-pinned` or `tmux-floor-exact` on a shared desktop workflow,
+set `termux-profiles` explicitly to the native `tmux` profile plus the other
+Termux prerequisites. With
 `setup: dotfiles`, the named setup installs its own fixed package list and
 ignores the caller's `profiles`, these included. Termux additionally supports
 `runtime` as a lightweight alternative to `base`: both provide Bash and

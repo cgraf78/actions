@@ -208,15 +208,111 @@ assert_eq 64 "${#TMUX_FLOOR_SHA256}" 'tmux floor checksum is a SHA-256'
 
 printf 'ok - only tmux-floor on CentOS builds the floor tmux\n'
 
+export MATRIX_NAME=Ubuntu PROFILES=tmux-floor-exact
+floor_tmux_calls=0 floor_exports=0
+install_profile_prereqs
+assert_contains 'libevent-dev libncurses-dev' "$apt_pkgs" \
+  'the exact floor installs the libraries needed to build on Ubuntu'
+assert_eq 1 "$floor_tmux_calls" 'the exact floor builds tmux on Ubuntu'
+assert_eq 1 "$floor_exports" 'the exact floor names the floor'
+
+# shellcheck disable=SC2329 # install_profile_prereqs invokes this seam.
+install_pinned_tmux() {
+  pinned_tmux_calls=$((pinned_tmux_calls + 1))
+}
+export PROFILES=tmux-pinned
+for matrix in Ubuntu 'CentOS Stream' Alpine macOS; do
+  export MATRIX_NAME="$matrix"
+  pinned_tmux_calls=0 floor_tmux_calls=0 floor_exports=0
+  install_profile_prereqs
+  assert_eq 1 "$pinned_tmux_calls" "$matrix installs the shared tmux archive"
+  assert_eq 0 "$floor_tmux_calls" "$matrix does not build the floor for tmux-pinned"
+  assert_eq 0 "$floor_exports" "$matrix does not export a floor for tmux-pinned"
+  case " $apt_pkgs $dnf_pkgs $apk_pkgs $brew_pkgs " in
+    *' tmux '*)
+      printf 'not ok - %s installs a distro tmux alongside tmux-pinned\n' "$matrix" >&2
+      exit 1
+      ;;
+  esac
+done
+# A detached tmux server can start without a terminfo database, but attached
+# and nested clients need these entries in Alpine's otherwise minimal image.
+MATRIX_NAME=Alpine install_profile_prereqs
+assert_contains 'ncurses-terminfo-base' "$apk_pkgs" \
+  'the pinned build gets Alpine terminal definitions without the distro tmux'
+
+# Use the real installer and digest verifier. A plausible HTTP response
+# containing the wrong bytes must never publish a tmux to later steps.
+(
+  # shellcheck source=.github/actions/shell-ci-prereqs/lib.sh
+  . "$PREREQS_DIR/lib.sh"
+  tmux_tmp=$(mktemp -d)
+  trap 'rm -rf -- "$tmux_tmp"' EXIT
+  # shellcheck disable=SC2329 # install_pinned_tmux invokes this seam.
+  retry_pkg() {
+    while [ "$#" -gt 1 ]; do shift; done
+    printf 'invalid release archive\n' >"$1"
+  }
+  if SCRIPT_DIR=$PREREQS_DIR RUNNER_TEMP=$tmux_tmp \
+    GITHUB_PATH=$tmux_tmp/paths GITHUB_ENV=$tmux_tmp/env \
+    install_pinned_tmux >"$tmux_tmp/log" 2>&1; then
+    printf 'not ok - an unverified tmux archive was accepted\n' >&2
+    exit 1
+  fi
+  assert_contains 'failed checksum verification' "$(cat "$tmux_tmp/log")" \
+    'a bad tmux archive fails at the verification boundary'
+  [ ! -e "$tmux_tmp/paths" ] && [ ! -e "$tmux_tmp/env" ] || exit 1
+)
+printf 'ok - pinned tmux rejects an unverified archive before exporting it\n'
+
+(
+  # shellcheck source=.github/actions/shell-ci-prereqs/lib.sh
+  . "$PREREQS_DIR/lib.sh"
+  tmux_tmp=$(mktemp -d)
+  trap 'rm -rf -- "$tmux_tmp"' EXIT
+  cat >"$tmux_tmp/tmux" <<'MOCK'
+#!/bin/sh
+echo 'tmux 8.4'
+exit 1
+MOCK
+  chmod +x "$tmux_tmp/tmux"
+  tar -czf "$tmux_tmp/verified.tar.gz" -C "$tmux_tmp" tmux
+  checksum=$(sha256sum "$tmux_tmp/verified.tar.gz")
+  checksum=${checksum%% *}
+  {
+    printf 'TMUX_BUILD_VERSION=8.4\nTMUX_BUILD_RELEASE=v8.4-1\n'
+    for asset in LINUX_X86_64 LINUX_ARM64 MACOS_X86_64 MACOS_ARM64; do
+      printf 'TMUX_BUILD_%s=%s\n' "$asset" "$checksum"
+    done
+  } >"$tmux_tmp/tmux-build.lock"
+  # shellcheck disable=SC2329 # Only the external download is replaced.
+  retry_pkg() {
+    while [ "$#" -gt 1 ]; do shift; done
+    cp "$tmux_tmp/verified.tar.gz" "$1"
+  }
+  if SCRIPT_DIR=$tmux_tmp RUNNER_TEMP=$tmux_tmp \
+    GITHUB_PATH=$tmux_tmp/paths GITHUB_ENV=$tmux_tmp/env \
+    install_pinned_tmux >"$tmux_tmp/log" 2>&1; then
+    printf 'not ok - an executable with a failing version check was accepted\n' >&2
+    exit 1
+  fi
+  assert_contains 'did not provide tmux 8.4' "$(cat "$tmux_tmp/log")" \
+    'a verified archive still needs a working tmux executable'
+  [ ! -e "$tmux_tmp/paths" ] && [ ! -e "$tmux_tmp/env" ] || exit 1
+)
+printf 'ok - pinned tmux rejects executables that fail the version check\n'
+
 # The real export names the floor everywhere, and marks the leg that built it.
 # A subshell keeps the test seams above in place for the checks below.
 floor_env=$(mktemp)
-for matrix in 'CentOS Stream' Debian; do
+for matrix in 'CentOS Stream' Debian Ubuntu; do
   : >"$floor_env"
   (
     # shellcheck source=.github/actions/shell-ci-prereqs/lib.sh
     . "$PREREQS_DIR/lib.sh"
-    MATRIX_NAME=$matrix GITHUB_ENV=$floor_env export_tmux_floor
+    profile=tmux-floor
+    [ "$matrix" != Ubuntu ] || profile=tmux-floor-exact
+    PROFILES=$profile MATRIX_NAME=$matrix GITHUB_ENV=$floor_env export_tmux_floor
   )
   # shellcheck disable=SC2031 # The subshell re-sources the same value.
   expected="CI_TMUX_FLOOR=$TMUX_FLOOR_VERSION"

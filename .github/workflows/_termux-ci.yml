@@ -287,6 +287,10 @@ jobs:
               *) return 1 ;;
             esac
           }
+          if has_profile tmux-pinned || has_profile tmux-floor-exact; then
+            echo 'Use the native tmux profile in Termux (termux-profiles on shared desktop CI)' >&2
+            exit 2
+          fi
           # Every runtime needs a trusted shell and Termux's exec-path shim.
           # `base` adds network/source-control tools for repository test suites;
           # `runtime` keeps smoke-only callers lean and avoids Git's OpenSSH
@@ -357,6 +361,9 @@ jobs:
             exit 1
           }
           export LD_PRELOAD="$termux_exec_lib"
+          if has_profile tmux || has_profile tmux-floor; then
+            "$PREFIX/bin/tmux" -V
+          fi
           project_root=$(cd "$HOME/project" && pwd -P)
           if [[ "$setup" == dotfiles ]]; then
             payload_name=$(printf %s "$payload_name_b64" | base64 -d)
