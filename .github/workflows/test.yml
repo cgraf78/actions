@@ -94,7 +94,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Install pinned WezTerm
-        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@282aae0fc93616d2faca48afc0779977aa40af7d
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@dc0a352d134e3f1b86a8083740dd3e09f81fb743
         with:
           matrix-name: Ubuntu
           profiles: wezterm-pinned
@@ -282,7 +282,7 @@ jobs:
           persist-credentials: false
 
       - name: Verify internal Actions sync
-        uses: cgraf78/actions/.github/actions/verify-consumer-sync@282aae0fc93616d2faca48afc0779977aa40af7d
+        uses: cgraf78/actions/.github/actions/verify-consumer-sync@dc0a352d134e3f1b86a8083740dd3e09f81fb743
 
       - name: Verify internal action implementations
         shell: bash
