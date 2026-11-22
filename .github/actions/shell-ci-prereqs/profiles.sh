@@ -78,6 +78,17 @@ collect_profile_prereqs() {
     fi
     add_pkg apk_pkgs "tmux"
   fi
+  if has_profile tmux-pinned; then
+    # The static executable still needs the system terminal definitions,
+    # which would otherwise have arrived as dependencies of distro tmux.
+    add_pkg apt_pkgs "curl ca-certificates tar gzip ncurses-base"
+    add_pkg arch_pkgs "curl ca-certificates tar gzip ncurses"
+    add_pkg dnf_pkgs "curl ca-certificates tar gzip ncurses-base"
+    add_pkg apk_pkgs "curl ca-certificates ncurses-terminfo-base"
+  fi
+  if has_profile tmux-floor-exact; then
+    add_pkg apt_pkgs "curl ca-certificates build-essential bison pkg-config libevent-dev libncurses-dev tar gzip"
+  fi
   if has_profile openssh-netcat-lsof; then
     add_pkg apt_pkgs "lsof openssh-client netcat-openbsd"
     add_pkg arch_pkgs "lsof openssh openbsd-netcat"
@@ -133,6 +144,15 @@ collect_profile_prereqs() {
 }
 
 install_profile_prereqs() {
+  if has_profile tmux-floor-exact && [ "$MATRIX_NAME" != Ubuntu ]; then
+    printf 'tmux-floor-exact requires an Ubuntu job\n' >&2
+    return 2
+  fi
+  if has_profile tmux-pinned && { has_profile tmux || has_profile tmux-floor || has_profile tmux-floor-exact; }; then
+    printf 'tmux-pinned requires a single tmux profile\n' >&2
+    return 2
+  fi
+
   reset_profile_prereqs
   collect_profile_prereqs
 
@@ -144,11 +164,14 @@ install_profile_prereqs() {
   if has_profile lua; then
     ensure_lua_command
   fi
-  if has_profile tmux-floor; then
+  if has_profile tmux-floor || has_profile tmux-floor-exact; then
     if tmux_floor_builds_here; then
       install_floor_tmux
     fi
     export_tmux_floor
+  fi
+  if has_profile tmux-pinned; then
+    install_pinned_tmux || return
   fi
   if has_profile shellcheck && [ "$MATRIX_NAME" = Ubuntu ]; then
     install_pinned_shellcheck

@@ -60,11 +60,17 @@ jobs:
     uses: ./.github/workflows/shell-ci.yml
     with:
       matrix-set: full
-      profiles: base,procps,python,tmux-floor
+      profiles: base,procps,python,tmux-pinned
       shellcheck-inventory-path: .github/shellcheck-files.txt
       test-command: |
         python3 -c 'import tomllib'
-        sh test/tmux-floor-check
+        test "$(command -v tmux)" = "$CI_TMUX_PINNED_BIN"
+        test "$(tmux -V)" = "tmux $CI_TMUX_PINNED_VERSION"
+        socket_dir=$(mktemp -d)
+        socket=$socket_dir/tmux.sock
+        trap 'tmux -S "$socket" kill-server 2>/dev/null || true; rm -rf -- "$socket_dir"' EXIT
+        tmux -S "$socket" -f /dev/null new-session -d
+        test "$(tmux -S "$socket" display-message -p '#{version}:#{sixel_support}')" = "$CI_TMUX_PINNED_VERSION:1"
         test -f .github/workflows/shell-ci.yml
         test -f .github/workflows/_termux-ci.yml
         bash test/checkout-installer-test
@@ -260,7 +266,7 @@ jobs:
           persist-credentials: false
 
       - name: Verify internal Actions sync
-        uses: cgraf78/actions/.github/actions/verify-consumer-sync@36cab924e7f738e0167ab932b57cbb6f9d3d1cc7
+        uses: cgraf78/actions/.github/actions/verify-consumer-sync@e1fa59bc4ae14cd46b4da5491e0ef67f3d05493c
 
       - name: Verify internal action implementations
         shell: bash

@@ -94,7 +94,7 @@ jobs:
 
       - name: Stage exact Dot bootstrap payload
         if: inputs.setup == 'dotfiles'
-        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@36cab924e7f738e0167ab932b57cbb6f9d3d1cc7
+        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@e1fa59bc4ae14cd46b4da5491e0ef67f3d05493c
         env:
           HOME: ${{ github.workspace }}
         with:
@@ -110,7 +110,7 @@ jobs:
 
       - name: Configure host Android NDK toolchain
         if: inputs.host-command != '' && inputs.rust-toolchain != ''
-        uses: cgraf78/actions/.github/actions/android-rust-toolchain@36cab924e7f738e0167ab932b57cbb6f9d3d1cc7
+        uses: cgraf78/actions/.github/actions/android-rust-toolchain@e1fa59bc4ae14cd46b4da5491e0ef67f3d05493c
         with:
           rust-target: x86_64-linux-android
 
@@ -173,7 +173,7 @@ jobs:
       # lib/sdk-installer.js at the runner's pinned commit.
       # test/workflow-contract-test ties all four to that step and pin.
       - name: Install Android SDK packages
-        uses: cgraf78/actions/.github/actions/android-sdk-packages@36cab924e7f738e0167ab932b57cbb6f9d3d1cc7
+        uses: cgraf78/actions/.github/actions/android-sdk-packages@e1fa59bc4ae14cd46b4da5491e0ef67f3d05493c
         with:
           api-level: 31
           target: default
@@ -181,7 +181,7 @@ jobs:
           build-tools-version: 37.0.0
 
       - name: Stage bounded Termux ADB helper
-        uses: cgraf78/actions/.github/actions/termux-adb@36cab924e7f738e0167ab932b57cbb6f9d3d1cc7
+        uses: cgraf78/actions/.github/actions/termux-adb@e1fa59bc4ae14cd46b4da5491e0ef67f3d05493c
 
       - name: Prepare Termux host runner
         shell: bash
@@ -287,6 +287,10 @@ jobs:
               *) return 1 ;;
             esac
           }
+          if has_profile tmux-pinned || has_profile tmux-floor-exact; then
+            echo 'Use the native tmux profile in Termux (termux-profiles on shared desktop CI)' >&2
+            exit 2
+          fi
           # Every runtime needs a trusted shell and Termux's exec-path shim.
           # `base` adds network/source-control tools for repository test suites;
           # `runtime` keeps smoke-only callers lean and avoids Git's OpenSSH
@@ -357,6 +361,9 @@ jobs:
             exit 1
           }
           export LD_PRELOAD="$termux_exec_lib"
+          if has_profile tmux || has_profile tmux-floor; then
+            "$PREFIX/bin/tmux" -V
+          fi
           project_root=$(cd "$HOME/project" && pwd -P)
           if [[ "$setup" == dotfiles ]]; then
             payload_name=$(printf %s "$payload_name_b64" | base64 -d)

@@ -209,9 +209,12 @@ TMUX_FLOOR_SHA256=e4fd347843bd0772c4f48d6dde625b0b109b7a380ff15db21e97c11a4dcdf9
 # shellcheck disable=SC2034
 TMUX_FLOOR_BUILD_PKGS="gcc make bison pkgconf-pkg-config libevent-devel ncurses-devel tar gzip"
 
-# Whether this leg's distribution tmux is older than the floor, so that
-# `tmux-floor` builds the floor release there instead.
+# Ubuntu callers can opt into the exact floor independently of the full
+# platform matrix. The older tmux-floor profile still builds it on CentOS.
 tmux_floor_builds_here() {
+  if [ "$MATRIX_NAME" = Ubuntu ] && has_profile tmux-floor-exact; then
+    return 0
+  fi
   case "$MATRIX_NAME" in
     CentOS*) return 0 ;;
   esac
@@ -270,6 +273,56 @@ export_tmux_floor() {
     printf 'CI_TMUX_FLOOR_EXACT=1\n' >>"$GITHUB_ENV"
   fi
 }
+
+install_pinned_tmux() (
+  # shellcheck source=./tmux-build.lock
+  . "$SCRIPT_DIR/tmux-build.lock"
+
+  target="$(uname -s):$(uname -m)"
+  case "$target" in
+    Linux:x86_64 | Linux:amd64)
+      asset=linux-x86_64 checksum=$TMUX_BUILD_LINUX_X86_64
+      ;;
+    Linux:aarch64 | Linux:arm64)
+      asset=linux-arm64 checksum=$TMUX_BUILD_LINUX_ARM64
+      ;;
+    Darwin:x86_64 | Darwin:amd64)
+      asset=macos-x86_64 checksum=$TMUX_BUILD_MACOS_X86_64
+      ;;
+    Darwin:aarch64 | Darwin:arm64)
+      asset=macos-arm64 checksum=$TMUX_BUILD_MACOS_ARM64
+      ;;
+    *)
+      printf 'no pinned tmux build for %s\n' "$target" >&2
+      exit 1
+      ;;
+  esac
+
+  stage=$(mktemp -d "${RUNNER_TEMP:?}/tmux-pinned.XXXXXX") || exit 1
+  trap 'rm -rf -- "$stage"' EXIT
+  archive=$stage/tmux.tar.gz
+  url="https://github.com/cgraf78/tmux-builds/releases/download/$TMUX_BUILD_RELEASE/tmux-$TMUX_BUILD_VERSION-$asset.tar.gz"
+  # shellcheck disable=SC2086 # Trusted shared curl options are separate args.
+  retry_pkg curl -fsSL $CURL_NET_OPTS "$url" -o "$archive" || exit 1
+  if ! verify_sha256 "$checksum" "$archive"; then
+    printf 'tmux %s archive for %s failed checksum verification\n' "$TMUX_BUILD_RELEASE" "$asset" >&2
+    exit 1
+  fi
+  tar -xzf "$archive" -C "$stage" tmux || exit 1
+  rm -f -- "$archive" || exit 1
+  binary=$stage/tmux
+  if [ ! -f "$binary" ] || [ -L "$binary" ] || [ ! -x "$binary" ] ||
+    ! reported=$("$binary" -V) || [ "$reported" != "tmux $TMUX_BUILD_VERSION" ]; then
+    printf 'tmux %s archive for %s did not provide tmux %s\n' \
+      "$TMUX_BUILD_RELEASE" "$asset" "$TMUX_BUILD_VERSION" >&2
+    exit 1
+  fi
+  printf '%s\n' "$stage" >>"${GITHUB_PATH:?}" || exit 1
+  printf 'CI_TMUX_PINNED_BIN=%s\nCI_TMUX_PINNED_VERSION=%s\nCI_TMUX_PINNED_RELEASE=%s\n' \
+    "$binary" "$TMUX_BUILD_VERSION" "$TMUX_BUILD_RELEASE" >>"${GITHUB_ENV:?}" || exit 1
+  trap - EXIT
+  printf 'Installed tmux %s (%s, %s)\n' "$TMUX_BUILD_VERSION" "$TMUX_BUILD_RELEASE" "$asset"
+)
 
 install_pinned_shellcheck() {
   version=0.11.0

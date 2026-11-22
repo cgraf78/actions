@@ -23,6 +23,9 @@ cp -R "$root/release-installer" "$actions_source/release-installer"
 cp -R "$root/checkout-installer" "$actions_source/checkout-installer"
 cp -R "$root/capability-harness" "$actions_source/capability-harness"
 cp -R "$root/.github/actions/shared" "$actions_source/.github/actions/shared"
+mkdir -p "$actions_source/.github/actions/shell-ci-prereqs"
+cp "$root/.github/actions/shell-ci-prereqs/tmux-build.lock" \
+  "$actions_source/.github/actions/shell-ci-prereqs/tmux-build.lock"
 cp -R "$root/.github/actions/verify-consumer-sync" \
   "$actions_source/.github/actions/verify-consumer-sync"
 cp -R "$root/.github/actions/verify-release-scripts" \
@@ -328,6 +331,41 @@ GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
   ACTION_REF="$want" \
   "$verify" >/dev/null ||
   fail "consumer without release scripts did not verify"
+
+# The Shdeps tmux hook opts dotfiles into the same lock that the CI installer
+# reads. A platform-specific edit must fail even when CI runs on another OS.
+tmux_hook=.config/shdeps/hooks.d/tmux.sh
+tmux_lock=.config/shdeps/hooks.d/tmux-build.lock
+[[ ! -e "$plain_consumer/$tmux_lock" ]] ||
+  fail "consumer without a Shdeps tmux hook gained a tmux lock"
+mkdir -p "$plain_consumer/${tmux_hook%/*}"
+printf '#!/bin/sh\n' >"$plain_consumer/$tmux_hook"
+git -C "$plain_consumer" add "$tmux_hook"
+"$sync" "$plain_consumer" >/dev/null ||
+  fail "Shdeps tmux consumer did not synchronize"
+cmp -s "$actions_source/.github/actions/shell-ci-prereqs/tmux-build.lock" \
+  "$plain_consumer/$tmux_lock" ||
+  fail "sync did not copy the shared tmux build lock"
+git -C "$plain_consumer" add "$tmux_lock"
+GITHUB_WORKSPACE="$plain_consumer" ACTION_REF="$want" \
+  "$verify" >/dev/null ||
+  fail "synchronized Shdeps tmux lock did not verify"
+printf 'TMUX_BUILD_MACOS_ARM64=wrong\n' >>"$plain_consumer/$tmux_lock"
+if GITHUB_WORKSPACE="$plain_consumer" ACTION_REF="$want" \
+  "$verify" >/dev/null 2>&1; then
+  fail "modified Shdeps tmux lock unexpectedly verified"
+fi
+"$sync" "$plain_consumer" >/dev/null ||
+  fail "sync could not restore the Shdeps tmux lock"
+GITHUB_WORKSPACE="$plain_consumer" ACTION_REF="$want" \
+  "$verify" >/dev/null ||
+  fail "restored Shdeps tmux lock did not verify"
+rm "$plain_consumer/$tmux_lock"
+if GITHUB_WORKSPACE="$plain_consumer" ACTION_REF="$want" \
+  "$verify" >/dev/null 2>&1; then
+  fail "missing Shdeps tmux lock unexpectedly verified"
+fi
+git -C "$plain_consumer" rm -f -- "$tmux_hook" "$tmux_lock" >/dev/null
 
 # Source-distributed repositories opt into a generated bootstrap independently
 # of release scripts. The same Actions lock must own those bytes and their

@@ -119,6 +119,21 @@ printf 'verify-consumer-sync: %d reference(s) match %s\n' \
 export GITHUB_ACTION_PATH
 GITHUB_ACTION_PATH=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$repo_root"
+# The Shdeps hook and its generated lock travel together. Verify all platform
+# hashes here, including architectures that the current job does not run.
+tmux_hook=.config/shdeps/hooks.d/tmux.sh
+tmux_lock="${tmux_hook%/*}/tmux-build.lock"
+if git -C "$repo_root" ls-files --error-unmatch -- "$tmux_hook" >/dev/null 2>&1 ||
+  git -C "$repo_root" ls-files --error-unmatch -- "$tmux_lock" >/dev/null 2>&1; then
+  if [[ ! -f "$tmux_hook" || -L "$tmux_hook" ||
+    ! -f "$tmux_lock" || -L "$tmux_lock" || -x "$tmux_lock" ]] ||
+    ! git -C "$repo_root" ls-files --error-unmatch -- "$tmux_hook" "$tmux_lock" >/dev/null 2>&1 ||
+    ! cmp -s "$GITHUB_ACTION_PATH/../shell-ci-prereqs/tmux-build.lock" "$tmux_lock"; then
+    printf 'verify-consumer-sync: Shdeps tmux lock differs from the Actions pin. Run consumer-ci/sync.sh.\n' >&2
+    exit 1
+  fi
+fi
+
 # Release scripts are another derived view of the same dependency commit. The
 # config and generated manifest are paired markers: either one proves the repo
 # opted in, and requiring both prevents deletion of only release.conf from
