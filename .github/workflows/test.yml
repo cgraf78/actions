@@ -89,20 +89,28 @@ jobs:
       termux-profiles: base,procps
 
   wezterm-smoke:
-    name: WezTerm pin smoke
-    runs-on: ubuntu-24.04
+    name: WezTerm pin smoke / ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu
+            runner: ubuntu-24.04
+          - name: macOS
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
       - name: Install pinned WezTerm
         uses: cgraf78/actions/.github/actions/shell-ci-prereqs@dc0a352d134e3f1b86a8083740dd3e09f81fb743
         with:
-          matrix-name: Ubuntu
+          matrix-name: ${{ matrix.name }}
           profiles: wezterm-pinned
       - name: Check the installed CLI and GUI
         run: |
           test "$(command -v wezterm)" = "$CI_WEZTERM_PINNED_BIN"
           test "$(wezterm --version)" = "wezterm $CI_WEZTERM_PINNED_VERSION"
-          /usr/bin/wezterm-gui --skip-config show-keys >/dev/null
+          "$CI_WEZTERM_PINNED_GUI" --skip-config show-keys >/dev/null
 
   rust-smoke:
     name: Rust smoke
@@ -427,7 +435,7 @@ jobs:
   required:
     name: Required
     if: ${{ always() }}
-    needs: [shell-smoke, rust-smoke, matrix-contract, android-rust-toolchain, release-installer-bash32, checkout-installer-bash32, release-asset-upload-bash32, quality]
+    needs: [shell-smoke, rust-smoke, matrix-contract, android-rust-toolchain, release-installer-bash32, checkout-installer-bash32, release-asset-upload-bash32, quality, wezterm-smoke]
     runs-on: ubuntu-24.04
     env:
       SHELL_SMOKE_RESULT: ${{ needs.shell-smoke.result }}
@@ -438,6 +446,7 @@ jobs:
       CHECKOUT_INSTALLER_BASH32_RESULT: ${{ needs.checkout-installer-bash32.result }}
       RELEASE_ASSET_UPLOAD_BASH32_RESULT: ${{ needs.release-asset-upload-bash32.result }}
       QUALITY_RESULT: ${{ needs.quality.result }}
+      WEZTERM_SMOKE_RESULT: ${{ needs.wezterm-smoke.result }}
     steps:
       - name: Require successful Actions CI
         shell: bash
@@ -450,6 +459,7 @@ jobs:
           printf 'Checkout installer Bash 3.2: %s\n' "$CHECKOUT_INSTALLER_BASH32_RESULT"
           printf 'Release asset upload Bash 3.2: %s\n' "$RELEASE_ASSET_UPLOAD_BASH32_RESULT"
           printf 'Quality: %s\n' "$QUALITY_RESULT"
+          printf 'WezTerm pin smoke: %s\n' "$WEZTERM_SMOKE_RESULT"
           test "$SHELL_SMOKE_RESULT" = success
           test "$RUST_SMOKE_RESULT" = success
           test "$MATRIX_CONTRACT_RESULT" = success
@@ -458,3 +468,4 @@ jobs:
           test "$CHECKOUT_INSTALLER_BASH32_RESULT" = success
           test "$RELEASE_ASSET_UPLOAD_BASH32_RESULT" = success
           test "$QUALITY_RESULT" = success
+          test "$WEZTERM_SMOKE_RESULT" = success

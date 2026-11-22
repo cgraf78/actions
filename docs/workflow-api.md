@@ -487,10 +487,12 @@ For consumers with a Shdeps tmux hook, the same sync copies the lock next to
 the hook. `verify-consumer-sync` checks the copy against the pinned Actions
 commit, including the archive digests for platforms outside the current job.
 
-`wezterm-pinned` installs the checksum-verified Ubuntu 24.04 x86_64 package
-on an Ubuntu 24.04 x86_64 runner. Request it through the standalone
-`shell-ci-prereqs` action with `matrix-name: Ubuntu`. It verifies
-`wezterm --version` and exports `CI_WEZTERM_PINNED_BIN` (absolute path),
+`wezterm-pinned` verifies the selected package's SHA-256 and embedded CLI
+version. Request it through the standalone `shell-ci-prereqs` action with
+`matrix-name: Ubuntu` for Ubuntu 24.04 x86_64 or `matrix-name: macOS` for
+macOS arm64 or x86_64. On macOS it extracts the universal app into
+`RUNNER_TEMP` and adds its executables to `PATH`. It exports
+`CI_WEZTERM_PINNED_BIN` and `CI_WEZTERM_PINNED_GUI` (absolute paths),
 `CI_WEZTERM_PINNED_VERSION` (embedded version), and `CI_WEZTERM_PINNED_RELEASE`
 (snapshot tag). Follow the [managed WezTerm update procedure](#updating-the-managed-wezterm-build)
 to change the selection.

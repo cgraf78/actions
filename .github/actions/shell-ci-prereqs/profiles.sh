@@ -158,7 +158,7 @@ install_profile_prereqs() {
     return 2
   fi
   if has_profile wezterm-pinned && ! wezterm_target=$(wezterm_runner_target); then
-    printf 'wezterm-pinned requires an Ubuntu 24.04 x86_64 job\n' >&2
+    printf 'wezterm-pinned requires an Ubuntu 24.04 x86_64 or macOS arm64/x86_64 job\n' >&2
     return 2
   fi
 
