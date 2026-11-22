@@ -408,6 +408,23 @@ an explicit stable tag in `cgraf78/tmux-builds`.
 The exact compatibility floor is a separate support policy. The focused
 Termnav and tmux-tools floor jobs track it. Termux keeps its native package.
 
+### Updating the managed WezTerm build
+
+The [WezTerm build lock](../.github/actions/shell-ci-prereqs/wezterm-build.lock)
+owns the managed CI and Shdeps selection. Choose an immutable release from
+[cgraf78/wezterm-builds](https://github.com/cgraf78/wezterm-builds/releases).
+Use that repository's [lock generator](https://github.com/cgraf78/wezterm-builds#move-or-roll-back-the-dotfiles-pin)
+to render `snapshot.lock` from the chosen release into the Actions build lock.
+The same recipe selects an earlier snapshot for rollback.
+
+Commit the lock and follow the [self-pin cycle](../AGENTS.md#self-pin-cycle).
+After the provider lands, run `consumer-ci/sync.sh <consumer-checkout>` for
+base dotfiles and the repos using `wezterm-pinned`. Sync copies the complete
+lock next to the tracked Shdeps hook and updates the consumer's pinned action
+references. The verifier checks all package rows, including targets that CI
+does not run. Check the provider WezTerm smoke, the base Shdeps install, and
+Termnav's real image-paste test.
+
 ## `shell-ci.yml`
 
 `shell-ci.yml` runs shell-tool tests across the shared platform matrix.
@@ -454,7 +471,7 @@ two cores; Android API level, platform coverage, and timeout budgets do not
 change.
 
 Supported generic profiles are `base`, `jq`, `python`, `zsh`, `lua`, `neovim`,
-`tmux`, `tmux-pinned`, `tmux-floor`, `tmux-floor-exact`, `openssh-netcat-lsof`,
+`tmux`, `tmux-pinned`, `tmux-floor`, `tmux-floor-exact`, `wezterm-pinned`, `openssh-netcat-lsof`,
 `procps`, `cron`, `fd`, `ripgrep`, `hostname`, and `shellcheck`.
 
 `tmux-pinned` is the profile for testing the managed build on Linux, macOS, and
@@ -469,6 +486,14 @@ to change the pin.
 For consumers with a Shdeps tmux hook, the same sync copies the lock next to
 the hook. `verify-consumer-sync` checks the copy against the pinned Actions
 commit, including the archive digests for platforms outside the current job.
+
+`wezterm-pinned` installs the checksum-verified Ubuntu 24.04 x86_64 package
+on an Ubuntu 24.04 x86_64 runner. Request it through the standalone
+`shell-ci-prereqs` action with `matrix-name: Ubuntu`. It verifies
+`wezterm --version` and exports `CI_WEZTERM_PINNED_BIN` (absolute path),
+`CI_WEZTERM_PINNED_VERSION` (embedded version), and `CI_WEZTERM_PINNED_RELEASE`
+(snapshot tag). Follow the [managed WezTerm update procedure](#updating-the-managed-wezterm-build)
+to change the selection.
 
 `tmux` installs each platform's own tmux.
 `tmux-floor` does the same wherever that tmux is at least the supported floor

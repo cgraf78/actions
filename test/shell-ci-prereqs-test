@@ -336,6 +336,75 @@ LOCK
 )
 printf 'ok - pinned tmux requires and exports the expected package version\n'
 
+if (MATRIX_NAME=macOS PROFILES=wezterm-pinned install_profile_prereqs); then
+  printf 'not ok - an unsupported runner accepted wezterm-pinned\n' >&2
+  exit 1
+fi
+
+(
+  # shellcheck source=.github/actions/shell-ci-prereqs/lib.sh
+  . "$PREREQS_DIR/lib.sh"
+  wezterm_tmp=$(mktemp -d)
+  trap 'rm -rf -- "$wezterm_tmp"' EXIT
+  fixture_url=https://github.com/cgraf78/wezterm-builds/releases/download/snapshot-20261121/fixture.deb
+  printf 'package bytes\n' >"$wezterm_tmp/expected.deb"
+  checksum=$(shasum -a 256 "$wezterm_tmp/expected.deb")
+  fixture_pin="ubuntu24.04-x86_64 20261121-002403-ee6f3044 ${checksum%% *} $fixture_url"
+  printf '%s\n%s\n' "$fixture_pin" "$fixture_pin" >"$wezterm_tmp/wezterm-build.lock"
+
+  # shellcheck disable=SC2329 # install_pinned_wezterm invokes this seam.
+  retry_pkg() {
+    case "$1" in
+      curl)
+        while [ "$#" -gt 3 ]; do shift; done
+        [ "$1" = "$fixture_url" ] || return 1
+        if [ "${FIXTURE_WEZTERM_BAD_BYTES:-}" = 1 ]; then
+          printf 'wrong package bytes\n' >"$3"
+        else
+          cp "$wezterm_tmp/expected.deb" "$3"
+        fi
+        ;;
+      apt-get)
+        printf '%s\n' "$*" >"$wezterm_tmp/install"
+        return 66
+        ;;
+      *) return 1 ;;
+    esac
+  }
+
+  install_fixture_wezterm() {
+    SCRIPT_DIR=$wezterm_tmp RUNNER_TEMP=$wezterm_tmp GITHUB_ENV=$wezterm_tmp/env \
+      SUDO='' APT_GET=apt-get APT_NET_OPTS='' \
+      install_pinned_wezterm ubuntu24.04-x86_64 >"$wezterm_tmp/log" 2>&1
+  }
+
+  if install_fixture_wezterm; then
+    printf 'not ok - an ambiguous WezTerm lock was accepted\n' >&2
+    exit 1
+  fi
+  assert_contains 'expected one valid WezTerm lock row' "$(cat "$wezterm_tmp/log")" \
+    'multiple packages for the selected WezTerm runner fail selection'
+  [ ! -e "$wezterm_tmp/install" ] && [ ! -e "$wezterm_tmp/env" ] || exit 1
+  printf '%s\n' "$fixture_pin" >"$wezterm_tmp/wezterm-build.lock"
+
+  if FIXTURE_WEZTERM_BAD_BYTES=1 install_fixture_wezterm; then
+    printf 'not ok - an unverified WezTerm package was accepted\n' >&2
+    exit 1
+  fi
+  assert_contains 'failed checksum verification' "$(cat "$wezterm_tmp/log")" \
+    'a corrupt WezTerm package fails verification before install'
+  [ ! -e "$wezterm_tmp/install" ] && [ ! -e "$wezterm_tmp/env" ] || exit 1
+
+  if install_fixture_wezterm; then
+    printf 'not ok - a failed WezTerm install was accepted\n' >&2
+    exit 1
+  fi
+  assert_contains 'apt-get install -y --no-install-recommends' \
+    "$(cat "$wezterm_tmp/install")" 'installer hands verified WezTerm package to apt'
+  [ ! -e "$wezterm_tmp/env" ] || exit 1
+)
+printf 'ok - pinned WezTerm verifies the package before handing it to apt\n'
+
 # The real export names the floor everywhere, and marks the leg that built it.
 # A subshell keeps the test seams above in place for the checks below.
 floor_env=$(mktemp)

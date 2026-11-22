@@ -88,6 +88,22 @@ jobs:
         bash test/consumer-installer-canary prepare .termux-ci/installer-canary
       termux-profiles: base,procps
 
+  wezterm-smoke:
+    name: WezTerm pin smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Install pinned WezTerm
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@282aae0fc93616d2faca48afc0779977aa40af7d
+        with:
+          matrix-name: Ubuntu
+          profiles: wezterm-pinned
+      - name: Check the installed CLI and GUI
+        run: |
+          test "$(command -v wezterm)" = "$CI_WEZTERM_PINNED_BIN"
+          test "$(wezterm --version)" = "wezterm $CI_WEZTERM_PINNED_VERSION"
+          /usr/bin/wezterm-gui --skip-config show-keys >/dev/null
+
   rust-smoke:
     name: Rust smoke
     uses: ./.github/workflows/rust-ci.yml
