@@ -80,3 +80,5 @@ reviewed commit, one PR per consumer.
 
 For the shared tmux pin, follow
 [Updating the managed tmux build](docs/workflow-api.md#updating-the-managed-tmux-build).
+For the shared WezTerm pin, follow
+[Updating the managed WezTerm build](docs/workflow-api.md#updating-the-managed-wezterm-build).

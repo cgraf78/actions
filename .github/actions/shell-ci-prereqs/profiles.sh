@@ -89,6 +89,11 @@ collect_profile_prereqs() {
   if has_profile tmux-floor-exact; then
     add_pkg apt_pkgs "curl ca-certificates build-essential bison pkg-config libevent-dev libncurses-dev tar gzip"
   fi
+  if has_profile wezterm-pinned; then
+    # Reuse the package-manager update and prerequisite phase before installing
+    # the locally verified package with its own declared runtime dependencies.
+    add_pkg apt_pkgs "curl ca-certificates"
+  fi
   if has_profile openssh-netcat-lsof; then
     add_pkg apt_pkgs "lsof openssh-client netcat-openbsd"
     add_pkg arch_pkgs "lsof openssh openbsd-netcat"
@@ -152,6 +157,10 @@ install_profile_prereqs() {
     printf 'tmux-pinned requires a single tmux profile\n' >&2
     return 2
   fi
+  if has_profile wezterm-pinned && ! wezterm_target=$(wezterm_runner_target); then
+    printf 'wezterm-pinned requires an Ubuntu 24.04 x86_64 job\n' >&2
+    return 2
+  fi
 
   reset_profile_prereqs
   collect_profile_prereqs
@@ -172,6 +181,9 @@ install_profile_prereqs() {
   fi
   if has_profile tmux-pinned; then
     install_pinned_tmux || return
+  fi
+  if has_profile wezterm-pinned; then
+    install_pinned_wezterm "$wezterm_target" || return
   fi
   if has_profile shellcheck && [ "$MATRIX_NAME" = Ubuntu ]; then
     install_pinned_shellcheck

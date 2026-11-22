@@ -121,18 +121,21 @@ GITHUB_ACTION_PATH=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$repo_root"
 # The Shdeps hook and its generated lock travel together. Verify all platform
 # hashes here, including architectures that the current job does not run.
-tmux_hook=.config/shdeps/hooks.d/tmux.sh
-tmux_lock="${tmux_hook%/*}/tmux-build.lock"
-if git -C "$repo_root" ls-files --error-unmatch -- "$tmux_hook" >/dev/null 2>&1 ||
-  git -C "$repo_root" ls-files --error-unmatch -- "$tmux_lock" >/dev/null 2>&1; then
-  if [[ ! -f "$tmux_hook" || -L "$tmux_hook" ||
-    ! -f "$tmux_lock" || -L "$tmux_lock" || -x "$tmux_lock" ]] ||
-    ! git -C "$repo_root" ls-files --error-unmatch -- "$tmux_hook" "$tmux_lock" >/dev/null 2>&1 ||
-    ! cmp -s "$GITHUB_ACTION_PATH/../shell-ci-prereqs/tmux-build.lock" "$tmux_lock"; then
-    printf 'verify-consumer-sync: Shdeps tmux lock differs from the Actions pin. Run consumer-ci/sync.sh.\n' >&2
-    exit 1
+shdeps_hooks=.config/shdeps/hooks.d
+for tool in tmux wezterm; do
+  hook="$shdeps_hooks/$tool.sh"
+  build_lock="$shdeps_hooks/$tool-build.lock"
+  if git -C "$repo_root" ls-files --error-unmatch -- "$hook" >/dev/null 2>&1 ||
+    git -C "$repo_root" ls-files --error-unmatch -- "$build_lock" >/dev/null 2>&1; then
+    if [[ ! -f "$hook" || -L "$hook" || -L .config || -L .config/shdeps || -L "$shdeps_hooks" ||
+      ! -f "$build_lock" || -L "$build_lock" || -x "$build_lock" ]] ||
+      ! git -C "$repo_root" ls-files --error-unmatch -- "$hook" "$build_lock" >/dev/null 2>&1 ||
+      ! cmp -s "$GITHUB_ACTION_PATH/../shell-ci-prereqs/$tool-build.lock" "$build_lock"; then
+      printf 'verify-consumer-sync: Shdeps %s lock differs from the Actions pin. Run consumer-ci/sync.sh.\n' "$tool" >&2
+      exit 1
+    fi
   fi
-fi
+done
 
 # Release scripts are another derived view of the same dependency commit. The
 # config and generated manifest are paired markers: either one proves the repo

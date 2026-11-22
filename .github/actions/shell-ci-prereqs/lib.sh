@@ -327,6 +327,73 @@ install_pinned_tmux() (
   printf 'Installed tmux %s (%s, %s)\n' "$expected_version" "$TMUX_BUILD_RELEASE" "$asset"
 )
 
+wezterm_runner_target() (
+  [ "$MATRIX_NAME" = Ubuntu ] && [ "$(uname -s)" = Linux ] && [ -r /etc/os-release ] || exit 2
+  ID='' VERSION_ID=''
+  # shellcheck disable=SC1091 # Runner-owned platform identity.
+  . /etc/os-release
+  case "$ID:$VERSION_ID:$(uname -m)" in
+    ubuntu:24.04:x86_64 | ubuntu:24.04:amd64) printf '%s\n' ubuntu24.04-x86_64 ;;
+    *) exit 2 ;;
+  esac
+)
+
+install_pinned_wezterm() (
+  target=$1
+  # Unlike the tmux lock, this one has per-package rows and never contains
+  # shell assignments. Read only the exact runner's single DEB record.
+  if ! pin=$(awk -v target="$target" '
+    $1 == target {
+      rows++
+      if (NF != 4 || $2 !~ /^[0-9]+-[0-9]+-[0-9a-f]+$/ ||
+          length($3) != 64 || $3 !~ /^[0-9a-f]+$/) exit 1
+      print $2, $3, $4
+    }
+    END { if (rows != 1) exit 1 }
+  ' "$SCRIPT_DIR/wezterm-build.lock"); then
+    printf 'expected one valid WezTerm lock row for %s\n' "$target" >&2
+    exit 1
+  fi
+  IFS=' ' read -r expected_version checksum url <<EOF
+$pin
+EOF
+  snapshot_root=https://github.com/cgraf78/wezterm-builds/releases/download/
+  case "$url" in
+    "$snapshot_root"snapshot-*/*.deb) ;;
+    *)
+      printf 'invalid WezTerm snapshot package URL for %s\n' "$target" >&2
+      exit 1
+      ;;
+  esac
+  release=${url#"$snapshot_root"}
+  release=${release%%/*}
+
+  stage=$(mktemp -d "${RUNNER_TEMP:?}/wezterm-pinned.XXXXXX") || exit 1
+  trap 'rm -rf -- "$stage"' EXIT
+  archive=$stage/wezterm.deb
+  # shellcheck disable=SC2086 # Trusted shared curl options are separate args.
+  retry_pkg curl -fsSL $CURL_NET_OPTS "$url" -o "$archive" || exit 1
+  if ! verify_sha256 "$checksum" "$archive"; then
+    printf 'WezTerm %s package for %s failed checksum verification\n' "$release" "$target" >&2
+    exit 1
+  fi
+  # APT's unprivileged fetcher needs to traverse the verified package directory.
+  chmod 0755 "$stage" && chmod 0644 "$archive" || exit 1
+  # shellcheck disable=SC2086 # Trusted package-manager options are separate args.
+  retry_pkg $SUDO $APT_GET $APT_NET_OPTS install -y --no-install-recommends \
+    --reinstall --allow-downgrades "$archive" || exit 1
+
+  binary=/usr/bin/wezterm
+  if ! reported=$("$binary" --version) || [ "$reported" != "wezterm $expected_version" ]; then
+    printf 'WezTerm %s package for %s did not provide wezterm %s\n' \
+      "$release" "$target" "$expected_version" >&2
+    exit 1
+  fi
+  printf 'CI_WEZTERM_PINNED_BIN=%s\nCI_WEZTERM_PINNED_VERSION=%s\nCI_WEZTERM_PINNED_RELEASE=%s\n' \
+    "$binary" "$expected_version" "$release" >>"${GITHUB_ENV:?}" || exit 1
+  printf 'Installed WezTerm %s (%s, %s)\n' "$expected_version" "$release" "$target"
+)
+
 install_pinned_shellcheck() {
   version=0.11.0
   checksum=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198

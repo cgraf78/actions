@@ -45,6 +45,10 @@ top-level `install.sh`, `RELEASE_STANDALONE_INSTALLER=true` and
 rejects that conflict before changing consumer files. Commit all derived
 changes together.
 
+A tracked Shdeps tmux or WezTerm hook receives the build lock used by its
+shared CI profile. The verifier compares that generated copy byte for byte
+against the pinned Actions checkout.
+
 The `verify-consumer-sync` action checks the inverse contract in CI: its own ref
 and every other `cgraf78/actions` ref must agree with the lock. A tracked
 `scripts/release.conf` automatically includes the vendored scripts in that same
