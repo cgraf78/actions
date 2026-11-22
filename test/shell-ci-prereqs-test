@@ -272,8 +272,8 @@ printf 'ok - pinned tmux rejects an unverified archive before exporting it\n'
   trap 'rm -rf -- "$tmux_tmp"' EXIT
   cat >"$tmux_tmp/tmux" <<'MOCK'
 #!/bin/sh
-echo 'tmux 8.4'
-exit 1
+printf 'tmux %s\n' "$FIXTURE_TMUX_VERSION"
+exit "${FIXTURE_TMUX_STATUS:-0}"
 MOCK
   chmod +x "$tmux_tmp/tmux"
   tar -czf "$tmux_tmp/verified.tar.gz" -C "$tmux_tmp" tmux
@@ -287,20 +287,54 @@ MOCK
   } >"$tmux_tmp/tmux-build.lock"
   # shellcheck disable=SC2329 # Only the external download is replaced.
   retry_pkg() {
-    while [ "$#" -gt 1 ]; do shift; done
-    cp "$tmux_tmp/verified.tar.gz" "$1"
+    while [ "$#" -gt 3 ]; do shift; done
+    case "$1" in
+      https://*/v8.4-1/tmux-8.4-*.tar.gz) ;;
+      *)
+        printf 'unexpected tmux archive URL: %s\n' "$1" >&2
+        return 1
+        ;;
+    esac
+    cp "$tmux_tmp/verified.tar.gz" "$3"
   }
-  if SCRIPT_DIR=$tmux_tmp RUNNER_TEMP=$tmux_tmp \
-    GITHUB_PATH=$tmux_tmp/paths GITHUB_ENV=$tmux_tmp/env \
-    install_pinned_tmux >"$tmux_tmp/log" 2>&1; then
+  install_fixture_tmux() {
+    SCRIPT_DIR=$tmux_tmp RUNNER_TEMP=$tmux_tmp \
+      GITHUB_PATH=$tmux_tmp/paths GITHUB_ENV=$tmux_tmp/env \
+      install_pinned_tmux >"$tmux_tmp/log" 2>&1
+  }
+  if FIXTURE_TMUX_VERSION=8.4 FIXTURE_TMUX_STATUS=1 install_fixture_tmux; then
     printf 'not ok - an executable with a failing version check was accepted\n' >&2
     exit 1
   fi
   assert_contains 'did not provide tmux 8.4' "$(cat "$tmux_tmp/log")" \
     'a verified archive still needs a working tmux executable'
   [ ! -e "$tmux_tmp/paths" ] && [ ! -e "$tmux_tmp/env" ] || exit 1
+
+  TMUX_BUILD_REPORTED_VERSION=stale FIXTURE_TMUX_VERSION=8.4 install_fixture_tmux
+  grep -Fxq 'CI_TMUX_PINNED_VERSION=8.4' "$tmux_tmp/env"
+  rm -f "$tmux_tmp/paths" "$tmux_tmp/env"
+
+  cat >>"$tmux_tmp/tmux-build.lock" <<'LOCK'
+TMUX_BUILD_REPORTED_VERSION=${TMUX_BUILD_RELEASE#v}+cgraf78
+LOCK
+  if FIXTURE_TMUX_VERSION=8.4 install_fixture_tmux; then
+    printf 'not ok - a suffixed lock accepted an upstream-only executable version\n' >&2
+    exit 1
+  fi
+  assert_contains 'did not provide tmux 8.4-1+cgraf78' "$(cat "$tmux_tmp/log")" \
+    'a verified archive must report the downstream version specified by the lock'
+  [ ! -e "$tmux_tmp/paths" ] && [ ! -e "$tmux_tmp/env" ] || exit 1
+
+  if FIXTURE_TMUX_VERSION=8.4-1 install_fixture_tmux; then
+    printf 'not ok - installer accepted a version without build provenance\n' >&2
+    exit 1
+  fi
+  [ ! -e "$tmux_tmp/paths" ] && [ ! -e "$tmux_tmp/env" ] || exit 1
+
+  FIXTURE_TMUX_VERSION=8.4-1+cgraf78 install_fixture_tmux
+  grep -Fxq 'CI_TMUX_PINNED_VERSION=8.4-1+cgraf78' "$tmux_tmp/env"
 )
-printf 'ok - pinned tmux rejects executables that fail the version check\n'
+printf 'ok - pinned tmux requires and exports the expected package version\n'
 
 # The real export names the floor everywhere, and marks the leg that built it.
 # A subshell keeps the test seams above in place for the checks below.

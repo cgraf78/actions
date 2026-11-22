@@ -386,8 +386,10 @@ an explicit stable tag in `cgraf78/tmux-builds`.
 1. Read the published checksums with
    `gh release download "$tag" --repo cgraf78/tmux-builds --pattern SHA256SUMS --output -`.
    Verify the four Linux and macOS archives against that manifest. Update
-   the upstream version, downstream revision, and four checksums in the
-   Actions lock. A rebuild can advance the downstream revision alone.
+   `TMUX_BUILD_VERSION` for the upstream archive names, `TMUX_BUILD_RELEASE`
+   for the downstream tag, and the four checksums in the Actions lock.
+   `TMUX_BUILD_REPORTED_VERSION` derives the embedded version from the tag
+   and adds `+cgraf78`. A rebuild can advance the downstream revision alone.
 2. Commit the provider change and run `consumer-ci/sync.sh --self`. Follow
    the [self-pin cycle](../AGENTS.md#self-pin-cycle) to retain the internal
    action commit. Validate the fresh-server version and sixel support in
@@ -459,7 +461,7 @@ Supported generic profiles are `base`, `jq`, `python`, `zsh`, `lua`, `neovim`,
 WSL. It selects the OS and architecture archive from
 [`shell-ci-prereqs/tmux-build.lock`](../.github/actions/shell-ci-prereqs/tmux-build.lock),
 verifies its SHA-256, and adds the executable to `PATH`. It exports
-`CI_TMUX_PINNED_BIN` (absolute path), `CI_TMUX_PINNED_VERSION` (upstream version),
+`CI_TMUX_PINNED_BIN` (absolute path), `CI_TMUX_PINNED_VERSION` (embedded version),
 and `CI_TMUX_PINNED_RELEASE` (downstream tag including the leading `v`).
 Standalone jobs can request it directly through the `shell-ci-prereqs`
 composite action. Follow the [managed tmux update procedure](#updating-the-managed-tmux-build)

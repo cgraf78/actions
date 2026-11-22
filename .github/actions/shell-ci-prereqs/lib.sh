@@ -275,8 +275,11 @@ export_tmux_floor() {
 }
 
 install_pinned_tmux() (
+  # Keep inherited settings from supplying a version missing in a legacy lock.
+  unset TMUX_BUILD_REPORTED_VERSION
   # shellcheck source=./tmux-build.lock
   . "$SCRIPT_DIR/tmux-build.lock"
+  expected_version=${TMUX_BUILD_REPORTED_VERSION:-$TMUX_BUILD_VERSION}
 
   target="$(uname -s):$(uname -m)"
   case "$target" in
@@ -312,16 +315,16 @@ install_pinned_tmux() (
   rm -f -- "$archive" || exit 1
   binary=$stage/tmux
   if [ ! -f "$binary" ] || [ -L "$binary" ] || [ ! -x "$binary" ] ||
-    ! reported=$("$binary" -V) || [ "$reported" != "tmux $TMUX_BUILD_VERSION" ]; then
+    ! reported=$("$binary" -V) || [ "$reported" != "tmux $expected_version" ]; then
     printf 'tmux %s archive for %s did not provide tmux %s\n' \
-      "$TMUX_BUILD_RELEASE" "$asset" "$TMUX_BUILD_VERSION" >&2
+      "$TMUX_BUILD_RELEASE" "$asset" "$expected_version" >&2
     exit 1
   fi
   printf '%s\n' "$stage" >>"${GITHUB_PATH:?}" || exit 1
   printf 'CI_TMUX_PINNED_BIN=%s\nCI_TMUX_PINNED_VERSION=%s\nCI_TMUX_PINNED_RELEASE=%s\n' \
-    "$binary" "$TMUX_BUILD_VERSION" "$TMUX_BUILD_RELEASE" >>"${GITHUB_ENV:?}" || exit 1
+    "$binary" "$expected_version" "$TMUX_BUILD_RELEASE" >>"${GITHUB_ENV:?}" || exit 1
   trap - EXIT
-  printf 'Installed tmux %s (%s, %s)\n' "$TMUX_BUILD_VERSION" "$TMUX_BUILD_RELEASE" "$asset"
+  printf 'Installed tmux %s (%s, %s)\n' "$expected_version" "$TMUX_BUILD_RELEASE" "$asset"
 )
 
 install_pinned_shellcheck() {
