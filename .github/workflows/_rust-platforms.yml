@@ -65,7 +65,7 @@ jobs:
         # This action is the shared OS policy used by shell, Rust, and future
         # language-specific CI workflows. Rust owns only the language setup and
         # commands below.
-        uses: cgraf78/actions/.github/actions/platform-matrix@dc0a352d134e3f1b86a8083740dd3e09f81fb743
+        uses: cgraf78/actions/.github/actions/platform-matrix@eae91e5478afef7d0c261c2119e3e2017219e47d
         with:
           matrix-set: ${{ inputs.matrix-set }}
 
@@ -119,7 +119,7 @@ jobs:
     name: ${{ matrix.shard && format('{0} / {1}', matrix.name, matrix.shard) || matrix.name }}
     steps:
       - name: Install OS prerequisites
-        uses: cgraf78/actions/.github/actions/rust-ci-prereqs@dc0a352d134e3f1b86a8083740dd3e09f81fb743
+        uses: cgraf78/actions/.github/actions/rust-ci-prereqs@eae91e5478afef7d0c261c2119e3e2017219e47d
         with:
           matrix-name: ${{ matrix.name }}
 
@@ -128,7 +128,7 @@ jobs:
       # shell-ci instead of making each consumer duplicate an OS matrix.
       - name: Install test prerequisites
         if: inputs.profiles != ''
-        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@dc0a352d134e3f1b86a8083740dd3e09f81fb743
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@eae91e5478afef7d0c261c2119e3e2017219e47d
         with:
           matrix-name: ${{ matrix.name }}
           profiles: ${{ inputs.profiles }}

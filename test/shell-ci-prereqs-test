@@ -336,7 +336,7 @@ LOCK
 )
 printf 'ok - pinned tmux requires and exports the expected package version\n'
 
-if (MATRIX_NAME=macOS PROFILES=wezterm-pinned install_profile_prereqs); then
+if (MATRIX_NAME=Debian PROFILES=wezterm-pinned install_profile_prereqs); then
   printf 'not ok - an unsupported runner accepted wezterm-pinned\n' >&2
   exit 1
 fi
@@ -404,6 +404,77 @@ fi
   [ ! -e "$wezterm_tmp/env" ] || exit 1
 )
 printf 'ok - pinned WezTerm verifies the package before handing it to apt\n'
+
+(
+  # Original bytes, archive extraction, digest and version checks are real.
+  # shellcheck source=.github/actions/shell-ci-prereqs/lib.sh
+  . "$PREREQS_DIR/lib.sh"
+  wezterm_tmp=$(mktemp -d)
+  trap 'rm -rf -- "$wezterm_tmp"' EXIT
+  app=$wezterm_tmp/fixture/WezTerm-macos-nightly/WezTerm.app/Contents/MacOS
+  mkdir -p "$app"
+  cat >"$app/wezterm" <<'MOCK'
+#!/bin/sh
+printf 'wezterm %s\n' "${FIXTURE_WEZTERM_VERSION:-20261203-114500-123abcd}"
+MOCK
+  cp "$app/wezterm" "$app/wezterm-gui"
+  chmod +x "$app/wezterm" "$app/wezterm-gui"
+  (cd "$wezterm_tmp/fixture" && zip -qr "$wezterm_tmp/expected.zip" WezTerm-macos-nightly)
+  checksum=$(shasum -a 256 "$wezterm_tmp/expected.zip")
+  fixture_url=https://github.com/cgraf78/wezterm-builds/releases/download/snapshot-fixture/WezTerm-macos-nightly.zip
+  printf 'macos %s %s %s\n' 20261203-114500-123abcd "${checksum%% *}" "$fixture_url" >"$wezterm_tmp/wezterm-build.lock"
+
+  # shellcheck disable=SC2329 # Exercised indirectly by the platform selector and checksum check.
+  uname() {
+    case "$1" in
+      -s) printf '%s\n' Darwin ;;
+      -m) printf '%s\n' "$FIXTURE_WEZTERM_ARCH" ;;
+      *) command uname "$@" ;;
+    esac
+  }
+  # shellcheck disable=SC2329 # Only the external download is replaced.
+  retry_pkg() {
+    [ "$1" = curl ] || return 1
+    while [ "$#" -gt 3 ]; do shift; done
+    [ "$1" = "$fixture_url" ] || return 1
+    cp "$wezterm_tmp/expected.zip" "$3"
+  }
+  # shellcheck disable=SC2329 # The fixture also runs on the Ubuntu quality runner.
+  ditto() {
+    if command -v /usr/bin/ditto >/dev/null 2>&1; then
+      /usr/bin/ditto "$@"
+    else
+      [ "$#" -eq 4 ] && [ "$1" = -x ] && [ "$2" = -k ] || return 1
+      unzip -q "$3" -d "$4"
+    fi
+  }
+  install_fixture_macos_wezterm() (
+    MATRIX_NAME=macOS PROFILES=wezterm-pinned SCRIPT_DIR=$wezterm_tmp RUNNER_TEMP=$wezterm_tmp \
+      GITHUB_ENV=$wezterm_tmp/env GITHUB_PATH=$wezterm_tmp/paths install_profile_prereqs
+  )
+
+  if FIXTURE_WEZTERM_ARCH=arm64 FIXTURE_WEZTERM_VERSION=20261203-114500-fffffff \
+    install_fixture_macos_wezterm >"$wezterm_tmp/log" 2>&1; then
+    printf 'not ok - a macOS WezTerm archive with the wrong version was accepted\n' >&2
+    exit 1
+  fi
+  assert_contains 'did not provide wezterm 20261203-114500-123abcd' "$(cat "$wezterm_tmp/log")" \
+    'the macOS bundle CLI must report the selected version'
+  [ ! -e "$wezterm_tmp/env" ] && [ ! -e "$wezterm_tmp/paths" ] || exit 1
+
+  for arch in arm64 x86_64; do
+    FIXTURE_WEZTERM_ARCH=$arch FIXTURE_WEZTERM_VERSION=20261203-114500-123abcd install_fixture_macos_wezterm
+    cli=$(sed -n 's/^CI_WEZTERM_PINNED_BIN=//p' "$wezterm_tmp/env")
+    gui=$(sed -n 's/^CI_WEZTERM_PINNED_GUI=//p' "$wezterm_tmp/env")
+    assert_eq "$cli" "$(cat "$wezterm_tmp/paths")/wezterm" 'later steps resolve the verified bundle CLI'
+    assert_eq "${cli%/*}/wezterm-gui" "$gui" 'the consumer receives the GUI in the same bundle'
+    [ -x "$cli" ] && [ -x "$gui" ] || exit 1
+    grep -Fxq 'CI_WEZTERM_PINNED_VERSION=20261203-114500-123abcd' "$wezterm_tmp/env"
+    grep -Fxq 'CI_WEZTERM_PINNED_RELEASE=snapshot-fixture' "$wezterm_tmp/env"
+    rm -f "$wezterm_tmp/env" "$wezterm_tmp/paths"
+  done
+)
+printf 'ok - pinned WezTerm exports the verified macOS bundle on both architectures\n'
 
 # The real export names the floor everywhere, and marks the leg that built it.
 # A subshell keeps the test seams above in place for the checks below.

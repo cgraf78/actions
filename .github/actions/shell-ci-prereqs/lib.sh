@@ -328,20 +328,26 @@ install_pinned_tmux() (
 )
 
 wezterm_runner_target() (
-  [ "$MATRIX_NAME" = Ubuntu ] && [ "$(uname -s)" = Linux ] && [ -r /etc/os-release ] || exit 2
+  case "$MATRIX_NAME:$(uname -s):$(uname -m)" in
+    macOS:Darwin:arm64 | macOS:Darwin:aarch64 | macOS:Darwin:x86_64 | macOS:Darwin:amd64)
+      printf '%s\n' macos
+      exit 0
+      ;;
+    Ubuntu:Linux:x86_64 | Ubuntu:Linux:amd64) ;;
+    *) exit 2 ;;
+  esac
+  [ -r /etc/os-release ] || exit 2
   ID='' VERSION_ID=''
   # shellcheck disable=SC1091 # Runner-owned platform identity.
   . /etc/os-release
-  case "$ID:$VERSION_ID:$(uname -m)" in
-    ubuntu:24.04:x86_64 | ubuntu:24.04:amd64) printf '%s\n' ubuntu24.04-x86_64 ;;
-    *) exit 2 ;;
-  esac
+  [ "$ID:$VERSION_ID" = ubuntu:24.04 ] || exit 2
+  printf '%s\n' ubuntu24.04-x86_64
 )
 
 install_pinned_wezterm() (
   target=$1
   # Unlike the tmux lock, this one has per-package rows and never contains
-  # shell assignments. Read only the exact runner's single DEB record.
+  # shell assignments. Read only the exact runner's single package record.
   if ! pin=$(awk -v target="$target" '
     $1 == target {
       rows++
@@ -358,8 +364,8 @@ install_pinned_wezterm() (
 $pin
 EOF
   snapshot_root=https://github.com/cgraf78/wezterm-builds/releases/download/
-  case "$url" in
-    "$snapshot_root"snapshot-*/*.deb) ;;
+  case "$target:$url" in
+    ubuntu24.04-x86_64:"$snapshot_root"snapshot-*/*.deb | macos:"$snapshot_root"snapshot-*/*.zip) ;;
     *)
       printf 'invalid WezTerm snapshot package URL for %s\n' "$target" >&2
       exit 1
@@ -370,27 +376,49 @@ EOF
 
   stage=$(mktemp -d "${RUNNER_TEMP:?}/wezterm-pinned.XXXXXX") || exit 1
   trap 'rm -rf -- "$stage"' EXIT
-  archive=$stage/wezterm.deb
+  archive=$stage/wezterm.${url##*.}
   # shellcheck disable=SC2086 # Trusted shared curl options are separate args.
   retry_pkg curl -fsSL $CURL_NET_OPTS "$url" -o "$archive" || exit 1
   if ! verify_sha256 "$checksum" "$archive"; then
     printf 'WezTerm %s package for %s failed checksum verification\n' "$release" "$target" >&2
     exit 1
   fi
-  # APT's unprivileged fetcher needs to traverse the verified package directory.
-  chmod 0755 "$stage" && chmod 0644 "$archive" || exit 1
-  # shellcheck disable=SC2086 # Trusted package-manager options are separate args.
-  retry_pkg $SUDO $APT_GET $APT_NET_OPTS install -y --no-install-recommends \
-    --reinstall --allow-downgrades "$archive" || exit 1
+  if [ "$target" = macos ]; then
+    # Keep the signed GUI app intact and private to this job's runner.
+    ditto -x -k "$archive" "$stage" || exit 1
+    rm -f -- "$archive" || exit 1
+    set -- "$stage"/WezTerm-macos-*/WezTerm.app
+    if [ "$#" -ne 1 ] || [ ! -d "$1" ]; then
+      printf 'WezTerm %s package for %s did not provide one app bundle\n' "$release" "$target" >&2
+      exit 1
+    fi
+    bin_dir=$1/Contents/MacOS
+  else
+    # APT's unprivileged fetcher needs to traverse the verified package directory.
+    chmod 0755 "$stage" && chmod 0644 "$archive" || exit 1
+    # shellcheck disable=SC2086 # Trusted package-manager options are separate args.
+    retry_pkg $SUDO $APT_GET $APT_NET_OPTS install -y --no-install-recommends \
+      --reinstall --allow-downgrades "$archive" || exit 1
+    bin_dir=/usr/bin
+  fi
 
-  binary=/usr/bin/wezterm
+  binary=$bin_dir/wezterm
+  gui=$bin_dir/wezterm-gui
   if ! reported=$("$binary" --version) || [ "$reported" != "wezterm $expected_version" ]; then
     printf 'WezTerm %s package for %s did not provide wezterm %s\n' \
       "$release" "$target" "$expected_version" >&2
     exit 1
   fi
-  printf 'CI_WEZTERM_PINNED_BIN=%s\nCI_WEZTERM_PINNED_VERSION=%s\nCI_WEZTERM_PINNED_RELEASE=%s\n' \
-    "$binary" "$expected_version" "$release" >>"${GITHUB_ENV:?}" || exit 1
+  if [ ! -f "$gui" ] || [ ! -x "$gui" ]; then
+    printf 'WezTerm %s package for %s did not provide an executable GUI\n' "$release" "$target" >&2
+    exit 1
+  fi
+  printf 'CI_WEZTERM_PINNED_BIN=%s\nCI_WEZTERM_PINNED_GUI=%s\nCI_WEZTERM_PINNED_VERSION=%s\nCI_WEZTERM_PINNED_RELEASE=%s\n' \
+    "$binary" "$gui" "$expected_version" "$release" >>"${GITHUB_ENV:?}" || exit 1
+  if [ "$target" = macos ]; then
+    printf '%s\n' "$bin_dir" >>"${GITHUB_PATH:?}" || exit 1
+    trap - EXIT
+  fi
   printf 'Installed WezTerm %s (%s, %s)\n' "$expected_version" "$release" "$target"
 )
 

@@ -898,9 +898,11 @@ contracts() {
   check '.jobs.shell-smoke.with.test-command | contains("bash test/checkout-installer-test")' test.yml
   check '.jobs.shell-smoke.with.test-command | contains("python3 -c '\''import tomllib'\''")' test.yml
   check '.jobs.shell-smoke.with.shellcheck-inventory-path == ".github/shellcheck-files.txt"' test.yml
-  check '.jobs.wezterm-smoke."runs-on" == "ubuntu-24.04"' test.yml
+  check '.jobs.wezterm-smoke."runs-on" == "${{ matrix.runner }}"' test.yml
+  check '.jobs.wezterm-smoke.strategy.matrix.include[] | select(.name == "Ubuntu").runner == "ubuntu-24.04"' test.yml
+  check '.jobs.wezterm-smoke.strategy.matrix.include[] | select(.name == "macOS").runner == "macos-15"' test.yml
   check '.jobs.wezterm-smoke.steps[] | select(.name == "Install pinned WezTerm").with.profiles == "wezterm-pinned"' test.yml
-  check '.jobs.wezterm-smoke.steps[] | select(.name == "Install pinned WezTerm").with."matrix-name" == "Ubuntu"' test.yml
+  check '.jobs.wezterm-smoke.steps[] | select(.name == "Install pinned WezTerm").with."matrix-name" == "${{ matrix.name }}"' test.yml
   check ".jobs.wezterm-smoke.steps[] | select(.name == \"Install pinned WezTerm\").uses == \"cgraf78/actions/.github/actions/shell-ci-prereqs@$actions_lock\"" test.yml
   check '.jobs.quality.steps[] | select(.name == "Test shared ShellCheck inventory action").run == "test/shellcheck-action-test"' test.yml
   check '.jobs.quality.steps[] | select(.name == "Test third-party uses pin policy").run == "test/uses-pin-policy-test"' test.yml
@@ -965,7 +967,7 @@ contracts() {
   check '.jobs.termux-runtime == null' test.yml
   check '.jobs.required.name == "Required"' test.yml
   check '.jobs.required.if == "${{ always() }}"' test.yml
-  check '.jobs.required.needs | join(",") == "shell-smoke,rust-smoke,matrix-contract,android-rust-toolchain,release-installer-bash32,checkout-installer-bash32,release-asset-upload-bash32,quality"' test.yml
+  check '.jobs.required.needs | join(",") == "shell-smoke,rust-smoke,matrix-contract,android-rust-toolchain,release-installer-bash32,checkout-installer-bash32,release-asset-upload-bash32,quality,wezterm-smoke"' test.yml
   check '.jobs.required.steps[0].run | contains("test \"$SHELL_SMOKE_RESULT\" = success")' test.yml
   check '.jobs.required.steps[0].run | contains("test \"$RUST_SMOKE_RESULT\" = success")' test.yml
   check '.jobs.required.steps[0].run | contains("test \"$MATRIX_CONTRACT_RESULT\" = success")' test.yml
@@ -974,6 +976,8 @@ contracts() {
   check '.jobs.required.steps[0].run | contains("test \"$CHECKOUT_INSTALLER_BASH32_RESULT\" = success")' test.yml
   check '.jobs.required.steps[0].run | contains("test \"$RELEASE_ASSET_UPLOAD_BASH32_RESULT\" = success")' test.yml
   check '.jobs.required.steps[0].run | contains("test \"$QUALITY_RESULT\" = success")' test.yml
+  check '.jobs.required.env.WEZTERM_SMOKE_RESULT == "${{ needs.wezterm-smoke.result }}"' test.yml
+  check '.jobs.required.steps[0].run | contains("test \"$WEZTERM_SMOKE_RESULT\" = success")' test.yml
 
   # The consumer gate intentionally has no configurable paths: one canonical
   # lock plus release.conf auto-detection gives the fleet a smaller contract
