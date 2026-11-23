@@ -680,6 +680,10 @@ contracts() {
   check_file '.runs.steps[0].run | contains("${TERMUX_ADB_REAL:-}")' .github/actions/termux-adb/action.yml
   check_file '.runs.steps[0].run | contains("$GITHUB_ACTION_PATH/bin")' .github/actions/termux-adb/action.yml
   check_file '.runs.steps[0].run | contains("$GITHUB_PATH")' .github/actions/termux-adb/action.yml
+  # The prerequisite fixture tests source lib.sh directly and never execute
+  # this action, so only this check proves the token reaches the installer:
+  # without it the authenticated downloads silently stay anonymous.
+  check_file '.runs.steps[0].env.GITHUB_TOKEN == "${{ github.token }}"' .github/actions/shell-ci-prereqs/action.yml
 
   check '.jobs.termux.steps[] | select(.name == "Stage exact Dot bootstrap payload").if == "inputs.setup == '\''dotfiles'\''"' _termux-ci.yml
   check ".jobs.termux.steps[] | select(.name == \"Stage exact Dot bootstrap payload\").uses == \"cgraf78/actions/.github/actions/dotfiles-bootstrap@$actions_lock\"" _termux-ci.yml

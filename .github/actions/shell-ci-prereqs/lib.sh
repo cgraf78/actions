@@ -25,6 +25,33 @@ CURL_RETRY_DELAY=${CURL_RETRY_DELAY:-1}
 CURL_MAX_TIME=${CURL_MAX_TIME:-60}
 CURL_NET_OPTS="--connect-timeout 10 --max-time $CURL_MAX_TIME --speed-limit 1024 --speed-time $CURL_SPEED_TIME --retry $CURL_RETRIES --retry-all-errors --retry-delay $CURL_RETRY_DELAY"
 
+# GitHub rate-limits unauthenticated release downloads per egress IP, and
+# shared runners trip that limit: the download then fails with 403 on every
+# retry. When the caller provides GITHUB_TOKEN, authenticate the download so
+# it counts against the token's limit instead. The token reaches curl through
+# a config file, never argv, because retry_pkg prints the failed command.
+# Prints the curl arguments for the config file, or nothing without a token.
+github_download_auth_args() {
+  config_file=$1
+  if [ -z "${GITHUB_TOKEN:-}" ]; then
+    return 0
+  fi
+  # A token containing a quote, whitespace, or control character cannot be
+  # real, and it would break the config line or inject a second directive.
+  # Stay anonymous instead: anonymous is the previous behavior, so a
+  # degenerate token degrades to it, never to a failure. The guard rejects
+  # only characters that can break the line, not a fixed token format, so
+  # future token formats keep working.
+  if printf '%s' "$GITHUB_TOKEN" | grep -q '["[:space:][:cntrl:]]'; then
+    return 0
+  fi
+  # The file holds the token, so create it 0600 from the start. Remove any
+  # stale file first: truncating an existing one would keep its old mode.
+  rm -f -- "$config_file"
+  (umask 077; printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" >"$config_file") || return 1
+  printf '%s\n' "-K $config_file"
+}
+
 verify_sha256() {
   expected=$1
   file=$2
@@ -174,13 +201,16 @@ install_yq_v4() {
 
   tmp="${RUNNER_TEMP:-/tmp}/yq"
   rm -f "$tmp"
+  auth_config=${RUNNER_TEMP:-/tmp}/curl-github-auth.conf
+  auth_args=$(github_download_auth_args "$auth_config") || return 1
   # shellcheck disable=SC2086
-  if ! curl -fsSL $CURL_NET_OPTS \
+  if ! curl -fsSL $CURL_NET_OPTS $auth_args \
     "https://github.com/mikefarah/yq/releases/download/v${version}/yq_${os}_${arch}" \
     -o "$tmp"; then
-    rm -f "$tmp"
+    rm -f "$tmp" "$auth_config"
     return 1
   fi
+  rm -f -- "$auth_config"
   if ! verify_sha256 "$checksum" "$tmp"; then
     rm -f "$tmp"
     return 1
@@ -232,9 +262,12 @@ install_floor_tmux() {
   mkdir -p "$RUNNER_TEMP"
   # The bounded retry reports an exhausted deadline as an infrastructure
   # stall, so infra-retry can rerun the job.
+  auth_config=$RUNNER_TEMP/curl-github-auth.conf
+  auth_args=$(github_download_auth_args "$auth_config") || return 1
   # shellcheck disable=SC2086
-  retry_pkg curl -fsSL $CURL_NET_OPTS \
+  retry_pkg curl -fsSL $CURL_NET_OPTS $auth_args \
     "$url" -o "$archive"
+  rm -f -- "$auth_config"
   # Explicit, so a caller that tests this function cannot suspend the check.
   if ! verify_sha256 "$TMUX_FLOOR_SHA256" "$archive"; then
     echo "tmux $TMUX_FLOOR_VERSION source does not match its checksum" >&2
@@ -305,8 +338,10 @@ install_pinned_tmux() (
   trap 'rm -rf -- "$stage"' EXIT
   archive=$stage/tmux.tar.gz
   url="https://github.com/cgraf78/tmux-builds/releases/download/$TMUX_BUILD_RELEASE/tmux-$TMUX_BUILD_VERSION-$asset.tar.gz"
-  # shellcheck disable=SC2086 # Trusted shared curl options are separate args.
-  retry_pkg curl -fsSL $CURL_NET_OPTS "$url" -o "$archive" || exit 1
+  auth_args=$(github_download_auth_args "$stage/curl-github-auth.conf") || exit 1
+  # shellcheck disable=SC2086 # Trusted shared curl options and the auth config are separate args.
+  retry_pkg curl -fsSL $CURL_NET_OPTS $auth_args "$url" -o "$archive" || exit 1
+  rm -f -- "$stage/curl-github-auth.conf"
   if ! verify_sha256 "$checksum" "$archive"; then
     printf 'tmux %s archive for %s failed checksum verification\n' "$TMUX_BUILD_RELEASE" "$asset" >&2
     exit 1
@@ -377,8 +412,10 @@ EOF
   stage=$(mktemp -d "${RUNNER_TEMP:?}/wezterm-pinned.XXXXXX") || exit 1
   trap 'rm -rf -- "$stage"' EXIT
   archive=$stage/wezterm.${url##*.}
-  # shellcheck disable=SC2086 # Trusted shared curl options are separate args.
-  retry_pkg curl -fsSL $CURL_NET_OPTS "$url" -o "$archive" || exit 1
+  auth_args=$(github_download_auth_args "$stage/curl-github-auth.conf") || exit 1
+  # shellcheck disable=SC2086 # Trusted shared curl options and the auth config are separate args.
+  retry_pkg curl -fsSL $CURL_NET_OPTS $auth_args "$url" -o "$archive" || exit 1
+  rm -f -- "$stage/curl-github-auth.conf"
   if ! verify_sha256 "$checksum" "$archive"; then
     printf 'WezTerm %s package for %s failed checksum verification\n' "$release" "$target" >&2
     exit 1
@@ -441,9 +478,12 @@ install_pinned_shellcheck() {
 
   rm -rf "$install_dir"
   mkdir -p "$RUNNER_TEMP"
+  auth_config=$RUNNER_TEMP/curl-github-auth.conf
+  auth_args=$(github_download_auth_args "$auth_config") || return 1
   # shellcheck disable=SC2086
-  curl -fsSL $CURL_NET_OPTS \
+  curl -fsSL $CURL_NET_OPTS $auth_args \
     "$url" -o "$archive"
+  rm -f -- "$auth_config"
   verify_sha256 "$checksum" "$archive"
   tar -xJf "$archive" -C "$RUNNER_TEMP"
   rm -f "$archive"
