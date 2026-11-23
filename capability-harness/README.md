@@ -16,6 +16,10 @@ vendored bytes, modes, and managed filename set against the locked actions
 commit, so a local edit or a partial update fails the consumer's CI with the
 resync command.
 
+The base dotfiles repository uses
+`.local/lib/dotfiles/tests/capability-harness/` so the same helpers stay
+alongside its existing tests in the home worktree.
+
 ## Files
 
 | File | Role |
@@ -40,6 +44,15 @@ ShellCheck inventory. Each overlay keeps its own workflow-shape assertions.
 `DOT_TEST_DOT_RELEASE_REPO` (default `cgraf78/dot`). Capability CI floats to
 the newest release because the matrix images carry no Rust toolchain to build
 Dot from source; an explicit tag still selects that exact release.
+
+Setups that hand off to an unprivileged process call
+`capability_dot_release_stage DEST` first. It prints the absolute path of
+the verified archive in the otherwise empty staging directory. Keep the
+archive and its parent directories protected by the staging owner, give
+the worker read access, and call
+`capability_dot_release_extract ARCHIVE DEST` in the worker.
+`capability_dot_release_verify_checksum ARCHIVE SIDECAR` verifies the exact
+archive basename using one matching GNU-format checksum record.
 Archive and checksum transfers can use `GH_TOKEN` or `GITHUB_TOKEN`.
 
 ## Adopting
@@ -53,8 +66,8 @@ printf '# Opt in to cgraf78/actions capability-harness vendoring.\n' \
 consumer-ci/sync.sh <overlay-checkout>
 ```
 
-The marker carries no settings. It and the generated
-`test/lib/.capability-harness.manifest` must be tracked together; CI rejects
+The marker carries no settings. Track it and the generated
+`.capability-harness.manifest` together in the chosen harness directory. CI rejects
 either one alone so deleting a single marker cannot silently place the
 vendored files outside drift checks. Add each vendored file to the consumer's
 ShellCheck inventory (adding a file to this family therefore needs that

@@ -130,8 +130,9 @@ consumer-ci/verify-self-pin.sh
 Consumer repositories do not have this cycle and pin the final reviewed
 commit directly.
 
-Provider CI compares `.github/actions/` at HEAD with the locked commit and
-requires the immutable retention tag. If an internal action changes without
+Provider CI compares `.github/actions/` and the shared transport in
+`capability-harness/github-release.sh` at HEAD with the locked commit and
+requires the immutable retention tag. If either changes without
 the pin follow-up, the quality job prints the `consumer-ci/sync.sh --self`
 remediation. If the implementation is correct but not retained, it prints the
 `consumer-ci/retain-self-pin.sh` remediation. The existing consumer verifier
