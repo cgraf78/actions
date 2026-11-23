@@ -61,6 +61,41 @@ check_no_unsupervised_adb() {
   fi
 }
 
+# Run the workflow's actual retry helper without downloading tools or waiting
+# for backoff. An exhausted retry must stop setup before tests can skip tools.
+check_checkrun_mise_retry() {
+  local setup_script retry_function
+  setup_script=$(yq -r '.jobs.platform.steps[] | select(.name == "Set up Checkrun dev tools").run' \
+    "$root/.github/workflows/_shell-platforms.yml")
+  retry_function=$(sed -n '/^retry() {$/,/^}$/p' <<<"$setup_script")
+  if [[ -z $retry_function ]] || ! grep -Fxq 'retry mise install --locked' <<<"$setup_script"; then
+    printf 'workflow contract failed: missing Checkrun locked-install retry\n' >&2
+    return 1
+  fi
+
+  # shellcheck disable=SC2016 # These functions and assertions run in Bash.
+  bash -euo pipefail -c "$retry_function"$'\n''
+    attempts=0
+    sleep() { :; }
+    install_fixture() {
+      attempts=$((attempts + 1))
+      [[ $attempts -eq $1 ]] || return 52
+    }
+
+    status=0
+    retry install_fixture 0 2>/dev/null || status=$?
+    if [[ $status -ne 52 || $attempts -ne 3 ]]; then
+      printf "workflow contract failed: exhausted Mise retry exited %s after %s attempts\n" \
+        "$status" "$attempts" >&2
+      exit 1
+    fi
+
+    attempts=0
+    retry install_fixture 2 2>/dev/null
+    [[ $attempts -eq 2 ]]
+  '
+}
+
 check_platform_matrices() {
   local action script tmp matrix_set output matrix
   local expected_centos_image
@@ -1112,6 +1147,7 @@ contracts
 check_termux_cores
 check_android_sdk_packages
 check_no_literal_infra_markers
+check_checkrun_mise_retry
 check_platform_matrices
 check_linux_runner_routing
 check_kvm_setup
