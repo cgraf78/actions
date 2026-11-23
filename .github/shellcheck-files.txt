@@ -60,6 +60,7 @@ program	test/dotfiles-bootstrap-bounds-test
 program	test/dotfiles-bootstrap-test
 program	test/dotfiles-public-deps-test
 program	test/examples-test
+program	test/fixture-env.sh
 program	test/infra-retry-test
 program	test/musl-prereqs-test
 program	test/package-manager-test

@@ -7,6 +7,9 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 examples="$root/examples"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+# shellcheck source=test/fixture-env.sh
+. "$root/test/fixture-env.sh"
+actions_fixture_git "$tmp" || exit "$?"
 
 fail() {
   printf 'examples-test: %s\n' "$1" >&2

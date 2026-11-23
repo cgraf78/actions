@@ -193,11 +193,13 @@ older default-branch controller does not retry the new bootstrap, package, or
 Android SDK markers. The package-service and ADB setup markers are unchanged
 and keep retrying across both.
 
-The action inspects failed leaf-job logs and ignores only derived `Required`
-aggregates. It reruns failed jobs through GitHub's API when every failed leaf is
-allowlisted and `run_attempt` is exactly `1`. A failed second attempt remains a
-hard failure, which prevents retry loops and preserves a visible reliability
-signal.
+The action inspects failed leaf-job logs and ignores failed derived
+`Required` and installed-profile `Result` aggregates. It reruns failed jobs
+through GitHub's API when every failed leaf is allowlisted and `run_attempt`
+is exactly `1`. A cancelled, timed-out, or indeterminate sibling blocks the
+rerun. For a network-step deadline, the runner's timeout notice must accompany
+a failed prerequisite step in the job's structured step results. A failed
+second attempt remains a hard failure.
 
 Callers opt in with a controller on their default branch. Pin the action to a
 reviewed 40-character commit, substitute the caller's workflow name, and do not
@@ -239,11 +241,11 @@ reruns plus read-only repository contents.
 The Actions repository keeps a default-branch-only live canary for this
 boundary because pull-request CI cannot make GitHub load a changed
 `workflow_run` controller. After changing the controller or its classifier,
-dispatch `CI` on `main` twice: first with `retry_canary=infra`, then with
-`retry_canary=application`. Both source runs deliberately fail. The infra run
-must gain exactly one failed-job rerun and stop at attempt 2; the application
-run must remain at attempt 1. The canary has read-only contents permission and
-cannot dispatch or rerun anything itself. Ordinary push, pull-request,
+dispatch `.github/workflows/test.yml` on `main` first with `retry_canary=infra`
+and then with `retry_canary=application`. Both source runs deliberately fail.
+The infra run must gain exactly one failed-job rerun and stop at attempt 2.
+The application run must remain at attempt 1. The canary has read-only
+contents permission and cannot dispatch or rerun anything itself. Ordinary push, pull-request,
 schedule, and `workflow_dispatch` runs default to `retry_canary=none` and skip
 the canary job.
 
