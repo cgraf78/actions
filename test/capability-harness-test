@@ -22,13 +22,131 @@ fail() {
   exit 1
 }
 
+# Exercise the real release transport with only curl replaced.
+(
+  set -euo pipefail
+  # shellcheck source=capability-harness/github-release.sh
+  . "$harness/github-release.sh" || fail 'missing GitHub release transport'
+  unset GH_TOKEN GITHUB_TOKEN
+  mkdir "$tmp/release transport"
+  download="$tmp/release transport/tar archive"
+  log="$tmp/release transport/calls"
+  fake_token=fixture-token
+  case_url=https://github.com/owner/project/releases/download/v1/file%2Bname.tar
+
+  # shellcheck disable=SC2329 # The shared transport invokes this seam.
+  curl() {
+    local output='' url='' config='' arg
+    for arg; do
+      [[ $arg != *"$fake_token"* ]] || return 90
+    done
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --config)
+          [[ $2 == - ]] || return 91
+          config=$(cat)
+          shift
+          ;;
+        --output)
+          output=$2
+          shift
+          ;;
+        https://*) url=$1 ;;
+      esac
+      shift
+    done
+    printf '%s\n' "$url" >>"$log"
+    case "$url" in
+      https://api.github.com/repos/owner/project/releases/tags/v1)
+        [[ $config == *"Authorization: Bearer $fake_token"* ]] || return 92
+        if [[ ${MOCK_RELEASE_STATUS:-200} != 200 ]]; then
+          printf '%s' "$MOCK_RELEASE_STATUS"
+          return 22
+        fi
+        printf '{"assets":[{"name":"file+name.tar","id":81}]}' >"$output"
+        printf 200
+        ;;
+      https://api.github.com/repos/owner/project/releases/assets/81)
+        [[ $config == *"Authorization: Bearer $fake_token"* ]] || return 93
+        if [[ ${MOCK_ASSET_STATUS:-200} != 200 ]]; then
+          printf '%s' "$MOCK_ASSET_STATUS"
+          return "${MOCK_CURL_EXIT:-22}"
+        fi
+        printf '%s' verified >"$output"
+        printf 200
+        ;;
+      "$case_url")
+        [[ -z $config ]] || return 95
+        if [[ ${MOCK_PUBLIC_STATUS:-200} != 200 ]]; then
+          printf '%s' "$MOCK_PUBLIC_STATUS"
+          return "${MOCK_CURL_EXIT:-22}"
+        fi
+        printf '%s' public >"$output"
+        ;;
+      *) return 96 ;;
+    esac
+  }
+
+  run_download() {
+    github_release_download owner/project v1 'file+name.tar' "$download" \
+      --connect-timeout 1 --max-time 2 --retry 0
+  }
+
+  diagnostics=$(
+    export GH_TOKEN=$fake_token GITHUB_TOKEN=other-fixture-token
+    {
+      set -x
+      run_download
+    } 2>&1
+  )
+  [[ $diagnostics != *"$fake_token"* && $(cat "$download") == verified ]] ||
+    fail "authenticated transfer leaked credentials or returned unexpected bytes"
+  [[ $(tail -n 1 "$log") == https://api.github.com/repos/owner/project/releases/assets/81 ]] ||
+    fail "authenticated transfer did not request the REST asset"
+
+  GH_TOKEN=$fake_token MOCK_RELEASE_STATUS=404 run_download
+  [[ $(cat "$download") == public && $(tail -n 1 "$log") == "$case_url" ]] ||
+    fail "unavailable cross-repo API did not fall back to the public asset"
+
+  GH_TOKEN=$fake_token MOCK_ASSET_STATUS=403 run_download
+  [[ $(cat "$download") == public && $(tail -n 1 "$log") == "$case_url" ]] ||
+    fail "denied REST asset download did not fall back to the public asset"
+
+  : >"$log"
+  GITHUB_TOKEN='invalid config token' run_download
+  [[ $(cat "$log") == "$case_url" ]] || fail "invalid token entered the REST API request"
+
+  : >"$log"
+  run_download
+  [[ $(cat "$log") == "$case_url" ]] || fail "anonymous transfer used the REST API"
+
+  : >"$log"
+  rc=0
+  GH_TOKEN=$fake_token MOCK_ASSET_STATUS=503 run_download || rc=$?
+  [[ $rc == 22 && $(tail -n 1 "$log") == https://api.github.com/repos/owner/project/releases/assets/81 ]] ||
+    fail "exhausted transport failure was hidden by a public download"
+
+  # Some curl versions return exit zero with an error HTTP status when the
+  # server's Retry-After would exceed the allowed retry window.
+  rc=0
+  GH_TOKEN=$fake_token MOCK_ASSET_STATUS=429 MOCK_CURL_EXIT=0 run_download || rc=$?
+  [[ $rc == 22 ]] || fail "transport trusted curl exit zero over the REST response code"
+  rc=0
+  MOCK_PUBLIC_STATUS=503 MOCK_CURL_EXIT=0 run_download || rc=$?
+  [[ $rc == 22 ]] || fail "transport trusted curl exit zero over the public response code"
+  [[ -z $(find "$tmp/release transport" -name '*auth*') ]] ||
+    fail "failed transfer left credentials in the fixture"
+  [[ $(cat "$download") == public ]] ||
+    fail "failed transfer replaced previously published bytes"
+) || fail 'GitHub release transport failed'
+
 # --- Executable self-tests ----------------------------------------------------
 
 for entry in capability-fixture.sh suite-inventory.sh wait-github-state.sh; do
   [[ -x "$harness/$entry" ]] || fail "$entry must be executable"
   "$harness/$entry" --self-test || fail "$entry self-test failed"
 done
-for library in dot-release.sh workflow-contract.sh; do
+for library in dot-release.sh github-release.sh workflow-contract.sh; do
   [[ ! -x "$harness/$library" ]] ||
     fail "$library is a sourced library and must not be executable"
 done
@@ -74,7 +192,7 @@ out=$(bash -c 'set -euo pipefail; boundary_marker=$2; . "$1"
 # runners already choose strict mode; a library silently enabling it would
 # change unrelated callers' error handling.
 for library in capability-fixture.sh suite-inventory.sh wait-github-state.sh \
-  dot-release.sh workflow-contract.sh; do
+  dot-release.sh github-release.sh workflow-contract.sh; do
   opts=$(bash -c 'set +euo pipefail; . "$1"; printf "%s:%s" "$-" \
     "$(set -o | awk '"'"'$1 == "pipefail" { print $2 }'"'"')"' _ \
     "$harness/$library") || fail "sourcing $library failed"
@@ -150,7 +268,7 @@ stub_bin="$tmp/stub-bin"
 assets="$tmp/assets"
 mkdir -p "$stub_bin" "$assets"
 # Resolve real tools first so the stubs below can shadow only curl and uname.
-for tool in bash cat cp mkdir mktemp rm ls tar gzip sha256sum shasum awk dirname env; do
+for tool in bash cat cp mkdir mktemp mv rm ls sed tar gzip sha256sum shasum awk dirname env; do
   tool_path=$(command -v "$tool" 2>/dev/null) || continue
   ln -s "$tool_path" "$stub_bin/$tool"
 done
@@ -162,8 +280,10 @@ printf '%s\n' "$*" >>"$STUB_CURL_LOG"
 url= out= head=false
 while (($#)); do
   case $1 in
-    -o) out=$2; shift 2 ;;
-    -w | --connect-timeout | --max-time | --retry | --retry-delay | --retry-max-time) shift 2 ;;
+    -o | --output) out=$2; shift 2 ;;
+    -w | --connect-timeout | --max-time | --retry | --retry-delay | --retry-max-time | --proto | --proto-redir)
+      shift 2
+      ;;
     -fsSIL) head=true; shift ;;
     -*) shift ;;
     *) url=$1; shift ;;
@@ -208,6 +328,34 @@ make_asset() {
 make_asset "$release_tag" linux-x86_64-musl
 make_asset "$other_tag" linux-x86_64-musl
 
+# Run the composite's actual entry point in POSIX sh. Test atomic publication
+# against a real digest so an integrity failure cannot replace an existing
+# archive at the pathname that a subsequent workflow step will open.
+(
+  set -eu
+  unset GH_TOKEN GITHUB_TOKEN
+  export GITHUB_ACTION_PATH="$root/.github/actions/download-release-asset"
+  export RELEASE_REPOSITORY=cgraf78/dot RELEASE_TAG="$release_tag"
+  export RELEASE_ASSET=dot-$release_tag-linux-x86_64-musl.tar.gz
+  export RELEASE_OUTPUT="$tmp/verified archive" RELEASE_MAX_TIME=3 RELEASE_RETRIES=0
+  verify_release_asset() {
+    PATH="$stub_bin:$PATH" RELEASE_SHA256="$1" sh "$GITHUB_ACTION_PATH/run.sh"
+  }
+  valid_sha=$(awk '{print $1}' "$assets/$RELEASE_ASSET.sha256")
+  printf '%s' previous >"$RELEASE_OUTPUT"
+  if verify_release_asset "$(printf '%064d' 0)"; then
+    fail 'release action accepted incorrect SHA-256'
+  fi
+  [[ $(cat "$RELEASE_OUTPUT") == previous ]] ||
+    fail 'release action replaced output before verifying SHA-256'
+  verify_release_asset "$valid_sha" ||
+    fail 'release action rejected valid SHA-256'
+  grep -F -- '--retry-max-time 1' "$STUB_CURL_LOG" >/dev/null ||
+    fail 'release action did not bound retry start times'
+  cmp "$RELEASE_OUTPUT" "$assets/$RELEASE_ASSET" ||
+    fail 'release action did not publish the verified bytes'
+) || fail 'release action verification failed'
+
 # Run one library function in a strict child shell with only the stubs on
 # PATH, matching how consumer runners call it under `set -euo pipefail`.
 release() {
@@ -243,6 +391,8 @@ got=$(STUB_EFFECTIVE="https://github.com/cgraf78/dot/releases/tag/$release_tag" 
 [[ "$got" == "$release_tag" ]] || fail "latest-tag lookup returned $got"
 grep -F -e '--retry-all-errors' "$STUB_CURL_LOG" >/dev/null ||
   fail "latest-tag lookup does not retry transient failures"
+grep -F -e '--connect-timeout 10 --max-time 30' "$STUB_CURL_LOG" >/dev/null ||
+  fail "latest-tag lookup does not bound each transfer"
 out=$(STUB_EFFECTIVE=https://github.com/cgraf78/dot/releases \
   release _capability_dot_release_latest_tag cgraf78/dot 2>&1) &&
   fail "latest-tag lookup accepted a repository without releases"

@@ -94,7 +94,7 @@ jobs:
 
       - name: Stage exact Dot bootstrap payload
         if: inputs.setup == 'dotfiles'
-        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@78420442eb56ab78fed6ca04903aef8e404c8d5d
+        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@33035e7029a65f9d95649eb4fd80dbce44143d47
         env:
           HOME: ${{ github.workspace }}
         with:
@@ -110,7 +110,7 @@ jobs:
 
       - name: Configure host Android NDK toolchain
         if: inputs.host-command != '' && inputs.rust-toolchain != ''
-        uses: cgraf78/actions/.github/actions/android-rust-toolchain@78420442eb56ab78fed6ca04903aef8e404c8d5d
+        uses: cgraf78/actions/.github/actions/android-rust-toolchain@33035e7029a65f9d95649eb4fd80dbce44143d47
         with:
           rust-target: x86_64-linux-android
 
@@ -129,18 +129,15 @@ jobs:
           eval "$HOST_COMMAND"
 
       - name: Download official Termux APK
-        shell: bash
-        env:
-          TERMUX_APK_SHA256: 3550e61f4d9eb49b712fd1bd9519dc37085a4d8eb597c57a340f0a64859b7144
-          TERMUX_APK_URL: https://github.com/termux/termux-app/releases/download/v0.118.3/termux-app_v0.118.3%2Bgithub-debug_x86_64.apk
-        run: |
-          apk="$RUNNER_TEMP/termux.apk"
-          curl --fail --location --show-error --silent \
-            --connect-timeout 10 --max-time 45 \
-            --speed-limit 1024 --speed-time 30 \
-            --retry 1 --retry-all-errors --retry-delay 1 \
-            "$TERMUX_APK_URL" --output "$apk"
-          printf '%s  %s\n' "$TERMUX_APK_SHA256" "$apk" | sha256sum --check --strict
+        uses: cgraf78/actions/.github/actions/download-release-asset@33035e7029a65f9d95649eb4fd80dbce44143d47
+        with:
+          repository: termux/termux-app
+          tag: v0.118.3
+          asset: termux-app_v0.118.3+github-debug_x86_64.apk
+          output: ${{ runner.temp }}/termux.apk
+          sha256: 3550e61f4d9eb49b712fd1bd9519dc37085a4d8eb597c57a340f0a64859b7144
+          max-time: "45"
+          retries: "1"
 
       - name: Enable KVM acceleration
         shell: bash
@@ -173,7 +170,7 @@ jobs:
       # lib/sdk-installer.js at the runner's pinned commit.
       # test/workflow-contract-test ties all four to that step and pin.
       - name: Install Android SDK packages
-        uses: cgraf78/actions/.github/actions/android-sdk-packages@78420442eb56ab78fed6ca04903aef8e404c8d5d
+        uses: cgraf78/actions/.github/actions/android-sdk-packages@33035e7029a65f9d95649eb4fd80dbce44143d47
         with:
           api-level: 31
           target: default
@@ -181,7 +178,7 @@ jobs:
           build-tools-version: 37.0.0
 
       - name: Stage bounded Termux ADB helper
-        uses: cgraf78/actions/.github/actions/termux-adb@78420442eb56ab78fed6ca04903aef8e404c8d5d
+        uses: cgraf78/actions/.github/actions/termux-adb@33035e7029a65f9d95649eb4fd80dbce44143d47
 
       - name: Prepare Termux host runner
         shell: bash

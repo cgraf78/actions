@@ -46,7 +46,8 @@ if ! git -C "$root" cat-file -e "$actions_sha^{commit}" 2>/dev/null; then
     "$actions_sha" >&2
   exit 1
 fi
-if ! git -C "$root" diff --quiet "$actions_sha"..HEAD -- .github/actions; then
+if ! git -C "$root" diff --quiet "$actions_sha"..HEAD -- \
+  .github/actions capability-harness/github-release.sh; then
   cat >&2 <<EOF
 retain-self-pin: internal action implementations differ from lock $actions_sha
 Commit the implementation, run consumer-ci/sync.sh --self, and commit the generated lock and refs before retention.

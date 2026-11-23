@@ -102,7 +102,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Install pinned WezTerm
-        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@78420442eb56ab78fed6ca04903aef8e404c8d5d
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@33035e7029a65f9d95649eb4fd80dbce44143d47
         with:
           matrix-name: ${{ matrix.name }}
           profiles: wezterm-pinned
@@ -290,30 +290,30 @@ jobs:
           persist-credentials: false
 
       - name: Verify internal Actions sync
-        uses: cgraf78/actions/.github/actions/verify-consumer-sync@78420442eb56ab78fed6ca04903aef8e404c8d5d
+        uses: cgraf78/actions/.github/actions/verify-consumer-sync@33035e7029a65f9d95649eb4fd80dbce44143d47
 
       - name: Verify internal action implementations
         shell: bash
         run: bash consumer-ci/verify-self-pin.sh
 
-      - name: Install actionlint
+      - name: Download actionlint
         timeout-minutes: 5
-        shell: bash
-        env:
-          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
-          ACTIONLINT_VERSION: 1.7.12
-        run: |
-          archive="$RUNNER_TEMP/actionlint.tar.gz"
-          install_dir="$RUNNER_TEMP/actionlint"
-          url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+        uses: ./.github/actions/download-release-asset
+        with:
+          repository: rhysd/actionlint
+          tag: v1.7.12
+          asset: actionlint_1.7.12_linux_amd64.tar.gz
+          output: ${{ runner.temp }}/actionlint.tar.gz
+          sha256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          max-time: "60"
+          retries: "3"
 
+      - name: Install actionlint
+        shell: bash
+        run: |
+          install_dir="$RUNNER_TEMP/actionlint"
           mkdir -p "$install_dir"
-          curl -fsSL --connect-timeout 10 --max-time 60 \
-            --speed-limit 1024 --speed-time 30 \
-            --retry 3 --retry-all-errors --retry-delay 1 \
-            "$url" -o "$archive"
-          echo "${ACTIONLINT_SHA256}  ${archive}" | sha256sum -c -
-          tar -xzf "$archive" -C "$install_dir" actionlint
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$install_dir" actionlint
           echo "$install_dir" >> "$GITHUB_PATH"
 
       - name: Install zizmor

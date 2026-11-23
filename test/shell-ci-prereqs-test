@@ -3,6 +3,10 @@ set -eu
 
 REPO_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 PREREQS_DIR=$REPO_ROOT/.github/actions/shell-ci-prereqs
+unset GH_TOKEN GITHUB_TOKEN
+
+# shellcheck source=capability-harness/github-release.sh
+. "$REPO_ROOT/capability-harness/github-release.sh"
 
 # shellcheck source=.github/actions/package-manager/lib.sh
 . "$PREREQS_DIR/../package-manager/lib.sh"
@@ -112,7 +116,9 @@ curl_max_time=${CURL_MAX_TIME:-60}
 curl_retry_delay=${CURL_RETRY_DELAY:-1}
 curl_window=$(((curl_retries + 1) * curl_max_time + \
   curl_retries * curl_retry_delay))
-shellcheck_window=$((retry_window + curl_window))
+# An authenticated metadata lookup can add up to two 15-second attempts
+# with a one-second retry delay before downloading the archive.
+shellcheck_window=$((retry_window + 31 + curl_window))
 if [ "$shellcheck_window" -gt 1150 ]; then
   printf 'not ok - ShellCheck prerequisite window (%ss) leaves too little headroom in the 20m step cap\n' \
     "$shellcheck_window" >&2
@@ -249,9 +255,8 @@ assert_contains 'ncurses-terminfo-base' "$apk_pkgs" \
   tmux_tmp=$(mktemp -d)
   trap 'rm -rf -- "$tmux_tmp"' EXIT
   # shellcheck disable=SC2329 # install_pinned_tmux invokes this seam.
-  retry_pkg() {
-    while [ "$#" -gt 1 ]; do shift; done
-    printf 'invalid release archive\n' >"$1"
+  retry_release_download() {
+    printf 'invalid release archive\n' >"$4"
   }
   if SCRIPT_DIR=$PREREQS_DIR RUNNER_TEMP=$tmux_tmp \
     GITHUB_PATH=$tmux_tmp/paths GITHUB_ENV=$tmux_tmp/env \
@@ -286,16 +291,15 @@ MOCK
     done
   } >"$tmux_tmp/tmux-build.lock"
   # shellcheck disable=SC2329 # Only the external download is replaced.
-  retry_pkg() {
-    while [ "$#" -gt 3 ]; do shift; done
-    case "$1" in
-      https://*/v8.4-1/tmux-8.4-*.tar.gz) ;;
+  retry_release_download() {
+    case "$1/$2/$3" in
+      cgraf78/tmux-builds/v8.4-1/tmux-8.4-*.tar.gz) ;;
       *)
-        printf 'unexpected tmux archive URL: %s\n' "$1" >&2
+        printf 'unexpected tmux archive: %s/%s/%s\n' "$1" "$2" "$3" >&2
         return 1
         ;;
     esac
-    cp "$tmux_tmp/verified.tar.gz" "$3"
+    cp "$tmux_tmp/verified.tar.gz" "$4"
   }
   install_fixture_tmux() {
     SCRIPT_DIR=$tmux_tmp RUNNER_TEMP=$tmux_tmp \
@@ -336,131 +340,6 @@ LOCK
 )
 printf 'ok - pinned tmux requires and exports the expected package version\n'
 
-# With GITHUB_TOKEN set, the pinned download authenticates through a curl
-# config file (never argv, which retry_pkg prints when a download fails),
-# and the config file is removed once the archive is downloaded. Without a
-# token the download stays anonymous, exactly as before.
-(
-  # shellcheck source=.github/actions/shell-ci-prereqs/lib.sh
-  . "$PREREQS_DIR/lib.sh"
-  tmux_tmp=$(mktemp -d)
-  trap 'rm -rf -- "$tmux_tmp"' EXIT
-  cat >"$tmux_tmp/tmux" <<'MOCK'
-#!/bin/sh
-printf 'tmux %s\n' "$FIXTURE_TMUX_VERSION"
-exit "${FIXTURE_TMUX_STATUS:-0}"
-MOCK
-  chmod +x "$tmux_tmp/tmux"
-  tar -czf "$tmux_tmp/verified.tar.gz" -C "$tmux_tmp" tmux
-  checksum=$(sha256sum "$tmux_tmp/verified.tar.gz")
-  checksum=${checksum%% *}
-  {
-    printf 'TMUX_BUILD_VERSION=8.4\nTMUX_BUILD_RELEASE=v8.4-1\n'
-    printf 'TMUX_BUILD_REPORTED_VERSION=8.4-1+cgraf78\n'
-    for asset in LINUX_X86_64 LINUX_ARM64 MACOS_X86_64 MACOS_ARM64; do
-      printf 'TMUX_BUILD_%s=%s\n' "$asset" "$checksum"
-    done
-  } >"$tmux_tmp/tmux-build.lock"
-  # shellcheck disable=SC2329 # Only the external download is replaced.
-  retry_pkg() {
-    printf '%s\n' "$@" >"$tmux_tmp/argv"
-    prev=
-    for arg in "$@"; do
-      if [ "$prev" = -K ]; then
-        cp "$arg" "$tmux_tmp/auth-config-seen" 2>/dev/null || true
-        mode=$(stat -c %a "$arg" 2>/dev/null || stat -f %Lp "$arg" 2>/dev/null || echo unknown)
-        printf '%s\n' "$mode" >"$tmux_tmp/auth-config-mode"
-      fi
-      prev=$arg
-    done
-    while [ "$#" -gt 3 ]; do shift; done
-    cp "$tmux_tmp/verified.tar.gz" "$3"
-  }
-  install_fixture_tmux() {
-    SCRIPT_DIR=$tmux_tmp RUNNER_TEMP=$tmux_tmp \
-      GITHUB_PATH=$tmux_tmp/paths GITHUB_ENV=$tmux_tmp/env \
-      install_pinned_tmux >"$tmux_tmp/log" 2>&1
-  }
-  FIXTURE_TMUX_VERSION=8.4-1+cgraf78 GITHUB_TOKEN=fixture-token install_fixture_tmux
-  config_path=$(grep -A1 -Fx -- '-K' "$tmux_tmp/argv" | tail -n 1)
-  case "$config_path" in
-    "$tmux_tmp"/tmux-pinned.*/curl-github-auth.conf) ;;
-    *)
-      printf 'not ok - the authenticated download used no auth config: <%s>\n' \
-        "$config_path" >&2
-      exit 1
-      ;;
-  esac
-  assert_contains 'header = "Authorization: Bearer fixture-token"' \
-    "$(cat "$tmux_tmp/auth-config-seen")" \
-    'the download authenticates through a curl config file'
-  assert_eq 600 "$(cat "$tmux_tmp/auth-config-mode")" \
-    'the auth config is created 0600'
-  [ ! -e "$config_path" ] || {
-    printf 'not ok - the auth config survived the download\n' >&2
-    exit 1
-  }
-  case "$(cat "$tmux_tmp/log")" in
-    *'fixture-token'*)
-      printf 'not ok - the token leaked into the install log\n' >&2
-      exit 1
-      ;;
-  esac
-  grep -Fxq 'CI_TMUX_PINNED_VERSION=8.4-1+cgraf78' "$tmux_tmp/env"
-  rm -f "$tmux_tmp/paths" "$tmux_tmp/env" "$tmux_tmp/argv" "$tmux_tmp/auth-config-seen"
-  FIXTURE_TMUX_VERSION=8.4-1+cgraf78 GITHUB_TOKEN='' install_fixture_tmux
-  if grep -Fqx -- '-K' "$tmux_tmp/argv"; then
-    printf 'not ok - the anonymous download passed an auth config\n' >&2
-    exit 1
-  fi
-  grep -Fxq 'CI_TMUX_PINNED_VERSION=8.4-1+cgraf78' "$tmux_tmp/env"
-  # A token with characters no GitHub token can contain falls back to the
-  # anonymous download instead of writing a malformed config.
-  rm -f "$tmux_tmp/paths" "$tmux_tmp/env" "$tmux_tmp/argv"
-  FIXTURE_TMUX_VERSION=8.4-1+cgraf78 GITHUB_TOKEN='not a token' install_fixture_tmux
-  if grep -Fqx -- '-K' "$tmux_tmp/argv"; then
-    printf 'not ok - a malformed token produced an auth config\n' >&2
-    exit 1
-  fi
-  grep -Fxq 'CI_TMUX_PINNED_VERSION=8.4-1+cgraf78' "$tmux_tmp/env"
-  # A failed download prints its argv through retry_pkg, so the token must
-  # not be in it even then: only the config path may appear.
-  # shellcheck disable=SC2329 # The failing download is replaced.
-  retry_pkg() {
-    printf 'package command failed after 3 attempts (exit 22): %s\n' "$*" >&2
-    prev=
-    for arg in "$@"; do
-      if [ "$prev" = -K ]; then
-        printf '%s\n' "$arg" >"$tmux_tmp/auth-config-failed"
-      fi
-      prev=$arg
-    done
-    return 1
-  }
-  if GITHUB_TOKEN=fixture-token install_fixture_tmux; then
-    printf 'not ok - a failed tmux download was accepted\n' >&2
-    exit 1
-  fi
-  assert_contains '-K' "$(cat "$tmux_tmp/log")" \
-    'a failed download still shows the auth config argument'
-  case "$(cat "$tmux_tmp/log")" in
-    *'fixture-token'*)
-      printf 'not ok - a failed download printed the token\n' >&2
-      exit 1
-      ;;
-  esac
-  failed_config=$(cat "$tmux_tmp/auth-config-failed")
-  [ -n "$failed_config" ] || {
-    printf 'not ok - the failed download passed no auth config\n' >&2
-    exit 1
-  }
-  [ ! -e "$failed_config" ] || {
-    printf 'not ok - the auth config survived a failed download\n' >&2
-    exit 1
-  }
-)
-printf 'ok - pinned tmux authenticates its download without leaking the token\n'
-
 if (MATRIX_NAME=Debian PROFILES=wezterm-pinned install_profile_prereqs); then
   printf 'not ok - an unsupported runner accepted wezterm-pinned\n' >&2
   exit 1
@@ -478,23 +357,19 @@ fi
   printf '%s\n%s\n' "$fixture_pin" "$fixture_pin" >"$wezterm_tmp/wezterm-build.lock"
 
   # shellcheck disable=SC2329 # install_pinned_wezterm invokes this seam.
+  retry_release_download() {
+    [ "$1/$2/$3" = cgraf78/wezterm-builds/snapshot-20261121/fixture.deb ] || return 1
+    if [ "${FIXTURE_WEZTERM_BAD_BYTES:-}" = 1 ]; then
+      printf 'wrong package bytes\n' >"$4"
+    else
+      cp "$wezterm_tmp/expected.deb" "$4"
+    fi
+  }
+  # shellcheck disable=SC2329 # install_pinned_wezterm invokes this seam.
   retry_pkg() {
-    case "$1" in
-      curl)
-        while [ "$#" -gt 3 ]; do shift; done
-        [ "$1" = "$fixture_url" ] || return 1
-        if [ "${FIXTURE_WEZTERM_BAD_BYTES:-}" = 1 ]; then
-          printf 'wrong package bytes\n' >"$3"
-        else
-          cp "$wezterm_tmp/expected.deb" "$3"
-        fi
-        ;;
-      apt-get)
-        printf '%s\n' "$*" >"$wezterm_tmp/install"
-        return 66
-        ;;
-      *) return 1 ;;
-    esac
+    [ "$1" = apt-get ] || return 1
+    printf '%s\n' "$*" >"$wezterm_tmp/install"
+    return 66
   }
 
   install_fixture_wezterm() {
@@ -558,19 +433,9 @@ MOCK
     esac
   }
   # shellcheck disable=SC2329 # Only the external download is replaced.
-  retry_pkg() {
-    [ "$1" = curl ] || return 1
-    printf '%s\n' "$@" >"$wezterm_tmp/argv"
-    prev=
-    for arg in "$@"; do
-      if [ "$prev" = -K ]; then
-        cp "$arg" "$wezterm_tmp/auth-config-seen" 2>/dev/null || true
-      fi
-      prev=$arg
-    done
-    while [ "$#" -gt 3 ]; do shift; done
-    [ "$1" = "$fixture_url" ] || return 1
-    cp "$wezterm_tmp/expected.zip" "$3"
+  retry_release_download() {
+    [ "$1/$2/$3" = cgraf78/wezterm-builds/snapshot-fixture/WezTerm-macos-nightly.zip ] || return 1
+    cp "$wezterm_tmp/expected.zip" "$4"
   }
   # shellcheck disable=SC2329 # The fixture also runs on the Ubuntu quality runner.
   ditto() {
@@ -606,28 +471,6 @@ MOCK
     grep -Fxq 'CI_WEZTERM_PINNED_RELEASE=snapshot-fixture' "$wezterm_tmp/env"
     rm -f "$wezterm_tmp/env" "$wezterm_tmp/paths"
   done
-
-  # The WezTerm download authenticates through the same config file as the
-  # tmux download, and the config file is removed once the archive is in.
-  FIXTURE_WEZTERM_ARCH=arm64 FIXTURE_WEZTERM_VERSION=20261203-114500-123abcd \
-    GITHUB_TOKEN=fixture-token install_fixture_macos_wezterm
-  config_path=$(grep -A1 -Fx -- '-K' "$wezterm_tmp/argv" | tail -n 1)
-  case "$config_path" in
-    "$wezterm_tmp"/wezterm-pinned.*/curl-github-auth.conf) ;;
-    *)
-      printf 'not ok - the authenticated WezTerm download used no auth config: <%s>\n' \
-        "$config_path" >&2
-      exit 1
-      ;;
-  esac
-  assert_contains 'header = "Authorization: Bearer fixture-token"' \
-    "$(cat "$wezterm_tmp/auth-config-seen")" \
-    'the WezTerm download authenticates through a curl config file'
-  [ ! -e "$config_path" ] || {
-    printf 'not ok - the WezTerm auth config survived the download\n' >&2
-    exit 1
-  }
-  grep -Fxq 'CI_WEZTERM_PINNED_VERSION=20261203-114500-123abcd' "$wezterm_tmp/env"
 )
 printf 'ok - pinned WezTerm exports the verified macOS bundle on both architectures\n'
 
@@ -984,7 +827,7 @@ MOCK
 printf 'curl %s\n' "$*" >>"$yq_log"
 destination=
 while [ "$#" -gt 0 ]; do
-  if [ "$1" = -o ]; then
+  if [ "$1" = --output ]; then
     shift
     destination=$1
     break
@@ -1108,7 +951,7 @@ printf 'ok - pinned yq install is retried and verified\n'
 #!/bin/sh
 printf 'curl %s\n' "$*" >>"$install_log"
 while [ "$#" -gt 0 ]; do
-  if [ "$1" = -o ]; then
+  if [ "$1" = --output ]; then
     shift
     : >"$1"
     break
@@ -1160,6 +1003,7 @@ MOCK
     '--retry 2 --retry-all-errors --retry-delay 1' \
     "$log" 'pinned ShellCheck bounded download retry'
   assert_contains '--max-time 60' "$log" 'pinned ShellCheck total download cap'
+  assert_contains '--retry-max-time 123' "$log" 'pinned ShellCheck retry start cap'
   assert_contains \
     '8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198' \
     "$log" 'pinned ShellCheck checksum'

@@ -351,6 +351,21 @@ anonymous quota. A supplied `DEPENDENCY_GH_TOKEN` remains `GH_TOKEN` and wins
 under Shdeps' documented credential precedence, so private dependencies still
 require an explicit cross-repository credential.
 
+### Pinned release downloads
+
+The `download-release-asset` composite accepts `repository`, `tag`, `asset`,
+`output`, and `sha256`. Supply the exact release asset name, including literal
+plus signs, and a pathname with an existing parent directory. The optional
+`max-time` and `retries` inputs set curl's per-attempt transfer deadline and
+retry count, up to 600 seconds and 10 retries. The action also caps the retry
+start window to bound server-supplied backoff. It publishes the archive only after the pinned digest
+matches. It requires curl, standard shell tools and `sha256sum` or `shasum`.
+
+The download and shell prerequisite composites use the read-only workflow
+token with the GitHub release API when jq is available. GitHub access denial,
+an unavailable token, or an unavailable parser uses the public asset URL.
+Both paths retain the same asset and checksum pin.
+
 ### Concurrency Scope
 
 The public shell and Rust workflows cancel an older run only when its

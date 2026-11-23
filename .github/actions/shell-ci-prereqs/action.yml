@@ -23,6 +23,7 @@ runs:
         MATRIX_NAME: ${{ inputs.matrix-name }}
         PROFILES: ${{ inputs.profiles }}
         SETUP: ${{ inputs.setup }}
+        GH_TOKEN: ""
         GITHUB_TOKEN: ${{ github.token }}
       run: "$GITHUB_ACTION_PATH/install.sh"
 
