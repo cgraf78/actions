@@ -575,6 +575,29 @@ if "$sync" "$harness_consumer" >/dev/null 2>&1; then
   fail "sync accepted a capability harness manifest without its config"
 fi
 
+# The base dotfiles repository is a home worktree. Its managed harness must
+# stay alongside its own test files under .local.
+base_consumer="$tmp/base-consumer"
+base_harness=.local/lib/dotfiles/tests/capability-harness
+mkdir -p "$base_consumer/.github/workflows" "$base_consumer/$base_harness"
+git -C "$base_consumer" init --quiet --template=''
+cp "$harness_consumer/.github/workflows/test.yml" "$base_consumer/.github/workflows/"
+printf '# Opt into the base harness.\n' >"$base_consumer/$base_harness/capability-harness.conf"
+git -C "$base_consumer" add .
+"$sync" "$base_consumer" >/dev/null || fail "sync failed for the base harness"
+cmp -s "$actions_source/capability-harness/dot-release.sh" \
+  "$base_consumer/$base_harness/dot-release.sh" ||
+  fail "sync did not vendor the base harness"
+[[ ! -e $base_consumer/test ]] || fail "sync created a top-level test directory"
+git -C "$base_consumer" add .
+GITHUB_WORKSPACE="$base_consumer" ACTION_REF="$want" \
+  "$verify" >/dev/null || fail "freshly synchronized base harness did not verify"
+printf '# local edit\n' >>"$base_consumer/$base_harness/dot-release.sh"
+out=$(GITHUB_WORKSPACE="$base_consumer" ACTION_REF="$want" "$verify" 2>&1) &&
+  fail "drift in the base harness unexpectedly verified"
+[[ "$out" == *"$base_harness/dot-release.sh differs"* ]] ||
+  fail "base harness drift did not explain the failed verification"
+
 # Preflight the consumer before writing its lock. A typo that points at a repo
 # with no actions dependency should fail without leaving a misleading partial
 # synchronization behind.

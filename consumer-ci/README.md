@@ -31,8 +31,9 @@ GitHub workflow or composite action (including actions outside `.github/`), and
 refreshes vendored release scripts when the consumer has
 `scripts/release.conf`. When that policy sets
 `RELEASE_STANDALONE_INSTALLER=true`, it also regenerates the self-contained
-top-level `install.sh`. A tracked `test/lib/capability-harness.conf` refreshes
-the vendored Dot overlay test helpers described in
+top-level `install.sh`. A tracked `capability-harness.conf` in `test/lib` or
+`.local/lib/dotfiles/tests/capability-harness` refreshes the shared test helpers
+in that directory. See
 [`../capability-harness/README.md`](../capability-harness/README.md). Every
 vendored family goes through `consumer-ci/vendor-scripts.sh`, which owns the
 copy, mode, and managed-manifest contract. Independently, a tracked
@@ -53,8 +54,8 @@ The `verify-consumer-sync` action checks the inverse contract in CI: its own ref
 and every other `cgraf78/actions` ref must agree with the lock. A tracked
 `scripts/release.conf` automatically includes the vendored scripts in that same
 contract; the sync command creates the paired managed manifest, and CI rejects
-deletion of only one marker. A tracked `test/lib/capability-harness.conf` gets
-the same paired-marker and byte-for-byte treatment for the capability harness.
+deletion of only one marker. A tracked `capability-harness.conf` gets the same
+paired-marker and byte-for-byte treatment in both supported harness directories.
 An opted-in generated installer is rendered again
 from the locked provider and compared byte-for-byte, including its regular-file,
 executable, and tracked-file contract. A tracked checkout-installer config gets
@@ -129,8 +130,9 @@ consumer-ci/verify-self-pin.sh
 Consumer repositories do not have this cycle and pin the final reviewed
 commit directly.
 
-Provider CI compares `.github/actions/` at HEAD with the locked commit and
-requires the immutable retention tag. If an internal action changes without
+Provider CI compares `.github/actions/` and the shared transport in
+`capability-harness/github-release.sh` at HEAD with the locked commit and
+requires the immutable retention tag. If either changes without
 the pin follow-up, the quality job prints the `consumer-ci/sync.sh --self`
 remediation. If the implementation is correct but not retained, it prints the
 `consumer-ci/retain-self-pin.sh` remediation. The existing consumer verifier
