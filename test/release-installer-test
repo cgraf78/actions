@@ -929,6 +929,35 @@ if HOME="$home" XDG_DATA_HOME="$data_home" \
 fi
 [[ $(readlink "$control_root/current") == "$current_before_tamper" ]] ||
   fail "extra existing release entry changed the active version"
+
+# A failed directory traversal can still print every expected path while
+# omitting an extra entry. Keep this deterministic even when CI runs as root.
+incomplete_find_bin=$tmp/incomplete-find-bin
+mkdir "$incomplete_find_bin"
+cat >"$incomplete_find_bin/find" <<'EOF'
+#!/usr/bin/env bash
+if [[ $(pwd -P) == "$FIND_FIXTURE_TREE" ]]; then
+  "$FIND_FIXTURE_REAL" . -mindepth 1 ! -path ./unexpected-file -print
+  exit 37
+fi
+exec "$FIND_FIXTURE_REAL" "$@"
+EOF
+chmod 0755 "$incomplete_find_bin/find"
+incomplete_find_tree=$(CDPATH='' cd -P -- "$old_release" && pwd -P) ||
+  fail 'cannot resolve the installed fixture directory'
+incomplete_find_real=$(command -v find) || fail 'fixture requires find'
+if inventory_failure=$(HOME="$home" XDG_DATA_HOME="$data_home" \
+  FIND_FIXTURE_TREE="$incomplete_find_tree" FIND_FIXTURE_REAL="$incomplete_find_real" \
+  PATH="$incomplete_find_bin:$PATH" \
+  /bin/bash "$consumer/install.sh" --archive "$archive1" 2>&1); then
+  fail "existing release with an incomplete directory traversal activated"
+fi
+[[ $inventory_failure == *'cannot enumerate existing release tree'* ]] ||
+  fail "failed traversal did not explain the rejected release: $inventory_failure"
+[[ $(readlink "$control_root/current") == "$current_before_tamper" ]] ||
+  fail "failed traversal changed the active release"
+[[ $(<"$old_release/unexpected-file") == unexpected ]] ||
+  fail "failed traversal touched the existing release"
 rm "$old_release/unexpected-file"
 
 # A collision is checked before the new release is copied or current is
