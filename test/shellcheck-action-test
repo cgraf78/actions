@@ -27,8 +27,10 @@ yq -e '.runs.steps[0].run | contains("${{") | not' "$action" >/dev/null ||
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
-export GIT_CONFIG_GLOBAL=/dev/null
-export GIT_CONFIG_SYSTEM=/dev/null
+# shellcheck source=test/fixture-env.sh
+. "$root/test/fixture-env.sh"
+actions_fixture_path "$tmp" || exit "$?"
+actions_fixture_git "$tmp" || exit "$?"
 
 new_repo() {
   local destination=$1
