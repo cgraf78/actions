@@ -167,6 +167,24 @@ fi
 grep -Fq 'rerunning failed jobs once' "$tmp/infra/stdout" ||
   fail "retry decision was not reported"
 
+# A runner warning can describe an early pull attempt that later worked. It
+# must not cover up a repository failure once the container has started.
+mkdir "$tmp/recovered-docker-logs"
+cat >"$tmp/recovered-docker-logs/11.log" <<'EOF'
+##[command]/usr/bin/docker pull archlinux:latest
+Error response from daemon: TLS handshake timeout
+##[warning]Docker pull failed with exit code 1, back off 3 seconds before retry.
+##[command]/usr/bin/docker pull archlinux:latest
+Status: Downloaded newer image for archlinux:latest
+##[group]Run test/run
+assertion failed: expected success, got 1
+##[error]Process completed with exit code 1.
+EOF
+run_case recovered-docker "$tmp/infra-jobs.json" "$tmp/recovered-docker-logs"
+if grep -Fq 'rerun-failed-jobs' "$tmp/recovered-docker/gh-calls"; then
+  fail "a recovered Docker pull masked an application failure"
+fi
+
 # Newer GitHub CLI releases refuse to print logs containing terminal control
 # bytes unless the caller explicitly opts in. The retry action never renders a
 # downloaded log, so the exact refusal can safely retry the same private-file
@@ -741,12 +759,17 @@ fi
 # needs both the exact named network bootstrap step and the runner's current
 # timeout text; an application timeout must remain red.
 mkdir -p "$tmp/shellcheck-timeout-logs" "$tmp/app-timeout-logs"
-write_jobs "$tmp/shellcheck-timeout-jobs.json" \
+write_jobs "$tmp/step-timeout-jobs.json" \
   '29:shell / ShellCheck:failure' \
   '30:shell / Required:failure'
+jq '.jobs[0].steps = [
+  {name: "Set up job", conclusion: "success"},
+  {name: "Install ShellCheck prerequisites", conclusion: "failure"},
+  {name: "Lint shell scripts", conclusion: "skipped"}
+]' "$tmp/step-timeout-jobs.json" >"$tmp/shellcheck-timeout-jobs.json"
 cat >"$tmp/shellcheck-timeout-logs/29.log" <<'EOF'
-Install ShellCheck prerequisites
-The action has timed out.
+2026-11-23T17:40:39.9539351Z ##[group]Run cgraf78/actions/.github/actions/shell-ci-prereqs@fixture
+2026-11-23T18:00:40.9539351Z ##[error]The action has timed out.
 EOF
 
 run_case shellcheck-timeout \
@@ -754,14 +777,39 @@ run_case shellcheck-timeout \
 grep -Fq 'rerun-failed-jobs' "$tmp/shellcheck-timeout/gh-calls" ||
   fail "ShellCheck prerequisite timeout was not rerun"
 
+printf '%s\n' "##[error]The action 'Install ShellCheck prerequisites' has timed out after 20 minutes." \
+  >"$tmp/shellcheck-timeout-logs/29.log"
+run_case named-prerequisite-timeout "$tmp/shellcheck-timeout-jobs.json" "$tmp/shellcheck-timeout-logs"
+grep -Fq 'rerun-failed-jobs' "$tmp/named-prerequisite-timeout/gh-calls" ||
+  fail "named ShellCheck prerequisite timeout was not rerun"
+
+printf '%s\n' "##[error]The action 'Earlier optional setup' has timed out after 10 minutes." \
+  >"$tmp/shellcheck-timeout-logs/29.log"
+run_case different-step-timeout "$tmp/shellcheck-timeout-jobs.json" "$tmp/shellcheck-timeout-logs"
+if grep -Fq 'rerun-failed-jobs' "$tmp/different-step-timeout/gh-calls"; then
+  fail "timeout reported for a different step was rerun"
+fi
+
+jq '.jobs[0].steps = [
+  {name: "Set up job", conclusion: "success"},
+  {name: "Install OS prerequisites", conclusion: "success"},
+  {name: "Run tests", conclusion: "failure"}
+]' "$tmp/step-timeout-jobs.json" >"$tmp/app-timeout-jobs.json"
 cat >"$tmp/app-timeout-logs/29.log" <<'EOF'
-Run tests
-The action has timed out.
+Install OS prerequisites completed successfully.
+2026-11-23T17:40:45.9539351Z ##[group]Run eval "$TEST_COMMAND"
+2026-11-23T18:00:46.9539351Z ##[error]The action 'Run tests' has timed out after 20 minutes.
 EOF
 
-run_case app-timeout "$tmp/shellcheck-timeout-jobs.json" "$tmp/app-timeout-logs"
+run_case app-timeout "$tmp/app-timeout-jobs.json" "$tmp/app-timeout-logs"
 if grep -Fq 'rerun-failed-jobs' "$tmp/app-timeout/gh-calls"; then
-  fail "application timeout was rerun"
+  fail "application timeout was rerun after an earlier successful prerequisite"
+fi
+
+printf '%s\n' "##[error]The action has timed out." >"$tmp/shellcheck-timeout-logs/29.log"
+run_case unknown-step-timeout "$tmp/step-timeout-jobs.json" "$tmp/shellcheck-timeout-logs"
+if grep -Fq 'rerun-failed-jobs' "$tmp/unknown-step-timeout/gh-calls"; then
+  fail "timeout without step metadata was rerun"
 fi
 
 write_jobs "$tmp/app-jobs.json" \
@@ -805,6 +853,17 @@ run_case mixed "$tmp/mixed-jobs.json" "$tmp/mixed-logs"
 if grep -Fq 'rerun-failed-jobs' "$tmp/mixed/gh-calls"; then
   fail "mixed infrastructure and application failures were rerun"
 fi
+
+for conclusion in timed_out cancelled startup_failure; do
+  write_jobs "$tmp/mixed-$conclusion-jobs.json" \
+    '31:shell / Platforms / Arch:failure' \
+    "32:rust / Quality / Ubuntu:$conclusion" \
+    '33:shell / Required:failure'
+  run_case "mixed-$conclusion" "$tmp/mixed-$conclusion-jobs.json" "$tmp/mixed-logs"
+  if grep -Fq 'rerun-failed-jobs' "$tmp/mixed-$conclusion/gh-calls"; then
+    fail "unclassified sibling ($conclusion) did not stop the rerun"
+  fi
+done
 
 mkdir -p "$tmp/unavailable-logs" "$tmp/aggregate-logs"
 write_jobs "$tmp/unavailable-jobs.json" \
