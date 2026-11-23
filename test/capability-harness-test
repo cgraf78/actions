@@ -7,6 +7,23 @@
 
 set -uo pipefail
 
+if [[ ${1:-} == --dot-latest-loopback ]]; then
+  # Use real curl and its normal redirect handling without contacting GitHub.
+  # Keep -q first so a host's curlrc cannot change the request.
+  # shellcheck disable=SC2329 # The latest-release resolver calls this function.
+  curl() {
+    local disable_rc=$1
+    shift
+    command curl "$disable_rc" --noproxy '*' --cacert "$loopback_cert" \
+      --connect-to "github.com:443:127.0.0.1:$loopback_port" "$@"
+  }
+  loopback_cert=$3 loopback_port=$4
+  # shellcheck source=capability-harness/dot-release.sh
+  . "$2"
+  capability_dot_release_latest_tag cgraf78/dot
+  exit $?
+fi
+
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # Child shells below run with a stub-only PATH. A host startup file named by
 # BASH_ENV would run first under that PATH and can fail or block before the
@@ -277,11 +294,12 @@ cat >"$stub_bin/curl" <<'EOF'
 # Serve release assets from a local directory and record each request.
 set -euo pipefail
 printf '%s\n' "$*" >>"$STUB_CURL_LOG"
-url= out= head=false
+url= out= head=false write_out=
 while (($#)); do
   case $1 in
     -o | --output) out=$2; shift 2 ;;
-    -w | --connect-timeout | --max-time | --retry | --retry-delay | --retry-max-time | --proto | --proto-redir)
+    -w) write_out=$2; shift 2 ;;
+    --connect-timeout | --max-time | --retry | --retry-delay | --retry-max-time | --proto | --proto-redir)
       shift 2
       ;;
     -fsSIL) head=true; shift ;;
@@ -291,7 +309,10 @@ while (($#)); do
 done
 if [[ $head == true ]]; then
   [[ -n ${STUB_EFFECTIVE:-} ]] || exit 22
-  printf '%s' "$STUB_EFFECTIVE"
+  case $write_out in
+    '%{http_code} %{url_effective}') printf '%s' "${STUB_HTTP_STATUS:-200} $STUB_EFFECTIVE" ;;
+    *) exit 98 ;;
+  esac
   exit 0
 fi
 asset=$STUB_ASSETS/${url##*/}
@@ -386,7 +407,7 @@ platform_case FAILED -u PREFIX STUB_UNAME_S=Linux STUB_UNAME_M=riscv64
 platform_case FAILED STUB_UNAME_S=Linux STUB_UNAME_M=armv7l STUB_UNAME_O=Android
 
 got=$(STUB_EFFECTIVE="https://github.com/cgraf78/dot/releases/tag/$release_tag" \
-  release _capability_dot_release_latest_tag cgraf78/dot) ||
+  release capability_dot_release_latest_tag cgraf78/dot) ||
   fail "latest-tag lookup failed on a valid redirect"
 [[ "$got" == "$release_tag" ]] || fail "latest-tag lookup returned $got"
 grep -F -e '--retry-all-errors' "$STUB_CURL_LOG" >/dev/null ||
@@ -394,15 +415,82 @@ grep -F -e '--retry-all-errors' "$STUB_CURL_LOG" >/dev/null ||
 grep -F -e '--connect-timeout 10 --max-time 30' "$STUB_CURL_LOG" >/dev/null ||
   fail "latest-tag lookup does not bound each transfer"
 out=$(STUB_EFFECTIVE=https://github.com/cgraf78/dot/releases \
-  release _capability_dot_release_latest_tag cgraf78/dot 2>&1) &&
+  release capability_dot_release_latest_tag cgraf78/dot 2>&1) &&
   fail "latest-tag lookup accepted a repository without releases"
 [[ "$out" == *'has no releases yet'* ]] ||
   fail "latest-tag lookup did not explain a missing release"
 out=$(STUB_EFFECTIVE=https://github.com/cgraf78/dot/releases/tag/v1.0 \
-  release _capability_dot_release_latest_tag cgraf78/dot 2>&1) &&
+  release capability_dot_release_latest_tag cgraf78/dot 2>&1) &&
   fail "latest-tag lookup accepted a tag outside the release grammar"
 [[ "$out" == *'unexpected latest-release redirect'* ]] ||
   fail "latest-tag lookup did not explain an unexpected redirect"
+for wrong_base in https://example.invalid/cgraf78/dot https://github.com/example/dot \
+  https://github.com/cgraf78/dot/extra; do
+  out=$(STUB_EFFECTIVE="$wrong_base/releases/tag/$release_tag" \
+    release capability_dot_release_latest_tag cgraf78/dot 2>&1) &&
+    fail "latest-tag lookup accepted a redirect outside the requested repository ($wrong_base)"
+  [[ "$out" == *'unexpected latest-release redirect'* ]] ||
+    fail "latest-tag lookup did not explain the redirect outside the requested repository"
+done
+out=$(STUB_HTTP_STATUS=429 STUB_EFFECTIVE="https://github.com/cgraf78/dot/releases/tag/$release_tag" \
+  release capability_dot_release_latest_tag cgraf78/dot 2>&1) &&
+  fail 'latest-tag lookup accepted HTTP 429 after curl reported success'
+[[ "$out" == *'HTTP 429'* ]] || fail 'latest-tag lookup did not report HTTP 429'
+
+# A real HTTPS redirect reaches a long Retry-After only at its final URL.
+# Some curl releases report exit zero when that retry would exceed the budget.
+python3 - "$root/test/capability-harness-test" "$harness/dot-release.sh" "$tmp" "$release_tag" <<'PY' ||
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+import ssl
+import subprocess
+import sys
+from threading import Thread
+
+runner, library, temp, tag = sys.argv[1:]
+cert = Path(temp) / "loopback.pem"
+key = Path(temp) / "loopback.key"
+config = Path(temp) / "loopback.cnf"
+config.write_text("[req]\nprompt = no\ndistinguished_name = dn\nx509_extensions = x509\n"
+                  "[dn]\nCN = github.com\n[x509]\nsubjectAltName = DNS:github.com\n")
+subprocess.run(["openssl", "req", "-x509", "-nodes", "-newkey", "rsa:2048", "-config", config,
+                "-keyout", key, "-out", cert],
+               check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+class Latest(BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        if self.path == "/cgraf78/dot/releases/latest":
+            self.send_response(302)
+            self.send_header("Location", f"/cgraf78/dot/releases/tag/{tag}")
+        else:
+            self.send_response(self.server.final_status)
+            self.send_header("Retry-After", "900")
+        self.end_headers()
+
+    def log_message(self, *_):
+        pass
+
+with ThreadingHTTPServer(("127.0.0.1", 0), Latest) as server:
+    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls.load_cert_chain(cert, key)
+    server.socket = tls.wrap_socket(server.socket, server_side=True)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        command = ["bash", runner, "--dot-latest-loopback", library, cert,
+                   str(server.server_port)]
+        server.final_status = 200
+        good = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        assert good.returncode == 0 and good.stdout.strip() == tag, good
+
+        server.final_status = 429
+        bad = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        assert bad.returncode != 0 and not bad.stdout and "HTTP 429" in bad.stderr, bad
+    finally:
+        server.shutdown()
+        thread.join()
+PY
+  fail 'real curl latest-release redirect test failed'
 
 # The default request floats to the newest release once per run.
 : >"$STUB_CURL_LOG"
@@ -430,7 +518,7 @@ out=$(DOT_TEST_DOT_RELEASE_TAG=latest-ish \
   fail "install accepted a malformed explicit tag"
 [[ "$out" == *'invalid Dot test release tag'* ]] ||
   fail "install did not explain a malformed tag"
-for repo in 'cgraf78/dot/extra' '../dot' 'cgraf78/' 'cg raf/dot'; do
+for repo in 'dot' 'cgraf78/dot/extra' '../dot' 'cgraf78/' 'cg raf/dot'; do
   out=$(DOT_TEST_DOT_RELEASE_REPO=$repo DOT_TEST_DOT_RELEASE_TAG=$release_tag \
     release capability_dot_release_install "$tmp/dot-bad-repo" 2>&1) &&
     fail "install accepted repository $repo"
