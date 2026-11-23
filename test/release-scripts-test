@@ -13,6 +13,10 @@ verify="$root/.github/actions/verify-release-scripts/verify.sh"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+# shellcheck source=test/fixture-env.sh
+. "$root/test/fixture-env.sh"
+actions_fixture_path "$tmp" || exit "$?"
+actions_fixture_git "$tmp" || exit "$?"
 
 # The library honors GITHUB_SHA and GITHUB_REF* by design, and CI sets them to
 # the *actions* repo's own commit. Left in place they leak into every fixture,

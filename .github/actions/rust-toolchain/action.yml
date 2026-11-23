@@ -1,0 +1,40 @@
+name: Set up Rust
+description: Bootstrap pinned Rustup when needed and install the selected Rust toolchain.
+
+inputs:
+  mode:
+    description: Use toolchain mode for standard setup or checkrun for the Checkrun development tools.
+    default: toolchain
+  toolchain:
+    description: Rustup toolchain specification for toolchain mode.
+    default: stable
+  targets:
+    description: Comma-separated Rust compilation targets for toolchain mode.
+    default: ""
+  components:
+    description: Comma-separated Rust components for toolchain mode.
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Bootstrap verified Rustup
+      shell: bash
+      env:
+        RUSTUP_MODE: ${{ inputs.mode }}
+      run: bash "$GITHUB_ACTION_PATH/bootstrap.sh"
+
+    # dtolnay's action bootstraps Rustup itself if the command is absent. Fail
+    # here if the verified executable never became available on the job path.
+    - name: Require Rustup on PATH
+      if: inputs.mode == 'toolchain'
+      shell: bash
+      run: command -v rustup >/dev/null
+
+    - name: Install selected Rust toolchain
+      if: inputs.mode == 'toolchain'
+      uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      with:
+        toolchain: ${{ inputs.toolchain }}
+        targets: ${{ inputs.targets }}
+        components: ${{ inputs.components }}
