@@ -234,25 +234,27 @@ elif [[ -e "$release_manifest" || -L "$release_manifest" ]]; then
   exit 1
 fi
 
-# Dot overlay repositories opt into the shared capability test harness with a
-# tracked marker config beside the vendored copies. Like release.conf, the
-# config and generated manifest are paired so deleting only one cannot leave
-# vendored bytes outside future drift checks.
-harness_config="$consumer/test/lib/capability-harness.conf"
-harness_manifest="$consumer/test/lib/.capability-harness.manifest"
-harness_enabled=false
-if [[ -e "$harness_config" || -L "$harness_config" ]]; then
-  if [[ ! -f "$harness_config" || -L "$harness_config" ]]; then
-    printf 'consumer-sync: capability harness config must be a regular file: %s\n' \
-      "$harness_config" >&2
+# Keep the paired-marker check at every layout the consumer verifier supports.
+# shellcheck source=../.github/actions/verify-consumer-sync/capability-layouts.sh
+. "$source_root/.github/actions/verify-consumer-sync/capability-layouts.sh"
+harness_destinations=()
+while IFS= read -r harness_dir; do
+  harness_config="$consumer/$harness_dir/capability-harness.conf"
+  harness_manifest="$consumer/$harness_dir/.capability-harness.manifest"
+  if [[ -e "$harness_config" || -L "$harness_config" ]]; then
+    if [[ ! -f "$harness_config" || -L "$harness_config" ]] ||
+      ! capability_harness_local "$consumer" "$harness_dir"; then
+      printf 'consumer-sync: capability harness config must be a regular file inside the checkout: %s\n' \
+        "$harness_config" >&2
+      exit 1
+    fi
+    harness_destinations+=("$harness_dir")
+  elif [[ -e "$harness_manifest" || -L "$harness_manifest" ]]; then
+    printf 'consumer-sync: capability harness manifest exists without capability-harness.conf: %s\n' \
+      "$harness_manifest" >&2
     exit 1
   fi
-  harness_enabled=true
-elif [[ -e "$harness_manifest" || -L "$harness_manifest" ]]; then
-  printf 'consumer-sync: capability harness manifest exists without capability-harness.conf: %s\n' \
-    "$harness_manifest" >&2
-  exit 1
-fi
+done < <(capability_harness_layouts)
 
 installer_policy_enabled() {
   local config=$1 variable=$2
@@ -340,11 +342,11 @@ if [[ "$release_enabled" == true ]]; then
   "$source_root/release-scripts/sync.sh" "$consumer/scripts"
   "$source_root/release-installer/render.sh" "$consumer"
 fi
-if [[ "$harness_enabled" == true ]]; then
+for harness_dir in ${harness_destinations[@]+"${harness_destinations[@]}"}; do
   "$source_root/consumer-ci/vendor-scripts.sh" \
-    "$source_root/capability-harness" "$consumer/test/lib" \
+    "$source_root/capability-harness" "$consumer/$harness_dir" \
     .capability-harness.manifest
-fi
+done
 for build_lock in ${shdeps_build_locks[@]+"${shdeps_build_locks[@]}"}; do
   destination="$consumer/$shdeps_hooks/$build_lock"
   build_lock_tmp=$(mktemp "$destination.XXXXXX")

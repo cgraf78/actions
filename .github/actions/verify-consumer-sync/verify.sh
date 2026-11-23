@@ -165,35 +165,40 @@ else
   printf 'verify-consumer-sync: no tracked release config; version lock only\n'
 fi
 
-# Dot overlay repositories vendor the shared capability test harness from the
+# Dotfiles repositories vendor the shared capability test harness from the
 # same locked commit. As with release scripts, the marker config and generated
 # manifest must be tracked together so neither can be dropped alone.
-harness_config_tracked=false
-harness_manifest_tracked=false
-if git -C "$repo_root" ls-files --error-unmatch \
-  test/lib/capability-harness.conf >/dev/null 2>&1; then
-  harness_config_tracked=true
-fi
-if git -C "$repo_root" ls-files --error-unmatch \
-  test/lib/.capability-harness.manifest >/dev/null 2>&1; then
-  harness_manifest_tracked=true
-fi
-if [[ "$harness_config_tracked" != "$harness_manifest_tracked" ]]; then
-  printf '%s\n' \
-    'verify-consumer-sync: inconsistent capability harness markers; capability-harness.conf and managed manifest must be tracked together' >&2
-  exit 1
-fi
-if [[ "$harness_config_tracked" == true ]]; then
-  if [[ ! -f test/lib/capability-harness.conf || -L test/lib/capability-harness.conf ]]; then
-    printf '%s\n' \
-      'verify-consumer-sync: capability-harness.conf must be a regular non-symlink file' >&2
+# shellcheck source=capability-layouts.sh
+. "$GITHUB_ACTION_PATH/capability-layouts.sh"
+harness_verified=false
+while IFS= read -r harness_dir; do
+  harness_config="$harness_dir/capability-harness.conf"
+  harness_manifest="$harness_dir/.capability-harness.manifest"
+  harness_config_tracked=false
+  harness_manifest_tracked=false
+  if git -C "$repo_root" ls-files --error-unmatch -- "$harness_config" >/dev/null 2>&1; then
+    harness_config_tracked=true
+  fi
+  if git -C "$repo_root" ls-files --error-unmatch -- "$harness_manifest" >/dev/null 2>&1; then
+    harness_manifest_tracked=true
+  fi
+  if [[ "$harness_config_tracked" != "$harness_manifest_tracked" ]]; then
+    printf 'verify-consumer-sync: inconsistent capability harness markers in %s; capability-harness.conf and managed manifest must be tracked together\n' "$harness_dir" >&2
+    exit 1
+  fi
+  [[ "$harness_config_tracked" == true ]] || continue
+  if [[ ! -f "$harness_config" || -L "$harness_config" ]] ||
+    ! capability_harness_local "$repo_root" "$harness_dir"; then
+    printf 'verify-consumer-sync: capability-harness.conf must be a regular non-symlink file inside the checkout: %s\n' "$harness_config" >&2
     exit 1
   fi
   actions_root=$(cd "$GITHUB_ACTION_PATH/../../.." && pwd)
   "$GITHUB_ACTION_PATH/../shared/verify-vendored-scripts.sh" \
-    "$actions_root/capability-harness" test/lib .capability-harness.manifest \
+    "$actions_root/capability-harness" "$harness_dir" .capability-harness.manifest \
     verify-capability-harness 'capability-harness scripts'
-else
+  harness_verified=true
+done < <(capability_harness_layouts)
+if [[ "$harness_verified" == false ]]; then
   printf 'verify-consumer-sync: no tracked capability harness config\n'
 fi
 
