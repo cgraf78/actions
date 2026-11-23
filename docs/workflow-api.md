@@ -596,7 +596,8 @@ The `checkrun` setup mode requires the caller to commit both
 `.github/mise/checkrun-ci.toml` and `.github/mise/mise.lock`. The setup uses
 Mise's strict locked mode, so a missing lock or unresolved platform asset fails
 before the caller's tests run. Checkrun's suite separately rejects structural
-manifest/lock drift.
+manifest/lock drift. The workflow bootstrap checks the pinned native Rustup
+executable before installing the minimal toolchain and `rustfmt`.
 
 ### Secrets
 

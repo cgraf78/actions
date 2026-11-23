@@ -65,7 +65,7 @@ jobs:
         # This action is the shared OS policy used by shell, Rust, and future
         # language-specific CI workflows. Rust owns only the language setup and
         # commands below.
-        uses: cgraf78/actions/.github/actions/platform-matrix@4dbe6ef387d555e65408398b7def026ac1d94df7
+        uses: cgraf78/actions/.github/actions/platform-matrix@c83390f34ec6fa43a9ae21dcdaad6167b838b86d
         with:
           matrix-set: ${{ inputs.matrix-set }}
 
@@ -119,7 +119,7 @@ jobs:
     name: ${{ matrix.shard && format('{0} / {1}', matrix.name, matrix.shard) || matrix.name }}
     steps:
       - name: Install OS prerequisites
-        uses: cgraf78/actions/.github/actions/rust-ci-prereqs@4dbe6ef387d555e65408398b7def026ac1d94df7
+        uses: cgraf78/actions/.github/actions/rust-ci-prereqs@c83390f34ec6fa43a9ae21dcdaad6167b838b86d
         with:
           matrix-name: ${{ matrix.name }}
 
@@ -128,7 +128,7 @@ jobs:
       # shell-ci instead of making each consumer duplicate an OS matrix.
       - name: Install test prerequisites
         if: inputs.profiles != ''
-        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@4dbe6ef387d555e65408398b7def026ac1d94df7
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@c83390f34ec6fa43a9ae21dcdaad6167b838b86d
         with:
           matrix-name: ${{ matrix.name }}
           profiles: ${{ inputs.profiles }}
@@ -154,15 +154,7 @@ jobs:
         run: git config --global --add safe.directory "$(pwd)"
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
-        # GitHub runs container jobs as root with HOME=/github/home while
-        # root's passwd entry says /root. rustup-init reads that as a possible
-        # `sudo` mistake and prints three `error:` lines, but it only warns
-        # under the action's `-y`. The install deliberately follows $HOME,
-        # which also holds the CARGO_HOME the action exports, so skip just
-        # that check instead of moving HOME and every later Rust path.
-        env:
-          RUSTUP_INIT_SKIP_SUDO_CHECK: "yes"
+        uses: cgraf78/actions/.github/actions/rust-toolchain@c83390f34ec6fa43a9ae21dcdaad6167b838b86d
         with:
           toolchain: ${{ inputs.rust-toolchain }}
 

@@ -69,7 +69,7 @@ jobs:
         # This neutral action is the OS-matrix source of truth. Future Rust,
         # C++, or other reusable workflows should call the same action, then
         # run language-specific setup/tests against the returned matrix.
-        uses: cgraf78/actions/.github/actions/platform-matrix@4dbe6ef387d555e65408398b7def026ac1d94df7
+        uses: cgraf78/actions/.github/actions/platform-matrix@c83390f34ec6fa43a9ae21dcdaad6167b838b86d
         with:
           matrix-set: ${{ inputs.matrix-set }}
 
@@ -127,7 +127,7 @@ jobs:
         # Healthy runs finish in ~90s; a wedged apt mirror has been seen to hang
         # here for tens of minutes with no output.
         timeout-minutes: 20
-        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@4dbe6ef387d555e65408398b7def026ac1d94df7
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@c83390f34ec6fa43a9ae21dcdaad6167b838b86d
         with:
           matrix-name: ${{ matrix.name }}
           profiles: ${{ inputs.profiles }}
@@ -236,25 +236,18 @@ jobs:
           "$HOME/.venv/bin/python" -m pip install --upgrade pip
           "$HOME/.venv/bin/python" -m pip install clang-format jsonschema PyYAML tomli
 
-          rustup_init="$RUNNER_TEMP/rustup-init.sh"
-          rm -f "$rustup_init"
-          curl --fail --location --show-error --silent \
-            --connect-timeout 10 --max-time 120 \
-            --speed-limit 1024 --speed-time 30 \
-            --retry 2 --retry-all-errors --retry-delay 1 \
-            https://sh.rustup.rs --output "$rustup_init"
-          # Container jobs run as root with HOME=/github/home, which rustup
-          # reports as a possible `sudo` mistake in three `error:` lines even
-          # though `-y` proceeds. Installing under $HOME is intended here.
-          RUSTUP_INIT_SKIP_SUDO_CHECK=yes \
-            sh "$rustup_init" -y --profile minimal --component rustfmt
-
           {
             echo "$HOME/.local/bin"
             echo "$HOME/.local/share/mise/shims"
             echo "$HOME/.venv/bin"
-            echo "$HOME/.cargo/bin"
           } >>"$GITHUB_PATH"
+
+      - name: Install pinned Rustup
+        if: inputs.setup == 'checkrun' && matrix.name != 'Alpine'
+        timeout-minutes: 10
+        uses: cgraf78/actions/.github/actions/rust-toolchain@c83390f34ec6fa43a9ae21dcdaad6167b838b86d
+        with:
+          mode: checkrun
 
       - name: Cache dotfiles dependency installs
         if: inputs.setup == 'dotfiles'
@@ -306,7 +299,7 @@ jobs:
         # keeping Git and Mise retries short; 25m honestly contains the full
         # 21m55s inner budget plus local setup and teardown.
         timeout-minutes: 25
-        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@4dbe6ef387d555e65408398b7def026ac1d94df7
+        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@c83390f34ec6fa43a9ae21dcdaad6167b838b86d
         env:
           # The explicit cross-repository token wins for private dependencies.
           # Full-provider public CI still needs authenticated release metadata:
