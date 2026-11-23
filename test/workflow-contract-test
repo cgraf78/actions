@@ -96,6 +96,74 @@ check_checkrun_mise_retry() {
   '
 }
 
+# Exercise the real bootstrap step without installing a toolchain. Invalid
+# bytes must never execute, even when curl reports a successful download.
+check_checkrun_rustup() (
+  local script temp
+  script=$(yq -er '.jobs.platform.steps[] | select(.name == "Install pinned Rustup").run' \
+    "$root/.github/workflows/_shell-platforms.yml") || {
+    printf 'workflow contract failed: missing verified Checkrun Rustup bootstrap\n' >&2
+    return 1
+  }
+  temp=$(mktemp -d)
+  trap 'rm -rf -- "$temp"' EXIT
+  export RUNNER_TEMP=$temp GITHUB_PATH=$temp/github-path RUSTUP_EXEC_LOG=$temp/executed
+
+  # shellcheck disable=SC2329 # Exported for the actual step in child Bash.
+  uname() {
+    case $1 in
+      -s) printf '%s\n' "${TEST_SYSTEM:-Linux}" ;;
+      -m) printf '%s\n' x86_64 ;;
+      *) return 1 ;;
+    esac
+  }
+  # shellcheck disable=SC2329 # Exported for the actual step in child Bash.
+  curl() {
+    local output='' url=''
+    while (($#)); do
+      case $1 in
+        --output)
+          output=$2
+          shift
+          ;;
+        https://*) url=$1 ;;
+      esac
+      shift
+    done
+    [[ $url == 'https://static.rust-lang.org/rustup/archive/1.29.3/x86_64-unknown-linux-gnu/rustup-init' ]] || return 97
+    cat >"$output" <<'FIXTURE'
+#!/usr/bin/env bash
+printf '%s\n' "$RUSTUP_INIT_SKIP_SUDO_CHECK:$*" >"$RUSTUP_EXEC_LOG"
+FIXTURE
+    printf '%s' "${TEST_STATUS:-200}"
+  }
+  # shellcheck disable=SC2329 # Exported for the actual step in child Bash.
+  sha256sum() {
+    if [[ ${TEST_VERIFIED:-false} == true ]]; then
+      printf '%s  -\n' b1c8cb14e30889e7e2999e6b69e62d9e9b9ffc0f4df8180564d306d9680e6c55
+    else
+      command sha256sum "$@"
+    fi
+  }
+  export -f uname curl sha256sum
+
+  if bash -euo pipefail -c "$script" 2>"$temp/error"; then return 1; fi
+  grep -Fq 'Rustup SHA-256 mismatch' "$temp/error"
+  [[ ! -e $RUSTUP_EXEC_LOG ]]
+
+  if TEST_VERIFIED=true TEST_STATUS=429 bash -euo pipefail -c "$script" 2>"$temp/error"; then return 1; fi
+  grep -Fq 'Rustup download failed' "$temp/error"
+  [[ ! -e $RUSTUP_EXEC_LOG ]]
+
+  if TEST_SYSTEM=Haiku bash -euo pipefail -c "$script" 2>"$temp/error"; then return 1; fi
+  grep -Fq 'Unsupported Rustup host' "$temp/error"
+  [[ ! -e $RUSTUP_EXEC_LOG ]]
+
+  TEST_VERIFIED=true bash -euo pipefail -c "$script"
+  [[ $(<"$RUSTUP_EXEC_LOG") == 'yes:-y --profile minimal --component rustfmt' ]]
+  [[ $(<"$GITHUB_PATH") == "$HOME/.cargo/bin" ]]
+)
+
 check_platform_matrices() {
   local action script tmp matrix_set output matrix
   local expected_centos_image
@@ -771,9 +839,7 @@ contracts() {
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("if [[ \"$rc\" -eq 124 ]]")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("Acquire::http::Timeout=30")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("timeout -k 5 120")' _termux-ci.yml
-  check '.jobs.platform.steps[] | select(.name == "Set up Checkrun dev tools").run | contains("--connect-timeout 10 --max-time 120")' _shell-platforms.yml
-  check '.jobs.platform.steps[] | select(.name == "Set up Checkrun dev tools").run | contains("rustup-init.sh")' _shell-platforms.yml
-  check '.jobs.platform.steps[] | select(.name == "Set up Checkrun dev tools").run | contains("RUSTUP_INIT_SKIP_SUDO_CHECK=yes")' _shell-platforms.yml
+  check_checkrun_rustup
 
   check '.jobs.required.name == "Required"' rust-ci.yml
   check '.jobs.required.if == "${{ always() }}"' rust-ci.yml
