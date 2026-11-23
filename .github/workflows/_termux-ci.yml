@@ -129,18 +129,15 @@ jobs:
           eval "$HOST_COMMAND"
 
       - name: Download official Termux APK
-        shell: bash
-        env:
-          TERMUX_APK_SHA256: 3550e61f4d9eb49b712fd1bd9519dc37085a4d8eb597c57a340f0a64859b7144
-          TERMUX_APK_URL: https://github.com/termux/termux-app/releases/download/v0.118.3/termux-app_v0.118.3%2Bgithub-debug_x86_64.apk
-        run: |
-          apk="$RUNNER_TEMP/termux.apk"
-          curl --fail --location --show-error --silent \
-            --connect-timeout 10 --max-time 45 \
-            --speed-limit 1024 --speed-time 30 \
-            --retry 1 --retry-all-errors --retry-delay 1 \
-            "$TERMUX_APK_URL" --output "$apk"
-          printf '%s  %s\n' "$TERMUX_APK_SHA256" "$apk" | sha256sum --check --strict
+        uses: cgraf78/actions/.github/actions/download-release-asset@78420442eb56ab78fed6ca04903aef8e404c8d5d
+        with:
+          repository: termux/termux-app
+          tag: v0.118.3
+          asset: termux-app_v0.118.3+github-debug_x86_64.apk
+          output: ${{ runner.temp }}/termux.apk
+          sha256: 3550e61f4d9eb49b712fd1bd9519dc37085a4d8eb597c57a340f0a64859b7144
+          max-time: "45"
+          retries: "1"
 
       - name: Enable KVM acceleration
         shell: bash

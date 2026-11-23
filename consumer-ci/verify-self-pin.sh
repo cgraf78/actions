@@ -68,7 +68,10 @@ if [[ "$fetched_sha" != "$actions_sha" ]]; then
   exit 1
 fi
 
-if ! git -C "$root" diff --quiet "$actions_sha"..HEAD -- .github/actions; then
+# The release transport is shared with the vendored capability harness, but
+# both pinned download actions execute these bytes as part of their code.
+if ! git -C "$root" diff --quiet "$actions_sha"..HEAD -- \
+  .github/actions capability-harness/github-release.sh; then
   cat >&2 <<EOF
 verify-self-pin: internal action implementations differ from lock $actions_sha
 Commit the implementation, then run consumer-ci/sync.sh --self and commit the generated lock and refs.

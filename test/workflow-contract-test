@@ -757,9 +757,13 @@ contracts() {
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | split("DOTFILES_BOOTSTRAP_MODE=install-staged") | select(length == 2) | .[1] | contains("bash -euo pipefail \"$TMPDIR/termux-ci-command\"")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("bash -euo pipefail \"$TMPDIR/termux-ci-command\"")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("[[ \"$setup\" == none ]]") | not' _termux-ci.yml
-  check '.jobs.termux.steps[] | select(.name == "Download official Termux APK").run | contains("--retry 1 --retry-all-errors --retry-delay 1")' _termux-ci.yml
-  check '.jobs.termux.steps[] | select(.name == "Download official Termux APK").run | contains("--connect-timeout 10 --max-time 45")' _termux-ci.yml
-  check '.jobs.termux.steps[] | select(.name == "Download official Termux APK").run | contains("--speed-limit 1024 --speed-time 30")' _termux-ci.yml
+  check ".jobs.termux.steps[] | select(.name == \"Download official Termux APK\").uses == \"cgraf78/actions/.github/actions/download-release-asset@$actions_lock\"" _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Download official Termux APK").with.repository == "termux/termux-app"' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Download official Termux APK").with.tag == "v0.118.3"' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Download official Termux APK").with.asset == "termux-app_v0.118.3+github-debug_x86_64.apk"' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Download official Termux APK").with.sha256 | test("^[0-9a-f]{64}$")' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Download official Termux APK").with."max-time" == "45"' _termux-ci.yml
+  check '.jobs.termux.steps[] | select(.name == "Download official Termux APK").with.retries == "1"' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("printf '\''package_stall_marker=%q\\n'\'' \"${TERMUX_PACKAGE_COMMAND_MARKER:?}\"")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("printf '\''%s\\n'\'' \"$package_stall_marker\" >&2")' _termux-ci.yml
   # The guard above fails loudly if the helper is not sourced first.
@@ -969,14 +973,20 @@ contracts() {
   check '.jobs.smoke.steps[] | select(.name == "Provision modern Bash candidate")."timeout-minutes" == 10' bash32-ci.yml
   check '.jobs.smoke.steps[] | select(.name == "Run Bash 3.2 smoke")."timeout-minutes" == 20' bash32-ci.yml
   check '.jobs.quality."timeout-minutes" == 35' test.yml
-  check '.jobs.quality.steps[] | select(.name == "Install actionlint")."timeout-minutes" == 5' test.yml
-  check '.jobs.quality.steps[] | select(.name == "Install actionlint").run | contains("--connect-timeout 10 --max-time 60")' test.yml
-  check '.jobs.quality.steps[] | select(.name == "Install actionlint").run | contains("--speed-limit 1024 --speed-time 30")' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Download actionlint")."timeout-minutes" == 5' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Download actionlint").uses == "./.github/actions/download-release-asset"' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Download actionlint").with.repository == "rhysd/actionlint"' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Download actionlint").with.tag == "v1.7.12"' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Download actionlint").with.asset == "actionlint_1.7.12_linux_amd64.tar.gz"' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Download actionlint").with.sha256 | test("^[0-9a-f]{64}$")' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Download actionlint").with."max-time" == "60"' test.yml
+  check '.jobs.quality.steps[] | select(.name == "Download actionlint").with.retries == "3"' test.yml
+  check_file '.runs.steps[].env.GH_TOKEN == ""' .github/actions/download-release-asset/action.yml
+  check_file '.runs.steps[].env.GH_TOKEN == ""' .github/actions/shell-ci-prereqs/action.yml
   check '.jobs.quality.steps[] | select(.name == "Install zizmor")."timeout-minutes" == 10' test.yml
   check '.jobs.quality.steps[] | select(.name == "Install zizmor").env.PIP_DEFAULT_TIMEOUT == "60"' test.yml
   check '.jobs.quality.steps[] | select(.name == "Install zizmor").env.PIP_RETRIES == "3"' test.yml
   check '.jobs.quality.steps[] | select(.name == "Install ShellCheck")."timeout-minutes" == 10' test.yml
-  check '.jobs.quality.steps[] | select(.name == "Install actionlint").run | contains("--retry 3 --retry-all-errors --retry-delay 1")' test.yml
   check '.jobs.quality.steps[] | select(.name == "Install zizmor").env.ZIZMOR_VERSION == "1.29.0"' test.yml
   check '.jobs.quality.steps[] | select(.name == "Lint shell inventory").uses == "./.github/actions/shellcheck-inventory"' test.yml
   check '.jobs.quality.steps[] | select(.name == "Lint shell inventory").with."inventory-path" == ".github/shellcheck-files.txt"' test.yml

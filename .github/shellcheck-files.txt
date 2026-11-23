@@ -3,6 +3,7 @@
 program	.github/actions/android-sdk-packages/install.sh
 program	.github/actions/dotfiles-bootstrap/bounded.sh
 program	.github/actions/dotfiles-bootstrap/install.sh
+program	.github/actions/download-release-asset/run.sh
 program	.github/actions/infra-retry/retry.sh
 program	.github/actions/musl-build-prereqs/install.sh
 program	.github/actions/package-manager/lib.sh
@@ -26,6 +27,7 @@ program	consumer-ci/verify-self-pin.sh
 program	consumer-ci/vendor-scripts.sh
 program	capability-harness/capability-fixture.sh
 program	capability-harness/dot-release.sh
+program	capability-harness/github-release.sh
 program	capability-harness/suite-inventory.sh
 program	capability-harness/wait-github-state.sh
 program	capability-harness/workflow-contract.sh

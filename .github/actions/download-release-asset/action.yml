@@ -1,0 +1,43 @@
+name: Download a verified GitHub release asset
+description: Download one exact GitHub release asset and verify its pinned SHA-256.
+
+inputs:
+  repository:
+    description: Owner and repository of the release.
+    required: true
+  tag:
+    description: Exact release tag.
+    required: true
+  asset:
+    description: Exact asset name, with any plus signs unescaped.
+    required: true
+  output:
+    description: Local output pathname, with an existing parent directory.
+    required: true
+  sha256:
+    description: Lowercase SHA-256 of the expected bytes.
+    required: true
+  max-time:
+    description: Maximum seconds per transfer attempt.
+    default: "60"
+  retries:
+    description: Number of curl retries after the initial transfer attempt.
+    default: "2"
+
+runs:
+  using: composite
+  steps:
+    - name: Download and verify release asset
+      shell: sh
+      env:
+        # Use the workflow's repository-scoped credential at this boundary.
+        GH_TOKEN: ""
+        GITHUB_TOKEN: ${{ github.token }}
+        RELEASE_REPOSITORY: ${{ inputs.repository }}
+        RELEASE_TAG: ${{ inputs.tag }}
+        RELEASE_ASSET: ${{ inputs.asset }}
+        RELEASE_OUTPUT: ${{ inputs.output }}
+        RELEASE_SHA256: ${{ inputs.sha256 }}
+        RELEASE_MAX_TIME: ${{ inputs.max-time }}
+        RELEASE_RETRIES: ${{ inputs.retries }}
+      run: sh "$GITHUB_ACTION_PATH/run.sh"

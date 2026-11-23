@@ -70,7 +70,7 @@ _capability_dot_release_platform() {
 
 # Download the resolved Dot release asset plus its .sha256 sidecar, verify
 # the checksum, and extract into $4 (which must already exist and be empty).
-_capability_dot_release_fetch() {
+_capability_dot_release_fetch() (
   local repo=${1:-} tag=${2:-} platform=${3:-} dest=${4:-}
   local scratch tarball sidecar sum_bin
   [[ -n $repo && -n $tag && -n $platform && -n $dest ]] || {
@@ -93,26 +93,22 @@ _capability_dot_release_fetch() {
     echo 'sha256sum or shasum is required' >&2
     return 1
   fi
+  # shellcheck source=./github-release.sh
+  . "$(dirname -- "${BASH_SOURCE[0]}")/github-release.sh" || return
   tarball=dot-$tag-$platform.tar.gz
   sidecar=$tarball.sha256
   scratch=$(mktemp -d) || return 1
-  # A RETURN trap set inside a function stays installed after it fires. Clear
-  # it as it runs so a failure here cannot rerun the cleanup, with `scratch`
-  # out of scope, when the caller's function returns under `set -u`.
-  trap 'rm -rf -- "$scratch"; trap - RETURN' RETURN
-  curl --fail --silent --show-error --location \
+  # A subshell owns the scratch directory and its cleanup on every return.
+  trap 'rm -rf -- "$scratch"' EXIT
+  github_release_download "$repo" "$tag" "$tarball" "$scratch/$tarball" \
     --connect-timeout 10 --max-time 120 \
-    --retry 2 --retry-delay 2 --retry-max-time 65 --retry-all-errors \
-    "https://github.com/$repo/releases/download/$tag/$tarball" \
-    -o "$scratch/$tarball" || {
+    --retry 2 --retry-delay 2 --retry-max-time 65 --retry-all-errors || {
     echo "could not download $tarball" >&2
     return 1
   }
-  curl --fail --silent --show-error --location \
+  github_release_download "$repo" "$tag" "$sidecar" "$scratch/$sidecar" \
     --connect-timeout 10 --max-time 60 \
-    --retry 2 --retry-delay 2 --retry-max-time 65 --retry-all-errors \
-    "https://github.com/$repo/releases/download/$tag/$sidecar" \
-    -o "$scratch/$sidecar" || {
+    --retry 2 --retry-delay 2 --retry-max-time 65 --retry-all-errors || {
     echo "could not download $sidecar" >&2
     return 1
   }
@@ -129,7 +125,7 @@ _capability_dot_release_fetch() {
     echo 'archive ships reserved shdeps marker' >&2
     return 1
   fi
-}
+)
 
 # Resolve the newest published Dot release tag through the anonymous web
 # redirect (/releases/latest -> /releases/tag/<tag>), without touching
@@ -143,7 +139,8 @@ _capability_dot_release_latest_tag() {
     return 1
   }
   _capability_dot_release_valid_repo "$repo" || return 1
-  effective=$(curl -fsSIL -o /dev/null -w '%{url_effective}' \
+  effective=$(curl -q -fsSIL -o /dev/null -w '%{url_effective}' \
+    --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 30 \
     --retry 2 --retry-delay 2 --retry-max-time 65 --retry-all-errors \
     "https://github.com/$repo/releases/latest") || {
     echo "could not resolve the latest Dot release for $repo" >&2

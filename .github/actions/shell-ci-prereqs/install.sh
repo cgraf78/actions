@@ -2,9 +2,12 @@
 set -eu
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+RELEASE_TRANSPORT=$SCRIPT_DIR/../../../capability-harness/github-release.sh
 
 # shellcheck source=../package-manager/lib.sh
 . "$SCRIPT_DIR/../package-manager/lib.sh"
+# shellcheck source=../../../capability-harness/github-release.sh
+. "$RELEASE_TRANSPORT"
 # shellcheck source=./lib.sh
 . "$SCRIPT_DIR/lib.sh"
 # shellcheck source=./profiles.sh

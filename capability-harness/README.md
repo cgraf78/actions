@@ -22,6 +22,7 @@ resync command.
 | --- | --- |
 | `capability-fixture.sh` | `capability_fixture_create HOME OVERLAY NN-name.conf` writes the minimal Dot client config, an empty owner-only extension root, and one `sync=none` overlay descriptor. Executable for `--self-test`. |
 | `dot-release.sh` | `capability_dot_release_install DEST` resolves, downloads, checksum-verifies, and extracts one Dot release. Sourced, not executed. |
+| `github-release.sh` | `github_release_download REPO TAG ASSET OUTPUT [curl options...]` uses the GitHub REST asset with an available token and jq. It also supports the public download URL when credentials or the parser are unavailable. Callers verify the downloaded bytes. Sourced, not executed. |
 | `suite-inventory.sh` | `validate_suite_inventory ROOT INVENTORY SOURCE_ROOT` proves the declared suite list and the executable suites match, printing suite names. Executable for `--self-test`. |
 | `wait-github-state.sh` | `wait_github_state TIMEOUT INTERVAL COMMAND...` polls a GitHub-state predicate with a bounded deadline. Executable as a command or for `--self-test`. |
 | `workflow-contract.sh` | Repository-contract helpers for `test/workflow-test`: `fail`, `workflow_contract_init REPO` (repository identity), `workflow_contract_check_files` (canonical MIT `LICENSE`, `.gitignore`), `workflow_contract_check_inventory_programs` (no unlinted `fixture` rows), the remote public/MIT/default-branch predicate with its `--remote-predicate` dispatch and bounded poll, and the `test/run` invocation counter. Sourced, not executed. |
@@ -39,6 +40,7 @@ ShellCheck inventory. Each overlay keeps its own workflow-shape assertions.
 `DOT_TEST_DOT_RELEASE_REPO` (default `cgraf78/dot`). Capability CI floats to
 the newest release because the matrix images carry no Rust toolchain to build
 Dot from source; an explicit tag still selects that exact release.
+Archive and checksum transfers can use `GH_TOKEN` or `GITHUB_TOKEN`.
 
 ## Adopting
 

@@ -23,33 +23,17 @@ CURL_SPEED_TIME=${CURL_SPEED_TIME:-30}
 CURL_RETRIES=${CURL_RETRIES:-2}
 CURL_RETRY_DELAY=${CURL_RETRY_DELAY:-1}
 CURL_MAX_TIME=${CURL_MAX_TIME:-60}
-CURL_NET_OPTS="--connect-timeout 10 --max-time $CURL_MAX_TIME --speed-limit 1024 --speed-time $CURL_SPEED_TIME --retry $CURL_RETRIES --retry-all-errors --retry-delay $CURL_RETRY_DELAY"
+# A server's Retry-After can override the delay, so cap the retry start window.
+CURL_RETRY_START_LIMIT=$((CURL_RETRIES * (CURL_MAX_TIME + CURL_RETRY_DELAY) + 1))
+CURL_NET_OPTS="--connect-timeout 10 --max-time $CURL_MAX_TIME --speed-limit 1024 --speed-time $CURL_SPEED_TIME --retry $CURL_RETRIES --retry-all-errors --retry-delay $CURL_RETRY_DELAY --retry-max-time $CURL_RETRY_START_LIMIT"
 
-# GitHub rate-limits unauthenticated release downloads per egress IP, and
-# shared runners trip that limit: the download then fails with 403 on every
-# retry. When the caller provides GITHUB_TOKEN, authenticate the download so
-# it counts against the token's limit instead. The token reaches curl through
-# a config file, never argv, because retry_pkg prints the failed command.
-# Prints the curl arguments for the config file, or nothing without a token.
-github_download_auth_args() {
-  config_file=$1
-  if [ -z "${GITHUB_TOKEN:-}" ]; then
-    return 0
-  fi
-  # A token containing a quote, whitespace, or control character cannot be
-  # real, and it would break the config line or inject a second directive.
-  # Stay anonymous instead: anonymous is the previous behavior, so a
-  # degenerate token degrades to it, never to a failure. The guard rejects
-  # only characters that can break the line, not a fixed token format, so
-  # future token formats keep working.
-  if printf '%s' "$GITHUB_TOKEN" | grep -q '["[:space:][:cntrl:]]'; then
-    return 0
-  fi
-  # The file holds the token, so create it 0600 from the start. Remove any
-  # stale file first: truncating an existing one would keep its old mode.
-  rm -f -- "$config_file"
-  (umask 077; printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" >"$config_file") || return 1
-  printf '%s\n' "-K $config_file"
+retry_release_download() {
+  # The package watchdog needs an executable. Start a fresh shell for each
+  # attempt so every curl can get a new stdin config and the existing stall
+  # marker still covers an exhausted watchdog deadline.
+  # shellcheck disable=SC2016
+  retry_pkg sh -c '. "$1" || exit; shift; github_release_download "$@"' \
+    github-release "$RELEASE_TRANSPORT" "$@"
 }
 
 verify_sha256() {
@@ -201,16 +185,8 @@ install_yq_v4() {
 
   tmp="${RUNNER_TEMP:-/tmp}/yq"
   rm -f "$tmp"
-  auth_config=${RUNNER_TEMP:-/tmp}/curl-github-auth.conf
-  auth_args=$(github_download_auth_args "$auth_config") || return 1
   # shellcheck disable=SC2086
-  if ! curl -fsSL $CURL_NET_OPTS $auth_args \
-    "https://github.com/mikefarah/yq/releases/download/v${version}/yq_${os}_${arch}" \
-    -o "$tmp"; then
-    rm -f "$tmp" "$auth_config"
-    return 1
-  fi
-  rm -f -- "$auth_config"
+  github_release_download mikefarah/yq "v$version" "yq_${os}_${arch}" "$tmp" $CURL_NET_OPTS || return
   if ! verify_sha256 "$checksum" "$tmp"; then
     rm -f "$tmp"
     return 1
@@ -256,18 +232,10 @@ install_floor_tmux() {
   source_dir="$RUNNER_TEMP/tmux-$TMUX_FLOOR_VERSION"
   install_dir="$RUNNER_TEMP/tmux-floor"
   build_log="$RUNNER_TEMP/tmux-floor-build.log"
-  url="https://github.com/tmux/tmux/releases/download/$TMUX_FLOOR_VERSION/tmux-$TMUX_FLOOR_VERSION.tar.gz"
-
   rm -rf "$source_dir" "$install_dir"
   mkdir -p "$RUNNER_TEMP"
-  # The bounded retry reports an exhausted deadline as an infrastructure
-  # stall, so infra-retry can rerun the job.
-  auth_config=$RUNNER_TEMP/curl-github-auth.conf
-  auth_args=$(github_download_auth_args "$auth_config") || return 1
   # shellcheck disable=SC2086
-  retry_pkg curl -fsSL $CURL_NET_OPTS $auth_args \
-    "$url" -o "$archive"
-  rm -f -- "$auth_config"
+  retry_release_download tmux/tmux "$TMUX_FLOOR_VERSION" "${archive##*/}" "$archive" $CURL_NET_OPTS || return
   # Explicit, so a caller that tests this function cannot suspend the check.
   if ! verify_sha256 "$TMUX_FLOOR_SHA256" "$archive"; then
     echo "tmux $TMUX_FLOOR_VERSION source does not match its checksum" >&2
@@ -337,11 +305,9 @@ install_pinned_tmux() (
   stage=$(mktemp -d "${RUNNER_TEMP:?}/tmux-pinned.XXXXXX") || exit 1
   trap 'rm -rf -- "$stage"' EXIT
   archive=$stage/tmux.tar.gz
-  url="https://github.com/cgraf78/tmux-builds/releases/download/$TMUX_BUILD_RELEASE/tmux-$TMUX_BUILD_VERSION-$asset.tar.gz"
-  auth_args=$(github_download_auth_args "$stage/curl-github-auth.conf") || exit 1
-  # shellcheck disable=SC2086 # Trusted shared curl options and the auth config are separate args.
-  retry_pkg curl -fsSL $CURL_NET_OPTS $auth_args "$url" -o "$archive" || exit 1
-  rm -f -- "$stage/curl-github-auth.conf"
+  # shellcheck disable=SC2086 # Trusted shared curl options are separate args.
+  retry_release_download cgraf78/tmux-builds "$TMUX_BUILD_RELEASE" \
+    "tmux-$TMUX_BUILD_VERSION-$asset.tar.gz" "$archive" $CURL_NET_OPTS || exit "$?"
   if ! verify_sha256 "$checksum" "$archive"; then
     printf 'tmux %s archive for %s failed checksum verification\n' "$TMUX_BUILD_RELEASE" "$asset" >&2
     exit 1
@@ -412,10 +378,8 @@ EOF
   stage=$(mktemp -d "${RUNNER_TEMP:?}/wezterm-pinned.XXXXXX") || exit 1
   trap 'rm -rf -- "$stage"' EXIT
   archive=$stage/wezterm.${url##*.}
-  auth_args=$(github_download_auth_args "$stage/curl-github-auth.conf") || exit 1
-  # shellcheck disable=SC2086 # Trusted shared curl options and the auth config are separate args.
-  retry_pkg curl -fsSL $CURL_NET_OPTS $auth_args "$url" -o "$archive" || exit 1
-  rm -f -- "$stage/curl-github-auth.conf"
+  # shellcheck disable=SC2086 # Trusted shared curl options are separate args.
+  retry_release_download cgraf78/wezterm-builds "$release" "${url##*/}" "$archive" $CURL_NET_OPTS || exit "$?"
   if ! verify_sha256 "$checksum" "$archive"; then
     printf 'WezTerm %s package for %s failed checksum verification\n' "$release" "$target" >&2
     exit 1
@@ -474,16 +438,10 @@ install_pinned_shellcheck() {
   archive_name="shellcheck-v${version}.linux.${architecture}.tar.xz"
   archive="${RUNNER_TEMP:?}/$archive_name"
   install_dir="$RUNNER_TEMP/shellcheck-v${version}"
-  url="https://github.com/koalaman/shellcheck/releases/download/v${version}/${archive_name}"
-
   rm -rf "$install_dir"
   mkdir -p "$RUNNER_TEMP"
-  auth_config=$RUNNER_TEMP/curl-github-auth.conf
-  auth_args=$(github_download_auth_args "$auth_config") || return 1
   # shellcheck disable=SC2086
-  curl -fsSL $CURL_NET_OPTS $auth_args \
-    "$url" -o "$archive"
-  rm -f -- "$auth_config"
+  github_release_download koalaman/shellcheck "v$version" "$archive_name" "$archive" $CURL_NET_OPTS || return
   verify_sha256 "$checksum" "$archive"
   tar -xJf "$archive" -C "$RUNNER_TEMP"
   rm -f "$archive"
