@@ -441,7 +441,9 @@ out=$(STUB_HTTP_STATUS=429 STUB_EFFECTIVE="https://github.com/cgraf78/dot/releas
 # Some curl releases report exit zero when that retry would exceed the budget.
 python3 - "$root/test/capability-harness-test" "$harness/dot-release.sh" "$tmp" "$release_tag" <<'PY' ||
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import os
 from pathlib import Path
+import signal
 import ssl
 import subprocess
 import sys
@@ -455,7 +457,7 @@ config.write_text("[req]\nprompt = no\ndistinguished_name = dn\nx509_extensions 
                   "[dn]\nCN = github.com\n[x509]\nsubjectAltName = DNS:github.com\n")
 subprocess.run(["openssl", "req", "-x509", "-nodes", "-newkey", "rsa:2048", "-config", config,
                 "-keyout", key, "-out", cert],
-               check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+               check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
 
 class Latest(BaseHTTPRequestHandler):
     def do_HEAD(self):
@@ -470,6 +472,21 @@ class Latest(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
+def resolve(command):
+    # A timeout must stop the Bash caller and the curl running inside it.
+    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          text=True, start_new_session=True) as child:
+        try:
+            stdout, stderr = child.communicate(timeout=10)
+        except BaseException:
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            child.communicate()
+            raise
+        return subprocess.CompletedProcess(command, child.returncode, stdout, stderr)
+
 with ThreadingHTTPServer(("127.0.0.1", 0), Latest) as server:
     tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     tls.load_cert_chain(cert, key)
@@ -480,11 +497,11 @@ with ThreadingHTTPServer(("127.0.0.1", 0), Latest) as server:
         command = ["bash", runner, "--dot-latest-loopback", library, cert,
                    str(server.server_port)]
         server.final_status = 200
-        good = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        good = resolve(command)
         assert good.returncode == 0 and good.stdout.strip() == tag, good
 
         server.final_status = 429
-        bad = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        bad = resolve(command)
         assert bad.returncode != 0 and not bad.stdout and "HTTP 429" in bad.stderr, bad
     finally:
         server.shutdown()
