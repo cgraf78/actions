@@ -114,7 +114,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        uses: cgraf78/actions/.github/actions/rust-toolchain@6635e97990b8e4c735dad967fd7ea84ac245c319
         with:
           toolchain: ${{ inputs.rust-toolchain }}
 
@@ -281,7 +281,7 @@ jobs:
 
       - name: Install Rust
         if: matrix.enabled
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        uses: cgraf78/actions/.github/actions/rust-toolchain@6635e97990b8e4c735dad967fd7ea84ac245c319
         with:
           toolchain: ${{ inputs.rust-toolchain }}
           targets: ${{ matrix.rust-target }}
