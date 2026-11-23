@@ -558,6 +558,9 @@ ensure_lua_command() {
 
 mock_bin=$(mktemp -d)
 trap 'rm -rf "$mock_bin"' EXIT HUP INT TERM
+# shellcheck source=test/fixture-env.sh
+. "$REPO_ROOT/test/fixture-env.sh"
+actions_fixture_path "$mock_bin" || exit "$?"
 command_log=$mock_bin/commands.log
 export command_log
 for command in apt-get dnf apk brew pacman-key; do
