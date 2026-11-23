@@ -54,7 +54,8 @@ is_derived_aggregate() {
 is_retryable_docker_pull() {
   local log=$1
 
-  grep -Fq 'Docker pull failed with exit code' "$log" &&
+  # The runner logs retryable pull attempts as warnings even when setup recovers.
+  grep -Eq '##\[error\]Docker pull failed with exit code [0-9]+\.?$' "$log" &&
     grep -Eiq \
       'context deadline exceeded|TLS handshake timeout|i/o timeout|connection reset by peer|unexpected EOF|toomanyrequests|429 Too Many Requests|502 Bad Gateway|503 Service Unavailable|request canceled while waiting for connection' \
       "$log"
@@ -192,23 +193,26 @@ is_retryable_bounded_stall() {
 }
 
 is_retryable_step_timeout() {
-  local log=$1
+  local log=$1 jobs=$2 job_id=$3 failed_step
 
-  # A `timeout-minutes` kill is the deliberate outcome of a network step that
-  # stalled, so it must be retryable - otherwise adding those caps would just
-  # convert a slow-but-green job into a red one with no automatic recovery.
-  #
-  # Unlike the markers above, the timeout notice is emitted by the runner after
-  # it SIGKILLs the step, so there is no opportunity for our own code to print a
-  # token. Matching runner prose is therefore unavoidable here; keep it narrow
-  # by also requiring the run to be one of the network bootstrap steps that
-  # carries an explicit cap, so a genuinely hung test suite stays red.
-  grep -Eq \
-    "The action has timed out\\.|has timed out after [0-9]+ minutes|exceeded the maximum execution time of [0-9]+ minutes" \
-    "$log" || return 1
+  # Only the runner can report a step deadline. Use the job's structured
+  # step results to establish which step failed: setup may succeed before a
+  # test later times out, and composite logs may omit the setup display name.
+  failed_step=$(jq -er --argjson job_id "$job_id" '
+    .jobs[] | select(.id == $job_id)
+    | [(.steps // [])[] | select(.conclusion != "success" and .conclusion != "skipped")]
+    | select(length == 1 and .[0].conclusion == "failure")
+    | .[0].name
+    | select(. == "Install OS prerequisites" or . == "Install ShellCheck prerequisites" or
+             . == "Bootstrap dotfiles dependencies")
+  ' "$jobs") || return 1
 
+  # Current runners name the timed-out step in the error. Match that name
+  # to avoid picking up a reported timeout from a continue-on-error step.
+  # Older runner messages without a name rely on the sole failed step above.
   grep -Eq \
-    "Install OS prerequisites|Install ShellCheck prerequisites|Bootstrap dotfiles dependencies" "$log"
+    "##\[error\](The action has timed out\.|The action '$failed_step' has timed out after [0-9]+ minutes\.|.*exceeded the maximum execution time of [0-9]+ minutes\.?)$" \
+    "$log"
 }
 
 validate_inputs() {
@@ -260,17 +264,34 @@ main() {
     return 0
   fi
 
+  local check_jobs
+  if ! check_jobs=$(jq -r '
+    .jobs[]
+    | select(.conclusion != "success" and .conclusion != "skipped")
+    | [.id, .name, (.conclusion // "unknown")]
+    | @tsv
+  ' "$jobs"); then
+    notice "could not read job conclusions; leaving run failed"
+    return 0
+  fi
+
   local failed_leaf=0
   local retryable_leaf=0
   local unclassified_leaf=0
-  local job_id name log stall_marker
-  while IFS=$'\t' read -r job_id name; do
-    if is_derived_aggregate "$name"; then
+  local job_id name conclusion log stall_marker
+  while IFS=$'\t' read -r job_id name conclusion; do
+    [[ -n "$job_id" ]] || continue
+    if [[ "$conclusion" == failure ]] && is_derived_aggregate "$name"; then
       notice "ignoring derived aggregate failure: $name"
       continue
     fi
 
     failed_leaf=$((failed_leaf + 1))
+    if [[ "$conclusion" != failure ]]; then
+      notice "unclassified job conclusion ($conclusion): $name"
+      unclassified_leaf=$((unclassified_leaf + 1))
+      continue
+    fi
     log="$retry_tmp/$job_id.log"
     if ! read_job_log \
       "repos/$TARGET_REPOSITORY/actions/jobs/$job_id/logs" "$log"; then
@@ -294,19 +315,14 @@ main() {
     elif is_retryable_bounded_stall "$log"; then
       notice "allowlisted bounded infrastructure stall ($stall_marker): $name"
       retryable_leaf=$((retryable_leaf + 1))
-    elif is_retryable_step_timeout "$log"; then
+    elif is_retryable_step_timeout "$log" "$jobs" "$job_id"; then
       notice "allowlisted network step timeout: $name"
       retryable_leaf=$((retryable_leaf + 1))
     else
       notice "not an allowlisted infrastructure failure: $name"
       unclassified_leaf=$((unclassified_leaf + 1))
     fi
-  done < <(jq -r '
-    .jobs[]
-    | select(.conclusion == "failure")
-    | [.id, .name]
-    | @tsv
-  ' "$jobs")
+  done <<<"$check_jobs"
 
   if ((failed_leaf == 0)); then
     notice "no failed leaf jobs were available to classify"
