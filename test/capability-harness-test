@@ -24,7 +24,7 @@ if [[ ${1:-} == --dot-latest-loopback ]]; then
   exit $?
 fi
 
-root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+root=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # Child shells below run with a stub-only PATH. A host startup file named by
 # BASH_ENV would run first under that PATH and can fail or block before the
 # code under test starts, so keep every child shell hermetic.
@@ -582,12 +582,17 @@ digest=${record%% *}
 # A stage is only the verified archive. Extraction is a separate operation
 # so the worker need not receive download credentials.
 printf '%s *%s\n' "$digest" "$staged_name" >"$sidecar"
-staged=$(DOT_TEST_DOT_RELEASE_TAG=$release_tag \
-  release capability_dot_release_stage "$tmp/staged") ||
+staged=$(cd -- "$tmp" && CDPATH=. DOT_TEST_DOT_RELEASE_TAG=$release_tag \
+  release capability_dot_release_stage staged) ||
   fail "could not stage the verified Dot archive"
 [[ "$staged" == /* && "$staged" -ef "$staged_path" && ! -e "$tmp/staged/dot" ]] ||
   fail "Dot stage extracted instead of returning the archive"
 cmp "$assets/$staged_name" "$staged" || fail "staged archive changed"
+staged_dash=$(cd -- "$tmp" && OLDPWD="$assets" DOT_TEST_DOT_RELEASE_TAG=$release_tag \
+  release capability_dot_release_stage -) ||
+  fail "could not stage the verified Dot archive in a directory named dash"
+[[ "$staged_dash" -ef "$tmp/-/$staged_name" ]] ||
+  fail "the dash directory resolved outside the requested destination"
 release capability_dot_release_extract "$staged" "$tmp/dot-staged" ||
   fail "could not extract the staged Dot archive"
 [[ -x "$tmp/dot-staged/dot" ]] || fail "staged archive has no executable Dot"

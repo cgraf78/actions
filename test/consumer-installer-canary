@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+root=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 # repository:test-path for each consumer with a standalone installer contract
 # test. Paths are relative to the consumer checkout.

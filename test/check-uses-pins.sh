@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-target=${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
+target=${1:-$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 
 failures=0
 report() {

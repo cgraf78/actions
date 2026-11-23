@@ -9,7 +9,7 @@ timeout_seconds=${TERMUX_ADB_TIMEOUT_SECONDS:-30}
   exit 2
 }
 
-action_root=$(cd -- "${BASH_SOURCE[0]%/*}/.." && pwd -P)
+action_root=$(CDPATH='' cd -- "${BASH_SOURCE[0]%/*}/.." && pwd -P)
 # shellcheck source=.github/actions/termux-adb/termux-adb.sh
 source "$action_root/termux-adb.sh"
 # shellcheck source=.github/actions/shared/infra-stall-markers.sh

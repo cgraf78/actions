@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-action_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+action_dir=$(CDPATH='' cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=SCRIPTDIR/bounded.sh
 source "$action_dir/bounded.sh"
 
@@ -193,11 +193,17 @@ dotfiles_bootstrap_staged_origin() {
   [[ ${0##*/} == bootstrap.sh && -f "$0" && ! -L "$0" ]] || return 1
   script_parent=${0%/*}
   [[ -n "$script_parent" && "$script_parent" != "$0" ]] || return 1
-  script_parent=$(cd -P -- "$script_parent" 2>/dev/null && pwd -P) || return 1
-  payload_root=$(cd -P -- "$payload" 2>/dev/null && pwd -P) || return 1
+  script_parent=$(CDPATH='' cd -P -- "$script_parent" 2>/dev/null && pwd -P) || return 1
+  payload_root=$(CDPATH='' cd -P -- "$payload" 2>/dev/null && pwd -P) || return 1
   [[ $script_parent == "$payload_root" ]] || return 1
 
+  # Git's file URL needs an absolute path even when the stage input was relative.
   origin=$payload/dot-origin.git
+  case "$origin" in
+    /*) ;;
+    *) origin=$PWD/$origin ;;
+  esac
+  dotfiles_bootstrap_require_stage_directory install-staged "$origin" || return 1
   [[ -d $origin && ! -L $origin ]] || return 1
   revision=$(dotfiles_bootstrap_engine_git --git-dir="$origin" \
     rev-parse --verify 'refs/heads/main^{commit}' 2>/dev/null) || return 1

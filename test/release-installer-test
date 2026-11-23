@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+root=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 # shellcheck source=test/fixture-env.sh
@@ -29,8 +29,8 @@ set -e
 
 write_fixture_config "$consumer"
 
-"$root/release-installer/render.sh" "$consumer" >/dev/null ||
-  fail "renderer did not generate an opted-in installer"
+(cd "$root" && CDPATH=. bash release-installer/render.sh "$consumer" >/dev/null) ||
+  fail "relative renderer did not generate an opted-in installer with caller CDPATH"
 
 [[ -f "$consumer/install.sh" && ! -L "$consumer/install.sh" ]] ||
   fail "renderer did not create a regular top-level install.sh"
@@ -362,10 +362,13 @@ home="$tmp/home"
 data_home="$tmp/data"
 mkdir -p "$home"
 
-HOME="$home" XDG_DATA_HOME="$data_home" \
-  /bin/bash "$consumer/install.sh" \
-  --archive "$archive1" --checksum "$archive1.sha256" >/dev/null ||
-  fail "offline install of a valid release archive failed"
+(
+  cd "$(dirname "$tmp")"
+  relative_archive="$(basename "$tmp")/${archive1##*/}"
+  CDPATH=. HOME="$home" XDG_DATA_HOME="$data_home" \
+    /bin/bash "$consumer/install.sh" --archive "$relative_archive" \
+    --checksum "$relative_archive.sha256" >/dev/null
+) || fail "offline install of a relative release archive failed with caller CDPATH"
 
 stable_root="$data_home/cgraf78/example-tool"
 control_root="$data_home/cgraf78/.example-tool-standalone"

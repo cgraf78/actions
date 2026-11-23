@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+root=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 # shellcheck source=test/fixture-env.sh
@@ -15,6 +15,15 @@ fail() {
   printf 'not ok - %s\n' "$*" >&2
   exit 1
 }
+
+relative_status=0
+relative_usage=$(
+  cd "$root"
+  CDPATH=. HOME="$tmp" DOTFILES_BOOTSTRAP_MODE=invalid \
+    bash .github/actions/dotfiles-bootstrap/install.sh 2>&1
+) || relative_status=$?
+[[ "$relative_status" -eq 2 && "$relative_usage" == 'unsupported dotfiles bootstrap mode: invalid' ]] ||
+  fail "relative bootstrap did not report its unsupported mode with caller CDPATH: $relative_usage"
 
 write_tool() {
   local path=$1 body=$2
@@ -421,6 +430,22 @@ staged_dot_origin="file://$stage_payload/dot-origin.git"
 assert_checkout_xdg_environment "$staged_xdg_env" 'staged payload installation'
 [[ $(cat "$staged_install_roots") == $'PREFIX='"$staged_home/.local"$'\nBIN_DIR='"$staged_home/.local/bin"$'\nDOT_PUBLIC_LIB='"$staged_home/.local/lib/dot" ]] ||
   fail 'staged payload inherited foreign public installation roots'
+
+relative_home=$tmp/relative-stage-home
+relative_log=$tmp/relative-stage.log
+relative_env=$tmp/relative-stage.env
+relative_origin=file://$tmp/relative-stage-client.git
+prepare_client "$relative_home" "$relative_origin" "$tmp/relative-launcher.log" detached
+cp -R "$stage_payload" "$relative_home/stage"
+CDPATH=. run_bootstrap "$relative_home" "$relative_log" "$relative_env" \
+  "$tmp/relative-stage.path" "file://$tmp/unreachable-dot-origin.git" \
+  install-staged stage stage/bootstrap.sh ||
+  fail 'relative staged payload installation failed with caller CDPATH'
+relative_dot_origin="file://$relative_home/stage/dot-origin.git"
+[[ $(<"$relative_env") == "SHDEPS_DOT_REPO=$relative_dot_origin" ]] ||
+  fail 'relative staged payload did not publish its absolute origin'
+[[ $(cat "$relative_log") == $'installer\ndot:init --branch dot-ci-bootstrap '"$relative_origin" ]] ||
+  fail 'relative staged payload did not install and adopt the client'
 
 full_home=$tmp/full-home
 full_log=$tmp/full.log

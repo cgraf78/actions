@@ -26,6 +26,6 @@ if [[ $# -ne 1 ]]; then
   exit 2
 fi
 
-source_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+source_dir=$(CDPATH='' cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 exec "$source_dir/../consumer-ci/vendor-scripts.sh" \
   "$source_dir" "$1" .release-scripts.manifest

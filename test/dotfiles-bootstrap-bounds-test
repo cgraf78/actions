@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+root=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 supervisor=$root/.github/actions/dotfiles-bootstrap/bounded.sh
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT

@@ -6,7 +6,7 @@ cmp() {
   fail 'checkout installer tests must not require cmp'
 }
 
-root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+root=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d)
 tmp=$(cd -P -- "$tmp" && pwd -P)
 blocking_pid=
@@ -222,7 +222,7 @@ write_delegate() {
 
 set -euo pipefail
 
-checkout_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+checkout_root=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 checkout_parent=${checkout_root%/*}
 checkout_name=${checkout_root##*/}
 {
@@ -330,7 +330,7 @@ write_post_install() {
 
 set -euo pipefail
 
-checkout_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+checkout_root=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 checkout_parent=${checkout_root%/*}
 checkout_name=${checkout_root##*/}
 {
@@ -401,8 +401,8 @@ write_config "$consumer"
 write_delegate "$consumer"
 printf 'direct\n' >"$consumer/version.txt"
 
-"$root/checkout-installer/render.sh" "$consumer" >/dev/null ||
-  fail "renderer did not generate an opted-in installer"
+(cd "$root" && CDPATH=. bash checkout-installer/render.sh "$consumer" >/dev/null) ||
+  fail "relative renderer did not generate an opted-in installer with caller CDPATH"
 [[ -f "$consumer/install.sh" && ! -L "$consumer/install.sh" ]] ||
   fail "renderer did not create a regular top-level install.sh"
 [[ -x "$consumer/install.sh" ]] ||

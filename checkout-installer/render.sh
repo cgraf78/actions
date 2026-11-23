@@ -32,7 +32,7 @@ case $#:${1:-} in
     ;;
 esac
 
-source_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+source_dir=$(CDPATH='' cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 template="$source_dir/install.sh.in"
 exclusive_mkdir_fragment="$source_dir/../installer-common/exclusive-mkdir.sh"
 lock_v1_fragment="$source_dir/lock-v1.sh.in"

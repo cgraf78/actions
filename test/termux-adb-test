@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+root=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 adb_wrapper=$root/.github/actions/termux-adb/bin/adb
 stall_markers=$root/.github/actions/shared/infra-stall-markers.sh
 
@@ -124,7 +124,10 @@ done
 
 export TERMUX_ADB_REAL=$tmp/adb
 export ADB_BEHAVIOR=success
-TERMUX_ADB_TIMEOUT_SECONDS=2 "$adb_wrapper" shell get-state
+(
+  cd "$root"
+  CDPATH=. TERMUX_ADB_TIMEOUT_SECONDS=2 bash .github/actions/termux-adb/bin/adb shell get-state
+)
 grep -Fxq 'shell get-state' "$ADB_CALLS" || {
   printf 'termux adb test failed: wrapper did not preserve adb arguments\n' >&2
   exit 1

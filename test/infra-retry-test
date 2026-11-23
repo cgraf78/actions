@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+root=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 retry="$root/.github/actions/infra-retry/retry.sh"
 # shellcheck source=.github/actions/shared/infra-stall-markers.sh
 source "$root/.github/actions/shared/infra-stall-markers.sh"

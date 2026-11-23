@@ -2,7 +2,7 @@
 
 set -uo pipefail
 
-root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+root=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -217,11 +217,11 @@ grep -Fq "release_repo='example/tool'" "$consumer/install.sh" ||
   fail "sync generated an installer with the wrong consumer policy"
 
 git -C "$consumer" add .
-GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
-  GITHUB_WORKSPACE="$consumer" \
-  ACTION_REF="$want" \
-  "$verify" >/dev/null ||
-  fail "freshly synchronized consumer did not verify"
+(
+  cd "$actions_source" || exit
+  CDPATH=. GITHUB_WORKSPACE="$consumer" ACTION_REF="$want" \
+    bash .github/actions/verify-consumer-sync/verify.sh >/dev/null
+) || fail "freshly synchronized consumer did not verify from a relative action path"
 
 printf '\n# consumer drift\n' >>"$consumer/install.sh"
 out=$(GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
