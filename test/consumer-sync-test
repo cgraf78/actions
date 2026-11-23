@@ -47,6 +47,16 @@ fail() {
   test "$(git -C "$caller" config --local core.hooksPath)" = "$hooks"
 ) || fail "Git fixture changed or inherited the caller context"
 
+# Mock command directories cannot be encoded as a single colon-delimited
+# PATH entry when the scratch parent contains the separator.
+colon_tmp="$tmp/tmp:parent"
+mkdir "$colon_tmp" || exit 1
+colon_status=0
+colon_output=$(TMPDIR="$colon_tmp" "$root/test/dotfiles-bootstrap-bounds-test" 2>&1) ||
+  colon_status=$?
+[[ "$colon_status" == 2 && "$colon_output" == *"without a colon"* ]] ||
+  fail "mock PATH fixture accepted a colon in TMPDIR: $colon_output"
+
 # Exercise the command from a clean, committed provider checkout. The commit is
 # the dependency identity written into the consumer lock; using this fixture
 # also lets the suite prove that dirty provider bytes are rejected later.
