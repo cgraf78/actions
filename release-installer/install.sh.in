@@ -774,8 +774,10 @@ fi
 mkdir -p "$releases_root"
 chmod 0700 "$control_root" "$releases_root"
 
+# @INSTALLER_EXCLUSIVE_MKDIR@
+
 lock_dir=$control_root/lock
-mkdir "$lock_dir" 2>/dev/null ||
+installer_exclusive_mkdir "$lock_dir" 2>/dev/null ||
   die "another installer is active (or left a stale lock): $lock_dir"
 lock_held=1
 

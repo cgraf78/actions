@@ -24,3 +24,22 @@ actions_fixture_path() {
       ;;
   esac
 }
+
+actions_fixture_nonexclusive_mkdir() (
+  bin=$1
+  mkdir -p "$bin" || exit
+  cat >"$bin/mkdir" <<'EOF'
+#!/bin/sh
+# Match the uutils race's externally visible result for this exact lock.
+if [ "$#" -eq 1 ] && [ "$1" = "$ACTIONS_TEST_LOCK" ]; then
+  exit 0
+fi
+exec "$ACTIONS_TEST_REAL_MKDIR" "$@"
+EOF
+  cat >"$bin/gnumkdir" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$1" >"$ACTIONS_TEST_MKDIR_LOG" || exit
+exec "$ACTIONS_TEST_REAL_MKDIR" "$@"
+EOF
+  chmod 0755 "$bin/mkdir" "$bin/gnumkdir"
+)

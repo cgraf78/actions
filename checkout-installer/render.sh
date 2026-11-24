@@ -34,6 +34,7 @@ esac
 
 source_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 template="$source_dir/install.sh.in"
+exclusive_mkdir_fragment="$source_dir/../installer-common/exclusive-mkdir.sh"
 lock_v1_fragment="$source_dir/lock-v1.sh.in"
 bash_resolver_fragment="$source_dir/bash-resolver-v1.sh.in"
 consumer=$1
@@ -355,6 +356,16 @@ while IFS= read -r line || [[ -n "$line" ]]; do
         die 'installer template closes the wrong legacy-lock block'
       template_block=
       template_block_enabled=true
+      continue
+      ;;
+    '# @INSTALLER_EXCLUSIVE_MKDIR@')
+      [[ "$template_block" == legacy-lock ]] ||
+        die 'exclusive mkdir marker is outside the legacy lock block'
+      if [[ "$template_block_enabled" == true ]]; then
+        [[ -f "$exclusive_mkdir_fragment" && ! -L "$exclusive_mkdir_fragment" ]] ||
+          die "exclusive mkdir fragment must be a regular file: $exclusive_mkdir_fragment"
+        sed '/^$/!s/^/  /' "$exclusive_mkdir_fragment" >>"$tmp"
+      fi
       continue
       ;;
     '# @CHECKOUT_LOCK_V1_LIBRARY@')

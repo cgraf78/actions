@@ -38,6 +38,7 @@ program	checkout-installer/install.sh.in
 program	checkout-installer/lock-v1.sh.in
 program	checkout-installer/render.sh
 program	examples/release.conf
+program	installer-common/exclusive-mkdir.sh
 program	release-installer/install.sh.in
 program	release-installer/render.sh
 program	release-scripts/package-release.sh

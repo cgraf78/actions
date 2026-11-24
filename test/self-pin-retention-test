@@ -30,6 +30,7 @@ make_provider() {
   cp -R "$root/release-scripts" "$work/release-scripts"
   cp -R "$root/release-installer" "$work/release-installer"
   cp -R "$root/checkout-installer" "$work/checkout-installer"
+  cp -R "$root/installer-common" "$work/installer-common"
   # Self-sync needs the same capability layout rules as the consumer verifier.
   mkdir -p "$work/.github/actions/verify-consumer-sync"
   cp "$root/.github/actions/verify-consumer-sync/capability-layouts.sh" \

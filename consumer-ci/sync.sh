@@ -83,6 +83,7 @@ for provider_script in "$source_root"/capability-harness/*.sh \
   fi
 done
 for provider_installer in \
+  "$source_root/installer-common/exclusive-mkdir.sh" \
   "$source_root/release-installer/render.sh" \
   "$source_root/release-installer/install.sh.in" \
   "$source_root/checkout-installer/render.sh" \

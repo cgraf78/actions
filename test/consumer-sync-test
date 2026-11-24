@@ -66,6 +66,7 @@ cp -R "$root/consumer-ci" "$actions_source/consumer-ci"
 cp -R "$root/release-scripts" "$actions_source/release-scripts"
 cp -R "$root/release-installer" "$actions_source/release-installer"
 cp -R "$root/checkout-installer" "$actions_source/checkout-installer"
+cp -R "$root/installer-common" "$actions_source/installer-common"
 cp -R "$root/capability-harness" "$actions_source/capability-harness"
 cp -R "$root/.github/actions/shared" "$actions_source/.github/actions/shared"
 mkdir -p "$actions_source/.github/actions/shell-ci-prereqs"
@@ -233,6 +234,26 @@ fi
 "$sync" "$consumer" >/dev/null ||
   fail "sync did not restore a drifted generated installer"
 git -C "$consumer" add .
+
+# A provider revision missing a shared input must fail before writing the
+# consumer lock or publishing workflow refs for that revision.
+missing_source="$tmp/actions-missing-installer-fragment"
+git clone --quiet "$actions_source" "$missing_source" ||
+  fail "could not clone the provider fixture"
+git -C "$missing_source" rm --quiet installer-common/exclusive-mkdir.sh ||
+  fail "could not remove the installer fragment from the provider fixture"
+git -C "$missing_source" -c core.hooksPath=/dev/null \
+  -c user.email=t@example.com -c user.name=Test -c commit.gpgsign=false \
+  commit --quiet -m 'missing shared installer fragment' ||
+  fail "could not commit the incomplete provider fixture"
+before_workflow=$(cksum <"$consumer/.github/workflows/test.yml")
+out=$("$missing_source/consumer-ci/sync.sh" "$consumer" 2>&1) &&
+  fail "incomplete installer source unexpectedly synchronized"
+[[ "$out" == *'installer provider is not a tracked regular file: installer-common/exclusive-mkdir.sh'* ]] ||
+  fail "incomplete installer source did not fail preflight: $out"
+[[ $(<"$consumer/.github/cgraf78-actions.lock") == "$want" &&
+$(cksum <"$consumer/.github/workflows/test.yml") == "$before_workflow" ]] ||
+  fail "incomplete provider source rewrote the consumer lock or workflow"
 
 chmod 0644 "$consumer/install.sh"
 git -C "$consumer" add .

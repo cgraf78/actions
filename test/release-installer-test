@@ -399,7 +399,13 @@ $(wc -c <"$control_root/owner" | tr -d ' ') == 37 ]] ||
 # concurrent Shdeps adoption race an installer publication.
 locked_current=$(readlink "$control_root/current")
 mkdir "$control_root/lock"
-if locked_out=$(HOME="$home" XDG_DATA_HOME="$data_home" \
+lock_bin="$tmp/lock-mkdir-bin"
+lock_mkdir_log="$tmp/lock-mkdir.log"
+lock_real_mkdir=$(type -P gnumkdir || type -P mkdir)
+actions_fixture_nonexclusive_mkdir "$lock_bin"
+if locked_out=$(HOME="$home" XDG_DATA_HOME="$data_home" PATH="$lock_bin:$PATH" \
+  ACTIONS_TEST_LOCK="$control_root/lock" ACTIONS_TEST_REAL_MKDIR="$lock_real_mkdir" \
+  ACTIONS_TEST_MKDIR_LOG="$lock_mkdir_log" \
   /bin/bash "$consumer/install.sh" \
   --archive "$archive1" --checksum "$archive1.sha256" 2>&1); then
   fail "install ignored a pre-existing installer lock"
@@ -407,6 +413,7 @@ fi
 [[ "$locked_out" == *"another installer is active"* ]] ||
   fail "locked install failed for the wrong reason: $locked_out"
 [[ -d "$control_root/lock" &&
+  $(cat "$lock_mkdir_log") == "$control_root/lock" &&
   $(readlink "$control_root/current") == "$locked_current" &&
   $(readlink "$stable_root") == .example-tool-standalone/current ]] ||
   fail "locked install changed the lock, active release, or stable root"
