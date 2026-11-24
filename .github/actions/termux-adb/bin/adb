@@ -15,22 +15,31 @@ source "$action_root/termux-adb.sh"
 # shellcheck source=.github/actions/shared/infra-stall-markers.sh
 source "$action_root/../shared/infra-stall-markers.sh"
 
-status_file=$(mktemp)
+status_file=
 supervisor_pid=
+starting=true
+cancel_status=0
 # shellcheck disable=SC2329  # Invoked by the EXIT trap below.
 cleanup() {
-  rm -f "$status_file"
+  [[ -z "$status_file" ]] || rm -f "$status_file"
 }
-# shellcheck disable=SC2329  # Invoked by the signal traps below.
 cancel() {
-  local exit_code=$1
-  trap - HUP INT TERM
+  if [[ "$cancel_status" -eq 0 ]]; then
+    cancel_status=$1
+  fi
+  # Bash can deliver a trap after the fork but before the assignment of $!.
+  # Defer teardown until the parent has published its owned supervisor.
+  [[ "$starting" == false ]] || return 0
+  trap '' HUP INT TERM
   if [[ -n "$supervisor_pid" ]]; then
-    kill -KILL -- "-$supervisor_pid" 2>/dev/null ||
+    if ! kill -KILL -- "-$supervisor_pid" 2>/dev/null; then
       kill -KILL "$supervisor_pid" 2>/dev/null || true
+      # timeout may have formed its group between the two signals.
+      kill -KILL -- "-$supervisor_pid" 2>/dev/null || true
+    fi
     wait "$supervisor_pid" 2>/dev/null || true
   fi
-  exit "$exit_code"
+  exit "$cancel_status"
 }
 is_uncaught_setup_call() {
   # The pinned emulator runner does not catch failure from this post-boot
@@ -47,6 +56,8 @@ trap cleanup EXIT
 trap 'cancel 129' HUP
 trap 'cancel 130' INT
 trap 'cancel 143' TERM
+status_file=$(mktemp)
+[[ "$cancel_status" -eq 0 ]] || exit "$cancel_status"
 
 # Record a completed child's status out of band. GNU timeout reserves 124 for
 # its own deadline, but adb can legitimately return the same status. The file
@@ -63,6 +74,8 @@ _termux_adb_timeout_exec "$timeout_seconds" bash -c '
   exit "$rc"
 ' termux-adb-status "$status_file" "$TERMUX_ADB_REAL" "$@" <&0 &
 supervisor_pid=$!
+starting=false
+[[ "$cancel_status" -eq 0 ]] || cancel "$cancel_status"
 if wait "$supervisor_pid"; then
   rc=0
 else
