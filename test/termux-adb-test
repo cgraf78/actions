@@ -19,12 +19,19 @@ GITHUB_ACTION_PATH=$root/.github/actions/termux-adb
 export GITHUB_WORKSPACE GITHUB_ACTION_PATH
 
 assert_processes_gone() {
-  local pid_file=$1 context=$2 shell_pid child_pid adb_pid
+  local pid_file=$1 context=$2 shell_pid child_pid adb_pid deadline
   read -r shell_pid child_pid <"$pid_file"
+  deadline=$((SECONDS + 3))
   for adb_pid in "$shell_pid" "$child_pid"; do
+    # The group has stopped, but the runner's process reaper may still need
+    # to retire a descendant that was adopted during teardown.
+    while kill -0 "$adb_pid" 2>/dev/null && [[ "$SECONDS" -lt "$deadline" ]]; do
+      sleep 0.02
+    done
     if kill -0 "$adb_pid" 2>/dev/null; then
-      printf 'termux adb test failed: %s left process %s alive\n' \
+      printf 'termux adb test failed: %s left process %s present\n' \
         "$context" "$adb_pid" >&2
+      kill -KILL "$shell_pid" "$child_pid" 2>/dev/null || true
       exit 1
     fi
   done
@@ -266,6 +273,38 @@ fi
   exit 1
 }
 assert_processes_gone "$ADB_PID_FILE" cancellation
+
+# Stop precisely after the supervisor forks and before the wrapper publishes
+# $!. Wait for the fake ADB and its own child so early cancellation must clean
+# up the live process group. A second signal must preserve the first status.
+cat >"$tmp/cancel-during-launch.bash" <<'EOF'
+if [[ "$0" == "$ADB_TEST_WRAPPER" ]]; then
+  cancel_before_pid() {
+    [[ "$BASH_COMMAND" == 'supervisor_pid=$!' ]] || return 0
+    trap - DEBUG
+    local deadline=$((SECONDS + 10))
+    while [[ ! -s "$ADB_PID_FILE" && "$SECONDS" -lt "$deadline" ]]; do
+      sleep 0.01
+    done
+    [[ -s "$ADB_PID_FILE" ]] || return 0
+    printf '%s\n' reached >"$ADB_TEST_LAUNCH_GATE"
+    kill -TERM "$$"
+    kill -HUP "$$"
+  }
+  trap cancel_before_pid DEBUG
+fi
+EOF
+export ADB_PID_FILE=$tmp/launch-cancelled-adb-pids
+rc=0
+TERMUX_ADB_TIMEOUT_SECONDS=30 ADB_TEST_WRAPPER="$adb_wrapper" \
+  ADB_TEST_LAUNCH_GATE="$tmp/launch-gate" BASH_ENV="$tmp/cancel-during-launch.bash" \
+  "$adb_wrapper" -s emulator-5554 shell input keyevent 82 \
+  2>"$tmp/launch-cancelled-wrapper-stderr" || rc=$?
+[[ -s "$tmp/launch-gate" && "$rc" -eq 143 ]] || {
+  printf 'termux adb test failed: launch cancellation gate/status mismatch: %s\n' "$rc" >&2
+  exit 1
+}
+assert_processes_gone "$ADB_PID_FILE" 'cancellation during launch'
 
 unset TERMUX_ADB_REAL
 action_script=$(yq -r '.runs.steps[0].run' \
