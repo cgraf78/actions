@@ -61,6 +61,46 @@ check_no_unsupervised_adb() {
   fi
 }
 
+check_required_jobs() {
+  local jobs
+  jobs=$(yq -o=json -I=0 '.jobs' "$root/.github/workflows/test.yml")
+  python3 - "$jobs" <<'PY'
+import json
+import subprocess
+import sys
+
+
+jobs = json.loads(sys.argv[1])
+required = jobs["required"]
+# The opt-in retry canary deliberately fails and is skipped on ordinary runs.
+expected = jobs.keys() - {"required", "retry-canary"}
+if set(required["needs"]) != expected:
+    missing = sorted(expected - set(required["needs"]))
+    extra = sorted(set(required["needs"]) - expected)
+    sys.exit(f"Required dependencies differ: missing={missing}, extra={extra}")
+
+command = ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c",
+           required["steps"][0]["run"]]
+bindings = required["env"]
+success = dict.fromkeys(bindings, "success")
+result = subprocess.run(command, env=success, capture_output=True, text=True)
+if result.returncode:
+    sys.exit(f"Required rejected all successful jobs:\n{result.stdout}{result.stderr}")
+
+for job in sorted(expected):
+    names = [name for name, value in bindings.items()
+             if value == "${{ needs." + job + ".result }}"]
+    if len(names) != 1:
+        sys.exit(f"Required must bind exactly one result for {job}")
+    for outcome in ("failure", "cancelled", "skipped"):
+        result = subprocess.run(
+            command, env={**success, names[0]: outcome}, capture_output=True, text=True
+        )
+        if not result.returncode:
+            sys.exit(f"Required accepted {job} with result {outcome}")
+PY
+}
+
 check_mise_refresh_scope() {
   local refresh
   refresh=$(yq -r '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").run' \
@@ -1191,17 +1231,7 @@ contracts() {
   check '.jobs.termux-runtime == null' test.yml
   check '.jobs.required.name == "Required"' test.yml
   check '.jobs.required.if == "${{ always() }}"' test.yml
-  check '.jobs.required.needs | join(",") == "shell-smoke,rust-smoke,matrix-contract,android-rust-toolchain,release-installer-bash32,checkout-installer-bash32,release-asset-upload-bash32,quality,wezterm-smoke"' test.yml
-  check '.jobs.required.steps[0].run | contains("test \"$SHELL_SMOKE_RESULT\" = success")' test.yml
-  check '.jobs.required.steps[0].run | contains("test \"$RUST_SMOKE_RESULT\" = success")' test.yml
-  check '.jobs.required.steps[0].run | contains("test \"$MATRIX_CONTRACT_RESULT\" = success")' test.yml
-  check '.jobs.required.steps[0].run | contains("test \"$ANDROID_TOOLCHAIN_RESULT\" = success")' test.yml
-  check '.jobs.required.steps[0].run | contains("test \"$RELEASE_INSTALLER_BASH32_RESULT\" = success")' test.yml
-  check '.jobs.required.steps[0].run | contains("test \"$CHECKOUT_INSTALLER_BASH32_RESULT\" = success")' test.yml
-  check '.jobs.required.steps[0].run | contains("test \"$RELEASE_ASSET_UPLOAD_BASH32_RESULT\" = success")' test.yml
-  check '.jobs.required.steps[0].run | contains("test \"$QUALITY_RESULT\" = success")' test.yml
-  check '.jobs.required.env.WEZTERM_SMOKE_RESULT == "${{ needs.wezterm-smoke.result }}"' test.yml
-  check '.jobs.required.steps[0].run | contains("test \"$WEZTERM_SMOKE_RESULT\" = success")' test.yml
+  check_required_jobs
 
   # The consumer gate intentionally has no configurable paths: one canonical
   # lock plus release.conf auto-detection gives the fleet a smaller contract

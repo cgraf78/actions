@@ -436,7 +436,7 @@ jobs:
   required:
     name: Required
     if: ${{ always() }}
-    needs: [shell-smoke, rust-smoke, matrix-contract, android-rust-toolchain, release-installer-bash32, checkout-installer-bash32, release-asset-upload-bash32, quality, wezterm-smoke]
+    needs: [shell-smoke, rust-smoke, matrix-contract, android-rust-toolchain, release-installer-bash32, checkout-installer-bash32, release-asset-upload-bash32, release-gh-commands, quality, wezterm-smoke]
     runs-on: ubuntu-24.04
     env:
       SHELL_SMOKE_RESULT: ${{ needs.shell-smoke.result }}
@@ -446,6 +446,7 @@ jobs:
       RELEASE_INSTALLER_BASH32_RESULT: ${{ needs.release-installer-bash32.result }}
       CHECKOUT_INSTALLER_BASH32_RESULT: ${{ needs.checkout-installer-bash32.result }}
       RELEASE_ASSET_UPLOAD_BASH32_RESULT: ${{ needs.release-asset-upload-bash32.result }}
+      RELEASE_GH_COMMANDS_RESULT: ${{ needs.release-gh-commands.result }}
       QUALITY_RESULT: ${{ needs.quality.result }}
       WEZTERM_SMOKE_RESULT: ${{ needs.wezterm-smoke.result }}
     steps:
@@ -459,6 +460,7 @@ jobs:
           printf 'Release installer Bash 3.2: %s\n' "$RELEASE_INSTALLER_BASH32_RESULT"
           printf 'Checkout installer Bash 3.2: %s\n' "$CHECKOUT_INSTALLER_BASH32_RESULT"
           printf 'Release asset upload Bash 3.2: %s\n' "$RELEASE_ASSET_UPLOAD_BASH32_RESULT"
+          printf 'Release gh commands: %s\n' "$RELEASE_GH_COMMANDS_RESULT"
           printf 'Quality: %s\n' "$QUALITY_RESULT"
           printf 'WezTerm pin smoke: %s\n' "$WEZTERM_SMOKE_RESULT"
           test "$SHELL_SMOKE_RESULT" = success
@@ -468,5 +470,6 @@ jobs:
           test "$RELEASE_INSTALLER_BASH32_RESULT" = success
           test "$CHECKOUT_INSTALLER_BASH32_RESULT" = success
           test "$RELEASE_ASSET_UPLOAD_BASH32_RESULT" = success
+          test "$RELEASE_GH_COMMANDS_RESULT" = success
           test "$QUALITY_RESULT" = success
           test "$WEZTERM_SMOKE_RESULT" = success
