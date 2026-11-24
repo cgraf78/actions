@@ -42,9 +42,11 @@ Keep composite actions narrow and reusable. If behavior is only needed by a
 single reusable workflow, prefer keeping it in that workflow until a second
 consumer appears.
 
-`package-manager/lib.sh` is an internal source library, not a standalone
-action. The Rust, musl, and shell prerequisite actions source it so mirror
-timeouts and retry classification have one owner.
+`package-manager/lib.sh` is an internal source library shared by the Rust,
+musl, and shell prerequisite actions. Their step shell runs the shared
+`package-manager/run.sh` launcher so runner cancellation reaches the
+watchdog even from nested installer functions. The watchdog owns package
+cleanup, mirror timeouts, and retry classification.
 
 `shared/infra-stall-markers.sh` is likewise a sourced library, not an action.
 It owns the stable infrastructure-stall markers that `termux-adb`,

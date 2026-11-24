@@ -10,6 +10,7 @@ set -uo pipefail
 
 root=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 install_sh="$root/.github/actions/musl-build-prereqs/install.sh"
+step_sh="$root/.github/actions/package-manager/run.sh"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -65,7 +66,7 @@ EOF
   chmod 0755 "$bin/rustup" || exit
   : >"$log"
   env -i PATH="$bin" TMPDIR="$tmp" APT_MIRROR_LIST="$tmp/no-mirrorlist" \
-    STUB_LOG="$log" "$@" sh "$install_sh" >>"$log" 2>&1 || status=$?
+    STUB_LOG="$log" "$@" sh "$step_sh" "$install_sh" >>"$log" 2>&1 || status=$?
   if [[ "$status" -eq "$expected" ]]; then
     _pass "${log##*/}: exits $expected"
   else

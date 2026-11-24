@@ -25,5 +25,5 @@ runs:
         SETUP: ${{ inputs.setup }}
         GH_TOKEN: ""
         GITHUB_TOKEN: ${{ github.token }}
-      run: "$GITHUB_ACTION_PATH/install.sh"
+      run: exec sh "$GITHUB_ACTION_PATH/../package-manager/run.sh" "$GITHUB_ACTION_PATH/install.sh"
 
