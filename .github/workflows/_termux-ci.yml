@@ -94,7 +94,7 @@ jobs:
 
       - name: Stage exact Dot bootstrap payload
         if: inputs.setup == 'dotfiles'
-        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@124dd3381769ff51293df7e658d57a67d61d3e7d
+        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@da9bb85176439e516225eaedb28b5444f4be8c52
         env:
           HOME: ${{ github.workspace }}
         with:
@@ -103,14 +103,14 @@ jobs:
 
       - name: Install host Rust toolchain
         if: inputs.host-command != '' && inputs.rust-toolchain != ''
-        uses: cgraf78/actions/.github/actions/rust-toolchain@124dd3381769ff51293df7e658d57a67d61d3e7d
+        uses: cgraf78/actions/.github/actions/rust-toolchain@da9bb85176439e516225eaedb28b5444f4be8c52
         with:
           toolchain: ${{ inputs.rust-toolchain }}
           targets: x86_64-linux-android
 
       - name: Configure host Android NDK toolchain
         if: inputs.host-command != '' && inputs.rust-toolchain != ''
-        uses: cgraf78/actions/.github/actions/android-rust-toolchain@124dd3381769ff51293df7e658d57a67d61d3e7d
+        uses: cgraf78/actions/.github/actions/android-rust-toolchain@da9bb85176439e516225eaedb28b5444f4be8c52
         with:
           rust-target: x86_64-linux-android
 
@@ -129,7 +129,7 @@ jobs:
           eval "$HOST_COMMAND"
 
       - name: Download official Termux APK
-        uses: cgraf78/actions/.github/actions/download-release-asset@124dd3381769ff51293df7e658d57a67d61d3e7d
+        uses: cgraf78/actions/.github/actions/download-release-asset@da9bb85176439e516225eaedb28b5444f4be8c52
         with:
           repository: termux/termux-app
           tag: v0.118.3
@@ -170,7 +170,7 @@ jobs:
       # lib/sdk-installer.js at the runner's pinned commit.
       # test/workflow-contract-test ties all four to that step and pin.
       - name: Install Android SDK packages
-        uses: cgraf78/actions/.github/actions/android-sdk-packages@124dd3381769ff51293df7e658d57a67d61d3e7d
+        uses: cgraf78/actions/.github/actions/android-sdk-packages@da9bb85176439e516225eaedb28b5444f4be8c52
         with:
           api-level: 31
           target: default
@@ -178,7 +178,7 @@ jobs:
           build-tools-version: 37.0.0
 
       - name: Stage bounded Termux ADB helper
-        uses: cgraf78/actions/.github/actions/termux-adb@124dd3381769ff51293df7e658d57a67d61d3e7d
+        uses: cgraf78/actions/.github/actions/termux-adb@da9bb85176439e516225eaedb28b5444f4be8c52
 
       - name: Prepare Termux host runner
         shell: bash
