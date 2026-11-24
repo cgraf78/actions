@@ -9,10 +9,45 @@ trap 'rm -rf "$tmp"' EXIT
 # shellcheck source=test/fixture-env.sh
 . "$root/test/fixture-env.sh"
 actions_fixture_git "$tmp" || exit "$?"
+actions_fixture_path "$tmp" || exit "$?"
 
 fail() {
   printf 'consumer-sync-test: %s\n' "$1" >&2
   exit 1
+}
+
+# Make one Git query fail without changing the repository or invoking ambient
+# Git wrappers. Callers must distinguish an unreadable index from no match.
+real_git=$(PATH=/usr/bin:/bin command -v git) ||
+  fail "could not locate Git for the query-failure fixture"
+git_failure_bin="$tmp/git-failure-bin"
+mkdir "$git_failure_bin" || exit "$?"
+cat >"$git_failure_bin/git" <<'EOF'
+#!/usr/bin/env bash
+case "${3:-}" in
+  status)
+    [[ "$ACTIONS_TEST_GIT_FAILURE" != status ]] || exit 128
+    ;;
+  ls-files)
+    for arg do
+      [[ "$arg" != "$ACTIONS_TEST_GIT_FAILURE" ]] || exit 128
+      if [[ "$ACTIONS_TEST_GIT_FAILURE" == release-markers ]]; then
+        case "$arg" in
+          scripts/release.conf | scripts/.release-scripts.manifest) exit 128 ;;
+        esac
+      fi
+    done
+    ;;
+esac
+exec "$ACTIONS_TEST_REAL_GIT" "$@"
+EOF
+chmod 0755 "$git_failure_bin/git" || exit "$?"
+
+with_git_failure() {
+  local query=$1
+  shift
+  env PATH="$git_failure_bin:$PATH" ACTIONS_TEST_REAL_GIT="$real_git" \
+    ACTIONS_TEST_GIT_FAILURE="$query" "$@"
 }
 
 # A scratch directory inside the caller's worktree is still a separate
@@ -114,6 +149,10 @@ GITHUB_ACTION_PATH="$self_source/.github/actions/verify-consumer-sync" \
 
 git -C "$self_source" -c user.email=t@example.com -c user.name=Test \
   -c commit.gpgsign=false commit --quiet -m pin
+out=$(with_git_failure status "$self_source/consumer-ci/retain-self-pin.sh" 2>&1) &&
+  fail "self-pin retention proceeded with unreadable provider status"
+[[ "$out" == *"cannot check provider worktree status"* ]] ||
+  fail "retention status failure omitted its diagnostic: $out"
 "$self_source/consumer-ci/retain-self-pin.sh" >/dev/null ||
   fail "self-synchronized provider implementation was not retained"
 "$self_source/consumer-ci/verify-self-pin.sh" >/dev/null ||
@@ -222,6 +261,16 @@ git -C "$consumer" add .
   CDPATH=. GITHUB_WORKSPACE="$consumer" ACTION_REF="$want" \
     bash .github/actions/verify-consumer-sync/verify.sh >/dev/null
 ) || fail "freshly synchronized consumer did not verify from a relative action path"
+
+printf '\n# vendored drift\n' >>"$consumer/scripts/package-release.sh" || exit "$?"
+for release_marker in release-markers scripts/release.conf scripts/.release-scripts.manifest; do
+  out=$(with_git_failure "$release_marker" env GITHUB_WORKSPACE="$consumer" \
+    ACTION_REF="$want" "$verify" 2>&1) &&
+    fail "unreadable release markers hid vendored drift"
+  [[ "$out" == *"cannot read tracked consumer paths"* ]] ||
+    fail "unreadable release markers omitted their diagnostic: $out"
+done
+"$sync" "$consumer" >/dev/null || fail "could not restore the release fixture"
 
 printf '\n# consumer drift\n' >>"$consumer/install.sh"
 out=$(GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \
@@ -387,6 +436,20 @@ jobs:
     uses: cgraf78/actions/.github/workflows/shell-ci.yml@main
 YAML
 git -C "$plain_consumer" add .
+for query in status .config/shdeps/hooks.d/tmux.sh; do
+  before_workflow=$(cksum <"$plain_consumer/.github/workflows/test.yml")
+  out=$(with_git_failure "$query" "$sync" "$plain_consumer" 2>&1) &&
+    fail "sync proceeded despite Git query failure for $query"
+  case "$query" in
+    status) diagnostic='cannot check provider worktree status' ;;
+    *) diagnostic='cannot read tracked consumer paths' ;;
+  esac
+  [[ "$out" == *"$diagnostic"* ]] ||
+    fail "sync omitted the diagnostic for $query: $out"
+  [[ ! -e "$plain_consumer/.github/cgraf78-actions.lock" &&
+    $(cksum <"$plain_consumer/.github/workflows/test.yml") == "$before_workflow" ]] ||
+    fail "failed query rewrote the consumer lock or workflow"
+done
 "$sync" "$plain_consumer" >/dev/null ||
   fail "consumer without release scripts did not synchronize"
 [[ ! -e "$plain_consumer/install.sh" ]] ||

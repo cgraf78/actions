@@ -51,11 +51,9 @@ fi
 # tracked or untracked provider changes before touching the consumer; otherwise
 # the generated refs can name HEAD while vendored files came from worktree
 # content that no future checkout of that commit can reproduce.
-if [[ -n $(git -C "$source_root" status --porcelain --untracked-files=normal) ]]; then
-  printf '%s\n' \
-    'consumer-sync: actions checkout is dirty; commit or discard provider changes before synchronizing' >&2
-  exit 1
-fi
+# shellcheck source=provider-status.sh
+. "$source_root/consumer-ci/provider-status.sh"
+require_clean_provider "$source_root" consumer-sync
 # Git status intentionally omits ignored files, but the release synchronizer
 # sees filesystem globs. Require every candidate source script to belong to the
 # commit before any consumer bytes are changed, closing that otherwise subtle
@@ -107,11 +105,15 @@ fi
 consumer=$(git -C "$consumer" rev-parse --show-toplevel)
 shdeps_hooks=.config/shdeps/hooks.d
 build_lock_sources="$source_root/.github/actions/shell-ci-prereqs"
+
+# shellcheck source=../.github/actions/verify-consumer-sync/tracked-paths.sh
+. "$source_root/.github/actions/verify-consumer-sync/tracked-paths.sh"
+tracked_hooks=$(consumer_index_paths "$consumer" "$shdeps_hooks/tmux.sh" "$shdeps_hooks/wezterm.sh")
 shdeps_build_locks=()
 for tool in tmux wezterm; do
   hook="$shdeps_hooks/$tool.sh"
   build_lock="$tool-build.lock"
-  if ! git -C "$consumer" ls-files --error-unmatch -- "$hook" >/dev/null 2>&1; then
+  if ! consumer_tracks "$tracked_hooks" "$hook"; then
     continue
   fi
   # The tracked hook opts in. Keep its data next to the hook so Shdeps needs

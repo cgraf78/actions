@@ -102,7 +102,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Install pinned WezTerm
-        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@124dd3381769ff51293df7e658d57a67d61d3e7d
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@da9bb85176439e516225eaedb28b5444f4be8c52
         with:
           matrix-name: ${{ matrix.name }}
           profiles: wezterm-pinned
@@ -212,7 +212,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust
-        uses: cgraf78/actions/.github/actions/rust-toolchain@124dd3381769ff51293df7e658d57a67d61d3e7d
+        uses: cgraf78/actions/.github/actions/rust-toolchain@da9bb85176439e516225eaedb28b5444f4be8c52
         with:
           toolchain: stable
           targets: ${{ matrix.rust-target }}
@@ -290,7 +290,7 @@ jobs:
           persist-credentials: false
 
       - name: Verify internal Actions sync
-        uses: cgraf78/actions/.github/actions/verify-consumer-sync@124dd3381769ff51293df7e658d57a67d61d3e7d
+        uses: cgraf78/actions/.github/actions/verify-consumer-sync@da9bb85176439e516225eaedb28b5444f4be8c52
 
       - name: Verify internal action implementations
         shell: bash
