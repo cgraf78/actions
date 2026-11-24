@@ -44,6 +44,8 @@ ShellCheck inventory. Each overlay keeps its own workflow-shape assertions.
 `DOT_TEST_DOT_RELEASE_REPO` (default `cgraf78/dot`). Capability CI floats to
 the newest release because the matrix images carry no Rust toolchain to build
 Dot from source; an explicit tag still selects that exact release.
+Call `capability_dot_release_latest_tag OWNER/REPO` to resolve and freeze
+that repository's latest verified redirect before starting multiple runs.
 
 Setups that hand off to an unprivileged process call
 `capability_dot_release_stage DEST` first. It prints the absolute path of
