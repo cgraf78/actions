@@ -5,6 +5,10 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+# shellcheck source=test/fixture-env.sh
+. "$root/test/fixture-env.sh"
+actions_fixture_path "$tmp" || exit "$?"
+actions_fixture_git "$tmp" || exit "$?"
 
 fail() {
   printf 'checkout-installer-network-test: %s\n' "$*" >&2

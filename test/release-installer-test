@@ -5,6 +5,9 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+# shellcheck source=test/fixture-env.sh
+. "$root/test/fixture-env.sh"
+actions_fixture_path "$tmp" || exit "$?"
 
 fail() {
   printf 'release-installer-test: %s\n' "$1" >&2
@@ -1044,6 +1047,47 @@ android_x86_out=$(HOME="$tmp/android-x86-home" PREFIX="$tmp/android-x86-prefix" 
 [[ "$android_x86_out" == *'no published release for android-x86_64'* ]] ||
   fail "Android x86_64 rejection did not explain the missing platform"
 
+# Run the rendered transport's exact retry options against real HTTP, where a
+# server's Retry-After can override curl's configured retry delay.
+python3 - "$(command -v curl)" "$consumer/install.sh" <<'PY' || fail 'real curl exceeded the release retry window'
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+import re
+import shlex
+import subprocess
+import sys
+from threading import Thread
+
+
+class RetryAfter(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(429)
+        self.send_header("Retry-After", "900")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, *_args):
+        pass
+
+
+source = Path(sys.argv[2]).read_text()
+options = shlex.split(re.search(r"^  curl_net_opts=\(\n(.*?)^  \)", source, re.M | re.S)[1])
+with ThreadingHTTPServer(("127.0.0.1", 0), RetryAfter) as server:
+    worker = Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        response = subprocess.run(
+            [sys.argv[1], "--disable", "-fsSL", "--noproxy", "*", *options,
+             "-w", "%{http_code}", f"http://127.0.0.1:{server.server_port}/"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if response.stdout != "429" or response.returncode not in (0, 22):
+            raise SystemExit(f"unexpected loopback response: {response}")
+    finally:
+        server.shutdown()
+        worker.join()
+PY
+
 # Exercise online orchestration with a narrow curl double. Archive parsing,
 # checksumming, extraction, ownership, and activation still use the real tools
 # and bytes above; only GitHub's HTTP boundary is replaced.
@@ -1054,6 +1098,7 @@ set -euo pipefail
 output=
 write_out=
 url=
+resolved_url=
 printf '%s\n' "$*" >>"$FAKE_CURL_ARGS_LOG"
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -1082,10 +1127,7 @@ printf '%s\n' "$url" >>"$FAKE_CURL_LOG"
 case "$url" in
   https://github.com/example/example-tool/releases/latest)
     [[ -z "$output" ]] || : >"$output"
-    if [[ -n "$write_out" ]]; then
-      printf 'https://github.com/example/example-tool/releases/tag/%s' \
-        "$FAKE_CURL_VERSION"
-    fi
+    resolved_url=https://github.com/example/example-tool/releases/tag/$FAKE_CURL_VERSION
     ;;
   *.sha256)
     cp "$FAKE_CURL_CHECKSUM" "$output"
@@ -1098,6 +1140,13 @@ case "$url" in
     exit 1
     ;;
 esac
+status=200
+if [[ -n ${FAKE_CURL_ERROR_SUFFIX:-} && $url == *"$FAKE_CURL_ERROR_SUFFIX" ]]; then
+  status=429
+fi
+write_out=${write_out//\%\{http_code\}/$status}
+write_out=${write_out//\%\{url_effective\}/${resolved_url:-$url}}
+printf '%s' "$write_out"
 EOF
 chmod 0755 "$fake_bin/curl"
 
@@ -1336,6 +1385,26 @@ esac
 [[ $("$online_root/bin/example-tool") == first ]] ||
   fail "online install did not activate the downloaded archive"
 
+for error_suffix in /latest .sha256 .tar.gz; do
+  rejected_root="$tmp/rejected-$error_suffix"
+  mkdir -p "$rejected_root/home"
+  if transfer_error=$(FAKE_CURL_ARCHIVE="$archive1" FAKE_CURL_CHECKSUM="$archive1.sha256" \
+    FAKE_CURL_VERSION="$version1" FAKE_CURL_LOG="$tmp/rejected-curl.log" \
+    FAKE_CURL_ARGS_LOG="$tmp/rejected-curl-args.log" FAKE_CURL_ERROR_SUFFIX="$error_suffix" \
+    FAKE_GH_LOG="$tmp/rejected-gh.log" \
+    FAKE_UNAME_S=Linux FAKE_UNAME_M=x86_64 FAKE_UNAME_O=GNU/Linux \
+    HOME="$rejected_root/home" PATH="$fake_bin:$PATH" \
+    /bin/bash "$consumer/install.sh" --data-home "$rejected_root/data" \
+    --bin-dir "$rejected_root/bin" --man-dir "$rejected_root/man" 2>&1); then
+    fail "online install accepted HTTP 429 for $error_suffix after curl reported success"
+  fi
+  [[ ! -e "$rejected_root/bin/example-tool" ]] || fail "HTTP failure activated the release"
+  case "$error_suffix:$transfer_error" in
+    /latest:*'cannot resolve the latest'* | .sha256:*'cannot download checksum'* | .tar.gz:*'cannot download '*) ;;
+    *) fail "unexpected failure for HTTP 429 at $error_suffix: $transfer_error" ;;
+  esac
+done
+
 attestation_failure_root="$tmp/attestation-failure"
 mkdir -p "$attestation_failure_root/home"
 set +e
@@ -1362,7 +1431,7 @@ curl_invocations=$(wc -l <"$online_args_log")
 while IFS= read -r curl_args; do
   for expected_curl_arg in '--connect-timeout 10' '--max-time 60' \
     '--speed-limit 1024' '--speed-time 30' '--retry 2' \
-    '--retry-all-errors' '--retry-delay 1'; do
+    '--retry-all-errors' '--retry-delay 1' '--retry-max-time 122'; do
     case " $curl_args " in
       *" $expected_curl_arg "*) ;;
       *) fail "online curl invocation is missing $expected_curl_arg: $curl_args" ;;
@@ -1370,15 +1439,11 @@ while IFS= read -r curl_args; do
   done
 done <"$online_args_log"
 
-# Curl's retry count excludes the initial attempt. Each invocation is bounded
-# by three 60-second attempts plus two one-second retry delays. Resolving the
-# latest tag and downloading its checksum and archive must fit within the
-# installer's ten-minute network budget even when every attempt exhausts.
+# The last transfer can begin just inside the retry-start window, even if
+# Retry-After exceeds the normal delay. Budget for one full final transfer.
 curl_max_time=60
-curl_retry_delay=1
-curl_retries=2
-curl_invocation_budget=$(((curl_retries + 1) * curl_max_time + \
-  curl_retries * curl_retry_delay))
+curl_retry_max_time=122
+curl_invocation_budget=$((curl_retry_max_time + curl_max_time))
 online_network_budget=$((curl_invocations * curl_invocation_budget))
 [[ "$online_network_budget" -le 600 ]] ||
   fail "online curl retry policy exceeds the ten-minute network budget"

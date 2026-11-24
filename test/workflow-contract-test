@@ -61,6 +61,86 @@ check_no_unsupervised_adb() {
   fi
 }
 
+check_mise_refresh_scope() {
+  local refresh
+  refresh=$(yq -r '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").run' \
+    "$root/.github/workflows/mise-lock-refresh.yml")
+  python3 - "$refresh" <<'PY'
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+
+def check_case(label, verify, succeeds, *, lock_file="mise.lock"):
+    with tempfile.TemporaryDirectory() as scratch:
+        root = Path(scratch)
+        repo = root / "repo"
+        repo.mkdir()
+        fake_mise = root / "mise"
+        fake_mise.write_text('#!/bin/sh\nprintf "new lock\\n" >"$MISE_LOCK_FILE"\n')
+        fake_mise.chmod(0o700)
+        env = {
+            "PATH": f"{scratch}:{os.environ['PATH']}",
+            "HOME": scratch,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "RUNNER_TEMP": scratch,
+            "GITHUB_WORKSPACE": str(repo),
+            "GITHUB_OUTPUT": str(root / "outputs"),
+            "MISE_CONFIG_FILE": "mise.toml",
+            "MISE_LOCK_FILE": lock_file,
+            "VERIFY_COMMAND": verify,
+        }
+        (repo / "mise.toml").write_text("[tools]\n")
+        (repo / "mise.lock").write_text("old lock\n")
+        (repo / "other.txt").write_text("keep\n")
+        for args in (
+            ["init", "-q", "--template="],
+            ["add", "--", "."],
+            ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "seed"],
+        ):
+            subprocess.run(["git", "-C", repo, *args], env=env, check=True)
+        if lock_file != "mise.lock":
+            (repo / lock_file).write_text("untracked lock\n")
+        result = subprocess.run(
+            ["bash", "-c", sys.argv[1]], cwd=repo, env=env, capture_output=True, text=True
+        )
+        if (result.returncode == 0) != succeeds:
+            raise SystemExit(f"{label}: unexpected refresh status {result.returncode}: {result.stderr}")
+        patch = root / "mise-lock.patch"
+        if succeeds:
+            changed = subprocess.check_output(
+                ["git", "apply", "--numstat", str(patch)], cwd=repo, env=env, text=True
+            )
+            if changed.splitlines() != ["1\t1\tmise.lock"]:
+                raise SystemExit(f"{label}: unexpected lock patch: {changed!r}")
+        elif patch.exists():
+            raise SystemExit(f"{label}: failed refresh produced a patch")
+        if lock_file != "mise.lock" and (repo / lock_file).read_text() != "untracked lock\n":
+            raise SystemExit(f"{label}: untracked lock was modified")
+
+
+check_case("lock refresh", "", True)
+check_case(
+    "an unrelated change remains in the index",
+    "printf 'index only\\n' > other.txt; git add other.txt; printf 'keep\\n' > other.txt",
+    False,
+)
+check_case("an untracked file", "touch 'untracked fixture'", False)
+check_case(
+    "Git cannot enumerate paths",
+    """git() {
+       if [[ $1 == status || $* == 'diff --name-only -z HEAD' ]]; then return 73; fi
+       command git "$@"
+     }""",
+    False,
+)
+check_case("literal lock preflight", "", False, lock_file="mise[.]lock")
+PY
+}
+
 # Run the workflow's actual retry helper without downloading tools or waiting
 # for backoff. An exhausted retry must stop setup before tests can skip tools.
 check_checkrun_mise_retry() {
@@ -95,6 +175,106 @@ check_checkrun_mise_retry() {
     [[ $attempts -eq 2 ]]
   '
 }
+
+# Exercise the real bootstrap step without installing a toolchain. Invalid
+# bytes must never execute, even when curl reports a successful download.
+check_rustup_bootstrap() (
+  local script temp action refs
+  action=.github/actions/rust-toolchain
+  refs=$(yq -r '.jobs[].steps[] | .uses // ""' "$root"/.github/workflows/*.yml)
+  if grep -E '^dtolnay/rust-toolchain@' <<<"$refs" >&2; then
+    printf 'workflow contract failed: use the checked Rustup wrapper for toolchain installs\n' >&2
+    return 1
+  fi
+  [[ $(grep -Fxc "cgraf78/actions/$action@$actions_lock" <<<"$refs") -eq 10 ]] || return 1
+  # shellcheck disable=SC2016 # Compare the literal shell command in the action.
+  check_file '.runs.steps[0].run | contains("\"$GITHUB_ACTION_PATH/bootstrap.sh\"")' "$action/action.yml"
+  check_file '.runs.steps[1].run == "command -v rustup >/dev/null"' "$action/action.yml"
+  check_file ".runs.steps[1].if == \"inputs.mode == 'toolchain'\"" "$action/action.yml"
+  check_file '.runs.steps[1].if == .runs.steps[2].if' "$action/action.yml"
+  check_file '.runs.steps[2].uses | test("^dtolnay/rust-toolchain@[a-f0-9]{40}$")' "$action/action.yml"
+  check '.jobs.platform.steps[] | select(.name == "Install pinned Rustup").with.mode == "checkrun"' _shell-platforms.yml
+
+  script=$root/$action/bootstrap.sh
+  temp=$(mktemp -d)
+  trap 'rm -rf -- "$temp"' EXIT
+  export RUNNER_TEMP=$temp GITHUB_PATH=$temp/github-path RUSTUP_EXEC_LOG=$temp/executed
+  export CARGO_HOME=$temp/cargo RUSTUP_MODE=checkrun
+
+  # shellcheck disable=SC2329 # Exported for the actual step in child Bash.
+  command() {
+    if [[ $# -eq 2 && $1 == -v && $2 == rustup ]]; then
+      [[ ${TEST_WARM:-false} == true ]]
+    else
+      builtin command "$@"
+    fi
+  }
+
+  # shellcheck disable=SC2329 # Exported for the actual step in child Bash.
+  uname() {
+    case $1 in
+      -s) printf '%s\n' "${TEST_SYSTEM:-Linux}" ;;
+      -m) printf '%s\n' x86_64 ;;
+      *) return 1 ;;
+    esac
+  }
+  # shellcheck disable=SC2329 # Exported for the actual step in child Bash.
+  curl() {
+    local output='' url=''
+    while (($#)); do
+      case $1 in
+        --output)
+          output=$2
+          shift
+          ;;
+        https://*) url=$1 ;;
+      esac
+      shift
+    done
+    [[ $url == 'https://static.rust-lang.org/rustup/archive/1.29.3/x86_64-unknown-linux-gnu/rustup-init' ]] || return 97
+    cat >"$output" <<'FIXTURE'
+#!/usr/bin/env bash
+printf '%s\n' "$RUSTUP_INIT_SKIP_SUDO_CHECK:$*" >"$RUSTUP_EXEC_LOG"
+mkdir -p "$CARGO_HOME/bin"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$CARGO_HOME/bin/rustup"
+chmod 0700 "$CARGO_HOME/bin/rustup"
+FIXTURE
+    printf '%s' "${TEST_STATUS:-200}"
+  }
+  # shellcheck disable=SC2329 # Exported for the actual step in child Bash.
+  sha256sum() {
+    if [[ ${TEST_VERIFIED:-false} == true ]]; then
+      printf '%s  -\n' b1c8cb14e30889e7e2999e6b69e62d9e9b9ffc0f4df8180564d306d9680e6c55
+    else
+      command sha256sum "$@"
+    fi
+  }
+  export -f command uname curl sha256sum
+
+  TEST_WARM=true RUSTUP_MODE=toolchain bash "$script"
+  [[ ! -e $RUSTUP_EXEC_LOG && ! -e $GITHUB_PATH ]]
+
+  if bash "$script" 2>"$temp/error"; then return 1; fi
+  grep -Fq 'Rustup SHA-256 mismatch' "$temp/error"
+  [[ ! -e $RUSTUP_EXEC_LOG ]]
+
+  if TEST_VERIFIED=true TEST_STATUS=429 bash "$script" 2>"$temp/error"; then return 1; fi
+  grep -Fq 'Rustup download failed' "$temp/error"
+  [[ ! -e $RUSTUP_EXEC_LOG ]]
+
+  if TEST_SYSTEM=Haiku bash "$script" 2>"$temp/error"; then return 1; fi
+  grep -Fq 'Unsupported Rustup host' "$temp/error"
+  [[ ! -e $RUSTUP_EXEC_LOG ]]
+
+  TEST_VERIFIED=true bash "$script"
+  [[ $(<"$RUSTUP_EXEC_LOG") == 'yes:-y --profile minimal --component rustfmt' ]]
+  [[ $(<"$GITHUB_PATH") == "$CARGO_HOME/bin" ]]
+
+  unlink "$GITHUB_PATH"
+  TEST_VERIFIED=true RUSTUP_MODE=toolchain bash "$script"
+  [[ $(<"$RUSTUP_EXEC_LOG") == 'yes:-y --default-toolchain none' ]]
+  [[ $(<"$GITHUB_PATH") == "$CARGO_HOME/bin" ]]
+)
 
 check_platform_matrices() {
   local action script tmp matrix_set output matrix
@@ -552,9 +732,7 @@ contracts() {
   check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").env.MISE_LOCK_FILE == "${{ inputs.mise_lock_file }}"' mise-lock-refresh.yml
   check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").run | contains("mise lock --global")' mise-lock-refresh.yml
   check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").run | contains("unexpected path changed during Mise lock refresh")' mise-lock-refresh.yml
-  check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").run | contains("git diff --name-only -z HEAD")' mise-lock-refresh.yml
   check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").run | contains("verification changed repository history during Mise lock refresh")' mise-lock-refresh.yml
-  check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").run | contains("git diff --cached --binary --full-index")' mise-lock-refresh.yml
   check '.jobs.resolve.steps[] | select(.name == "Upload validated lock patch").uses | test("^actions/upload-artifact@[0-9a-f]{40}$")' mise-lock-refresh.yml
   check '.jobs.publish.needs == "resolve"' mise-lock-refresh.yml
   check '.jobs.publish.if == "needs.resolve.outputs.changed == '\''true'\''"' mise-lock-refresh.yml
@@ -771,9 +949,7 @@ contracts() {
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("if [[ \"$rc\" -eq 124 ]]")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("Acquire::http::Timeout=30")' _termux-ci.yml
   check '.jobs.termux.steps[] | select(.name == "Prepare Termux host runner").run | contains("timeout -k 5 120")' _termux-ci.yml
-  check '.jobs.platform.steps[] | select(.name == "Set up Checkrun dev tools").run | contains("--connect-timeout 10 --max-time 120")' _shell-platforms.yml
-  check '.jobs.platform.steps[] | select(.name == "Set up Checkrun dev tools").run | contains("rustup-init.sh")' _shell-platforms.yml
-  check '.jobs.platform.steps[] | select(.name == "Set up Checkrun dev tools").run | contains("RUSTUP_INIT_SKIP_SUDO_CHECK=yes")' _shell-platforms.yml
+  check_rustup_bootstrap
 
   check '.jobs.required.name == "Required"' rust-ci.yml
   check '.jobs.required.if == "${{ always() }}"' rust-ci.yml
@@ -818,7 +994,6 @@ contracts() {
   check '.on.workflow_call.inputs.termux-profiles.default == "runtime"' rust-ci.yml
   check '.jobs.termux.with.profiles == "${{ inputs.termux-profiles }}"' rust-ci.yml
   check '.on.workflow_call.inputs.profiles.default == ""' _rust-platforms.yml
-  check '.jobs.platform.steps[] | select(.name == "Install Rust").env.RUSTUP_INIT_SKIP_SUDO_CHECK == "yes"' _rust-platforms.yml
   check '.jobs.platform.steps[] | select(.name == "Install test prerequisites").with.profiles == "${{ inputs.profiles }}"' _rust-platforms.yml
   check '.jobs.android-package.if == null' rust-ci.yml
   check '.jobs.termux.if == null' rust-ci.yml
@@ -1157,6 +1332,7 @@ contracts
 check_termux_cores
 check_android_sdk_packages
 check_no_literal_infra_markers
+check_mise_refresh_scope
 check_checkrun_mise_retry
 check_platform_matrices
 check_linux_runner_routing

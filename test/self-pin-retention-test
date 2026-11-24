@@ -5,6 +5,10 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+# shellcheck source=test/fixture-env.sh
+. "$root/test/fixture-env.sh"
+actions_fixture_path "$tmp" || exit "$?"
+actions_fixture_git "$tmp" || exit "$?"
 
 fail() {
   printf 'self-pin-retention-test: %s\n' "$1" >&2
@@ -26,6 +30,10 @@ make_provider() {
   cp -R "$root/release-scripts" "$work/release-scripts"
   cp -R "$root/release-installer" "$work/release-installer"
   cp -R "$root/checkout-installer" "$work/checkout-installer"
+  # Self-sync needs the same capability layout rules as the consumer verifier.
+  mkdir -p "$work/.github/actions/verify-consumer-sync"
+  cp "$root/.github/actions/verify-consumer-sync/capability-layouts.sh" \
+    "$work/.github/actions/verify-consumer-sync/"
   cat >"$work/.github/actions/example/action.yml" <<'EOF'
 name: example
 runs:
