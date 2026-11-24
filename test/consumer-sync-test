@@ -6,11 +6,56 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+# shellcheck source=test/fixture-env.sh
+. "$root/test/fixture-env.sh"
+actions_fixture_git "$tmp" || exit "$?"
 
 fail() {
   printf 'consumer-sync-test: %s\n' "$1" >&2
   exit 1
 }
+
+# A scratch directory inside the caller's worktree is still a separate
+# repository. Git's exported selectors must not route its seed commit back
+# into the caller or override the fixture's hook settings.
+(
+  set -e
+  caller="$tmp/isolation-caller"
+  scratch="$caller/scratch"
+  hooks="$tmp/isolation-hooks"
+  mkdir -p "$scratch" "$hooks"
+  git -C "$caller" init --quiet --template='' --initial-branch=caller
+  git -C "$caller" config core.hooksPath "$hooks"
+  printf '%s\n' caller >"$caller/file"
+  git -C "$caller" add file
+  git -C "$caller" -c user.email=t@example.com -c user.name=Test commit --quiet -m caller
+  caller_head=$(git -C "$caller" rev-parse HEAD)
+  caller_index=$(cksum <"$caller/.git/index")
+  printf '#!/bin/sh\nexit 47\n' >"$hooks/pre-commit"
+  chmod +x "$hooks/pre-commit"
+
+  export GIT_DIR="$caller/.git" GIT_WORK_TREE="$caller"
+  export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$hooks"
+  actions_fixture_git "$scratch"
+  git -C "$scratch" init --quiet --template='' --initial-branch=main
+  git -C "$scratch" config core.hooksPath /dev/null
+  printf '%s\n' fixture >"$scratch/file"
+  git -C "$scratch" add file
+  git -C "$scratch" -c user.email=t@example.com -c user.name=Test commit --quiet -m fixture
+  test "$(git -C "$caller" rev-parse HEAD)" = "$caller_head"
+  test "$(cksum <"$caller/.git/index")" = "$caller_index"
+  test "$(git -C "$caller" config --local core.hooksPath)" = "$hooks"
+) || fail "Git fixture changed or inherited the caller context"
+
+# Mock command directories cannot be encoded as a single colon-delimited
+# PATH entry when the scratch parent contains the separator.
+colon_tmp="$tmp/tmp:parent"
+mkdir "$colon_tmp" || exit 1
+colon_status=0
+colon_output=$(TMPDIR="$colon_tmp" "$root/test/dotfiles-bootstrap-bounds-test" 2>&1) ||
+  colon_status=$?
+[[ "$colon_status" == 2 && "$colon_output" == *"without a colon"* ]] ||
+  fail "mock PATH fixture accepted a colon in TMPDIR: $colon_output"
 
 # Exercise the command from a clean, committed provider checkout. The commit is
 # the dependency identity written into the consumer lock; using this fixture

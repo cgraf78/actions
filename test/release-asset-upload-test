@@ -6,6 +6,9 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 upload="$root/.github/actions/upload-release-assets/upload.sh"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+# shellcheck source=test/fixture-env.sh
+. "$root/test/fixture-env.sh"
+actions_fixture_path "$tmp" || exit "$?"
 
 fail() {
   printf 'release-asset-upload-test: %s\n' "$*" >&2

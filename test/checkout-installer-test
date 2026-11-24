@@ -55,6 +55,10 @@ cleanup() {
 }
 
 trap cleanup EXIT
+# shellcheck source=test/fixture-env.sh
+. "$root/test/fixture-env.sh"
+actions_fixture_path "$tmp" || exit "$?"
+actions_fixture_git "$tmp" || exit "$?"
 
 fail() {
   printf 'checkout-installer-test: %s\n' "$1" >&2

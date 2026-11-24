@@ -8,6 +8,9 @@ install=$root/.github/actions/android-sdk-packages/install.sh
 source "$root/.github/actions/shared/infra-stall-markers.sh"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+# shellcheck source=test/fixture-env.sh
+. "$root/test/fixture-env.sh"
+actions_fixture_path "$tmp" || exit "$?"
 
 fail() {
   printf 'android-sdk-packages-test: %s\n' "$*" >&2
