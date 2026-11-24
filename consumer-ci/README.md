@@ -46,6 +46,11 @@ top-level `install.sh`, `RELEASE_STANDALONE_INSTALLER=true` and
 rejects that conflict before changing consumer files. Commit all derived
 changes together.
 
+A worktree-local lock serializes sync invocations. The command prepares
+workflows, installers, scripts, and manifests before replacing live files.
+It publishes the new pin last and reverses earlier replacements if publication
+fails. If a restore fails, its diagnostic names the saved original files.
+
 A tracked Shdeps tmux or WezTerm hook receives the build lock used by its
 shared CI profile. The verifier compares that generated copy byte for byte
 against the pinned Actions checkout.

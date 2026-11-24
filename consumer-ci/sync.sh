@@ -105,6 +105,31 @@ if [[ ! -d "$consumer" ]] || ! git -C "$consumer" rev-parse --show-toplevel >/de
 fi
 
 consumer=$(git -C "$consumer" rev-parse --show-toplevel)
+
+# shellcheck source=staged-files.sh
+. "$source_root/consumer-ci/staged-files.sh"
+staging_root=''
+# shellcheck disable=SC2329  # Invoked on exit.
+cleanup() {
+  local status=$?
+  trap '' HUP INT TERM
+  if cleanup_staged_files; then
+    [[ -z "$staging_root" ]] || rm -rf -- "$staging_root"
+  else
+    printf 'consumer-sync: original files preserved for recovery in %s\n' "$before" >&2
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+staging_root=$(mktemp -d)
+before=$staging_root/before
+prepared=$staging_root/after
+init_staged_files "$consumer" "$before" "$prepared"
+lock_staged_files "$staging_root"
+
 shdeps_hooks=.config/shdeps/hooks.d
 build_lock_sources="$source_root/.github/actions/shell-ci-prereqs"
 
@@ -167,16 +192,8 @@ fi
 # Discover the dependency before writing anything. This catches a mistyped
 # target repository without leaving behind a lock that falsely looks like a
 # completed synchronization.
-candidate_list=$(mktemp)
-reference_list=$(mktemp)
-build_lock_tmp=''
-reference_stages=()
-# shellcheck disable=SC2329  # Invoked on exit.
-cleanup() {
-  rm -f -- "$candidate_list" "$reference_list" "$build_lock_tmp" \
-    ${reference_stages[@]+"${reference_stages[@]}"}
-}
-trap cleanup EXIT
+candidate_list=$staging_root/candidates
+updated=0
 # GitHub executes workflows only from .github/workflows, while composite
 # actions may live anywhere but must be named action.yml or action.yaml. Scan
 # exactly those tracked definitions: this covers every runtime use without
@@ -194,23 +211,21 @@ while IFS= read -r -d '' relative; do
       "$relative" >&2
     exit 1
   fi
-  file="$consumer/$relative"
-  source_snapshot=$(mktemp)
-  reference_stages+=("$source_snapshot")
-  cp -p "$file" "$source_snapshot"
+  stage_file "$relative"
+  source_snapshot="$before/$relative"
   references=$(read_actions_references "$source_snapshot" "$relative")
   [[ -n "$references" ]] || continue
   # Expanding a whole-step alias can point to the same unchanged scalar span.
   references=$(LC_ALL=C sort -t $'\t' -k1,1n -k2,2n <<<"$references" | uniq)
   # Stage all YAML edits before publishing the new lock. A missing literal
   # span or parse error must leave every dependency file as it was.
-  reference_tmp=$(mktemp "$file.XXXXXX")
-  reference_stages+=("$reference_tmp")
-  cp -p "$source_snapshot" "$reference_tmp"
+  reference_tmp="$staging_root/reference"
   render_actions_references "$source_snapshot" "$relative" "$actions_sha" "$references" >"$reference_tmp"
-  printf '%s\0%s\0%s\0' "$relative" "$reference_tmp" "$source_snapshot" >>"$reference_list"
+  chmod "$(file_mode "$source_snapshot")" "$reference_tmp"
+  mv "$reference_tmp" "$prepared/$relative"
+  updated=$((updated + 1))
 done <"$candidate_list"
-if [[ ! -s "$reference_list" ]]; then
+if ((updated == 0)); then
   printf 'consumer-sync: no tracked cgraf78/actions workflow/action references found\n' >&2
   exit 1
 fi
@@ -269,13 +284,17 @@ installer_policy_enabled() {
 
 checkout_installer_enabled=false
 release_installer_enabled=false
-if [[ "$checkout_config_present" == true ]] &&
-  installer_policy_enabled "$checkout_config" CHECKOUT_INSTALLER_ENABLED; then
-  checkout_installer_enabled=true
+if [[ "$checkout_config_present" == true ]]; then
+  stage_file scripts/checkout-installer.conf
+  if installer_policy_enabled "$prepared/scripts/checkout-installer.conf" CHECKOUT_INSTALLER_ENABLED; then
+    checkout_installer_enabled=true
+  fi
 fi
-if [[ "$release_enabled" == true ]] &&
-  installer_policy_enabled "$release_config" RELEASE_STANDALONE_INSTALLER; then
-  release_installer_enabled=true
+if [[ "$release_enabled" == true ]]; then
+  stage_file scripts/release.conf
+  if installer_policy_enabled "$prepared/scripts/release.conf" RELEASE_STANDALONE_INSTALLER; then
+    release_installer_enabled=true
+  fi
 fi
 if [[ "$checkout_installer_enabled" == true &&
   "$release_installer_enabled" == true ]]; then
@@ -284,57 +303,106 @@ if [[ "$checkout_installer_enabled" == true &&
   exit 1
 fi
 
-# Do not replace a definition edited while the other inputs were being read.
-while IFS= read -r -d '' relative && IFS= read -r -d '' _ &&
-  IFS= read -r -d '' source_snapshot; do
-  file="$consumer/$relative"
-  if [[ ! -f "$file" || -L "$file" ]] || ! cmp -s "$source_snapshot" "$file"; then
-    printf 'consumer-sync: workflow/action changed during preparation: %s\n' "$relative" >&2
-    exit 1
+# Seed each staged family with just its managed paths. The vendor command
+# still owns manifest validation, allowed removals, and executable modes.
+stage_vendor() {
+  local provider_dir=$1 destination_dir=$2 manifest=$3 item name
+  stage_file "$destination_dir/$manifest"
+  for item in "$provider_dir"/*.sh; do
+    name=${item##*/}
+    [[ "$name" != sync.sh ]] || continue
+    stage_file "$destination_dir/$name"
+    # The existing link remains in the before snapshot for ownership and
+    # rollback. A renderer must never follow it out of the scratch tree.
+    if [[ -L "$prepared/$destination_dir/$name" ]]; then
+      rm -f "$prepared/$destination_dir/$name"
+    fi
+  done
+  if [[ -f "$before/$destination_dir/$manifest" &&
+    ! -L "$before/$destination_dir/$manifest" ]]; then
+    while IFS= read -r name || [[ -n "$name" ]]; do
+      # The vendor command will report malformed records. Do not resolve
+      # even a staged path outside its family while preparing that check.
+      case "$name" in
+        '' | . | .. | */*) continue ;;
+      esac
+      stage_file "$destination_dir/$name"
+    done <"$before/$destination_dir/$manifest"
   fi
-done <"$reference_list"
+  "$source_root/consumer-ci/vendor-scripts.sh" \
+    "$provider_dir" "$prepared/$destination_dir" "$manifest"
+}
 
-mkdir -p "$consumer/.github"
-lock_tmp=$(mktemp "$consumer/.github/cgraf78-actions.lock.XXXXXX")
-printf '%s\n' "$actions_sha" >"$lock_tmp"
-chmod 0644 "$lock_tmp"
-mv "$lock_tmp" "$consumer/.github/cgraf78-actions.lock"
-
-updated=0
-while IFS= read -r -d '' relative && IFS= read -r -d '' reference_tmp &&
-  IFS= read -r -d '' _; do
-  mv "$reference_tmp" "$consumer/$relative"
-  printf 'consumer-sync: %s\n' "$relative"
-  updated=$((updated + 1))
-done <"$reference_list"
+if [[ "$checkout_config_present" == true || "$release_enabled" == true ]]; then
+  stage_file install.sh true
+fi
+resolver_relative=support/checkout-bash-v1.sh
+resolver_parent_unsafe=false
+if [[ "$checkout_config_present" == true ]]; then
+  if [[ -L "$consumer/support" || (-e "$consumer/support" && ! -d "$consumer/support") ]]; then
+    # A disabled resolver can coexist with an unrelated support path.
+    # Publication of a new resolver will refuse this unsafe parent.
+    resolver_parent_unsafe=true
+  else
+    stage_file "$resolver_relative" true
+  fi
+fi
 
 # Retire a disabled checkout-generated installer before a release renderer
 # claims the shared top-level path during a policy transition.
 if [[ "$checkout_config_present" == true &&
   "$checkout_installer_enabled" != true ]]; then
-  "$source_root/checkout-installer/render.sh" "$consumer"
+  "$source_root/checkout-installer/render.sh" --output-root "$prepared" "$consumer" >/dev/null
 fi
 if [[ "$release_enabled" == true ]]; then
-  "$source_root/release-scripts/sync.sh" "$consumer/scripts"
-  "$source_root/release-installer/render.sh" "$consumer"
+  stage_vendor "$source_root/release-scripts" scripts .release-scripts.manifest >/dev/null
+  "$source_root/release-installer/render.sh" --output-root "$prepared" "$consumer" >/dev/null
 fi
 for harness_dir in ${harness_destinations[@]+"${harness_destinations[@]}"}; do
-  "$source_root/consumer-ci/vendor-scripts.sh" \
-    "$source_root/capability-harness" "$consumer/$harness_dir" \
-    .capability-harness.manifest
+  stage_vendor "$source_root/capability-harness" "$harness_dir" .capability-harness.manifest >/dev/null
 done
 for build_lock in ${shdeps_build_locks[@]+"${shdeps_build_locks[@]}"}; do
-  destination="$consumer/$shdeps_hooks/$build_lock"
-  build_lock_tmp=$(mktemp "$destination.XXXXXX")
-  cp "$build_lock_sources/$build_lock" "$build_lock_tmp"
-  chmod 0644 "$build_lock_tmp"
-  mv "$build_lock_tmp" "$destination"
+  relative="$shdeps_hooks/$build_lock"
+  stage_file "$relative"
+  if [[ -L "$prepared/$relative" ]]; then
+    printf 'consumer-sync: Shdeps build lock must be a regular file: %s\n' "$relative" >&2
+    exit 1
+  fi
+  install -m 0644 "$build_lock_sources/$build_lock" "$prepared/$relative"
 done
 # An enabled checkout renderer runs only after a disabled release renderer has
 # had the same opportunity to retire its generated installer.
 if [[ "$checkout_installer_enabled" == true ]]; then
-  "$source_root/checkout-installer/render.sh" "$consumer"
+  "$source_root/checkout-installer/render.sh" --output-root "$prepared" "$consumer" >/dev/null
 fi
+
+if [[ "$resolver_parent_unsafe" == true && -e "$prepared/$resolver_relative" ]]; then
+  printf 'consumer-sync: checkout Bash resolver parent must be a regular directory: %s/support\n' \
+    "$consumer" >&2
+  exit 1
+fi
+if [[ "$checkout_installer_enabled" == true && -f "$prepared/$resolver_relative" ]]; then
+  # A generated installer can use the resolver as soon as it is visible.
+  # When retiring the resolver, keep the default installer-first order.
+  ordered_paths=()
+  for relative in "${stage_paths[@]}"; do
+    [[ "$relative" == install.sh ]] || ordered_paths+=("$relative")
+    [[ "$relative" != "$resolver_relative" ]] || ordered_paths+=(install.sh)
+  done
+  stage_paths=("${ordered_paths[@]}")
+fi
+
+# Publish the lock last. A change that cannot be rendered must never repin
+# workflows, retire their installer, or imply a completed sync.
+relative=.github/cgraf78-actions.lock
+stage_file "$relative"
+if [[ -L "$prepared/$relative" ]]; then
+  printf 'consumer-sync: Actions lock must be a regular file: %s\n' "$relative" >&2
+  exit 1
+fi
+printf '%s\n' "$actions_sha" >"$prepared/$relative"
+chmod 0644 "$prepared/$relative"
+publish_staged_files
 
 printf 'consumer-sync: locked %d reference file(s) to %s\n' \
   "$updated" "$actions_sha"
