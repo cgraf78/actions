@@ -12,6 +12,9 @@ root=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+# shellcheck source=test/fixture-env.sh
+. "$root/test/fixture-env.sh"
+actions_fixture_path "$tmp"
 
 APT_MIRROR_LIST="$tmp/apt-mirrors.txt"
 cat >"$APT_MIRROR_LIST" <<'EOF'
@@ -60,12 +63,130 @@ printf '%s\n' 'http://fr.archive.ubuntu.com/ubuntu' >"$APT_MIRROR_LIST"
 configure_ubuntu_archive_mirror
 [[ $(<"$APT_MIRROR_LIST") == http://fr.archive.ubuntu.com/ubuntu ]]
 
+# Exercise retry_pkg with real deadlines and signals before the stubbed
+# package-policy cases below. Neither PATH contains a package manager.
+mkdir "$tmp/native" "$tmp/python"
+for tool in ln mktemp rm sh sleep; do
+  executable=$(type -P "$tool")
+  ln -s "$executable" "$tmp/native/$tool"
+  ln -s "$executable" "$tmp/python/$tool"
+done
+if executable=$(type -P setsid); then
+  ln -s "$executable" "$tmp/native/setsid"
+fi
+ln -s "$(type -P python3)" "$tmp/python/python3"
+
+cat >"$tmp/package-command" <<'EOF'
+#!/bin/sh
+case "$1" in
+  exit-*) exit "${1#exit-}" ;;
+  term-success) trap 'exit 0' TERM ;;
+  ignore-term)
+    trap '' TERM
+    exec sleep 30
+    ;;
+  late-success)
+    sleep 0.6
+    exit 0
+    ;;
+  term-success-with-child)
+    sh -c 'trap "" TERM; printf "%s\n" "$$" >"$1"; exec sleep 30' fixture "$2" &
+    trap 'exit 0' TERM
+    ;;
+esac
+while :; do sleep 0.02; done
+EOF
+chmod +x "$tmp/package-command"
+
+mkdir "$tmp/slow-observer"
+cat >"$tmp/slow-observer/sleep" <<'EOF'
+#!/bin/sh
+# Let the deadline and the later success both happen before the
+# supervisor gets its next chance to observe either one.
+case "$1" in
+  0.05) exec "$REAL_SLEEP" 1.25 ;;
+  *) exec "$REAL_SLEEP" "$@" ;;
+esac
+EOF
+chmod +x "$tmp/slow-observer/sleep"
+
+check_deadline() {
+  local backend=$1 scenario=$2 expected=$3
+  local status=0 pid state failed=0
+  local err=$tmp/$backend-$scenario.err child_pid=$tmp/$backend-$scenario.pid
+  local fixture_path=$tmp/$backend timeout=1
+  if [[ $scenario == late-success ]]; then
+    fixture_path="$tmp/slow-observer:$fixture_path"
+    timeout=0.25
+  fi
+  # Use the same POSIX shell as the prereq action entrypoints.
+  # shellcheck disable=SC2016 # The fresh shell expands its own arguments.
+  REAL_SLEEP="$tmp/$backend/sleep" PATH="$fixture_path" PKG_RETRIES=1 \
+    PKG_COMMAND_TIMEOUT="$timeout" PKG_COMMAND_KILL_AFTER=0.1 \
+    sh -eu -c '. "$1"; shift; retry_pkg "$@"' test-package-manager \
+    "$root/.github/actions/package-manager/lib.sh" \
+    "$tmp/package-command" "$scenario" "$child_pid" 2>"$err" || status=$?
+  if [[ $status -ne $expected ]]; then
+    printf 'package-manager-test: %s/%s: expected status %s, got %s\n' \
+      "$backend" "$scenario" "$expected" "$status" >&2
+    failed=1
+  fi
+  if [[ $scenario == exit-* ]]; then
+    if grep -Fq "$PACKAGE_COMMAND_STALL_MARKER" "$err"; then
+      printf 'package-manager-test: %s/%s: native failure was infrastructure-classified\n' \
+        "$backend" "$scenario" >&2
+      failed=1
+    fi
+  elif ! grep -Fxq "$PACKAGE_COMMAND_STALL_MARKER" "$err"; then
+    printf 'package-manager-test: %s/%s: deadline marker missing\n' "$backend" "$scenario" >&2
+    failed=1
+  fi
+  if [[ $scenario == term-success-with-child ]]; then
+    if ! read -r pid <"$child_pid"; then
+      printf 'package-manager-test: %s/%s: descendant never started\n' "$backend" "$scenario" >&2
+      return 1
+    fi
+    # The kernel can briefly keep a killed orphan as an init-owned zombie.
+    # A live descendant here can hold package locks into the retry.
+    state=$(ps -o stat= -p "$pid" 2>/dev/null || true)
+    if [[ -n $state && $state != Z* ]]; then
+      kill -KILL "$pid" 2>/dev/null || true
+      printf 'package-manager-test: %s/%s: descendant %s survived the deadline\n' \
+        "$backend" "$scenario" "$pid" >&2
+      failed=1
+    fi
+  fi
+  return "$failed"
+}
+
+deadline_failures=0
+for backend in native python; do
+  if [[ $backend == native && ! -x $tmp/native/setsid ]]; then
+    continue
+  fi
+  check_deadline "$backend" term-success 124 || deadline_failures=1
+  check_deadline "$backend" ignore-term 124 || deadline_failures=1
+  check_deadline "$backend" term-success-with-child 124 || deadline_failures=1
+  check_deadline "$backend" exit-124 124 || deadline_failures=1
+  check_deadline "$backend" exit-137 137 || deadline_failures=1
+  # The supervisor's classification FD must leave stdin and stdout usable.
+  # shellcheck disable=SC2016 # The fixture reads its own input.
+  received=$(printf 'package input\n' |
+    PATH="$tmp/$backend" bounded sh -c 'IFS= read -r line; printf "%s\n" "$line"')
+  [[ $received == 'package input' ]]
+done
+check_deadline python late-success 124 || deadline_failures=1
+[[ $deadline_failures -eq 0 ]]
+
 sleep() { :; }
 
 # Log invocations so retry-path behavior (including dpkg recovery) can be
 # asserted without touching the real package manager.
 bounded() {
   printf '%s\n' "$*" >>"$tmp/bounded.calls"
+  # The stub models the supervisor event separately from the child status.
+  # shellcheck disable=SC2034
+  _pkg_deadline=${BOUNDED_DEADLINE:-}
   return "$BOUNDED_STATUS"
 }
 
@@ -141,7 +262,7 @@ if grep -Fq 'infra-stall:' "$tmp/update1.err"; then
   exit 1
 fi
 
-BOUNDED_STATUS=124
+BOUNDED_STATUS=124 BOUNDED_DEADLINE=deadline
 if retry_pkg apt-get update >"$tmp/timeout.out" 2>"$tmp/timeout.err"; then
   echo 'package-manager-test: timeout unexpectedly passed' >&2
   exit 1

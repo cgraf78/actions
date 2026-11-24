@@ -118,36 +118,164 @@ pacman_install() {
   retry_pkg pacman -Syu $PACMAN_SYNC_OPTS $(pacman_missing "$@")
 }
 
-bounded() {
-  if command -v timeout >/dev/null 2>&1; then
-    timeout -k "$PKG_COMMAND_KILL_AFTER" "$PKG_COMMAND_TIMEOUT" "$@"
-  elif command -v python3 >/dev/null 2>&1; then
-    python3 - "$PKG_COMMAND_TIMEOUT" "$PKG_COMMAND_KILL_AFTER" "$@" <<'PY'
+_pkg_session() {
+  if command -v setsid >/dev/null 2>&1; then
+    exec setsid "$@"
+  fi
+  # Stock macOS has no setsid utility. Use Python only to create the same
+  # session as the util-linux and BusyBox variants do on Linux.
+  exec python3 -c '
 import os
-import signal
-import subprocess
 import sys
 
-timeout = float(sys.argv[1])
-grace = float(sys.argv[2])
-process = subprocess.Popen(sys.argv[3:], start_new_session=True)
-try:
-    status = process.wait(timeout=timeout)
-except subprocess.TimeoutExpired:
-    os.killpg(process.pid, signal.SIGTERM)
-    try:
-        status = process.wait(timeout=grace)
-    except subprocess.TimeoutExpired:
-        os.killpg(process.pid, signal.SIGKILL)
-        process.wait()
-        status = 124
+os.setsid()
+os.execvp(sys.argv[1], sys.argv[1:])
+' "$@"
+}
 
-sys.exit(status if status >= 0 else 128 - status)
-PY
-  else
-    echo 'bounded package command requires timeout or python3' >&2
-    return 127
+# The session may still be starting when interrupted. If the group does
+# not exist yet, signal the launcher too, then check for a racing setsid.
+_pkg_signal_group() {
+  # Dash and Bash 3.2 parse a negative group ID after -s as another
+  # option. BusyBox instead rejects --, so spell the signal as -TERM.
+  if ! kill "-$1" "-$2" 2>/dev/null; then
+    kill -s "$1" "$2" 2>/dev/null || :
+    kill "-$1" "-$2" 2>/dev/null || :
   fi
+}
+
+# This runs only in the supervisor's background subshell. An interrupted
+# timer must reap its own sleep before the caller removes its state directory.
+_pkg_timer() {
+  timer_child=
+  timer_stopped=false
+  # shellcheck disable=SC2329 # Reached by the timer's signal traps.
+  _pkg_stop_timer() {
+    timer_stopped=true
+    [ -n "$timer_child" ] || return 0
+    trap '' HUP INT TERM
+    kill -s TERM "$timer_child" 2>/dev/null || :
+    wait "$timer_child" 2>/dev/null || :
+    exit 0
+  }
+  trap _pkg_stop_timer HUP INT TERM
+  command sleep "$PKG_COMMAND_TIMEOUT" &
+  timer_child=$!
+  # A signal between the fork and assignment is handled once we have $!.
+  [ "$timer_stopped" = false ] || _pkg_stop_timer
+  wait "$timer_child" || return "$?"
+  timer_child=
+  printf 'deadline\n' >"$pkg_dir/timeout" &&
+    { ln "$pkg_dir/timeout" "$pkg_dir/result" 2>/dev/null || [ -f "$pkg_dir/result" ]; }
+}
+
+_pkg_bounded() (
+  if ! command -v setsid >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
+    echo 'bounded package command requires setsid or python3' >&2
+    exit 127
+  fi
+
+  pkg_dir='' pkg_worker='' pkg_timer='' pkg_status='' pkg_finished=false
+  # shellcheck disable=SC2329 # Invoked by the EXIT trap.
+  _pkg_cleanup() {
+    trap '' HUP INT TERM
+    if [ -n "$pkg_timer" ]; then
+      kill -s TERM "$pkg_timer" 2>/dev/null || :
+      wait "$pkg_timer" 2>/dev/null || :
+    fi
+    if [ -n "$pkg_worker" ]; then
+      if [ "$pkg_finished" = true ]; then
+        # The package completed normally. Release only the stopped wrapper
+        # so package hooks keep their normal process behavior.
+        kill -s KILL "$pkg_worker" 2>/dev/null || :
+      else
+        _pkg_signal_group KILL "$pkg_worker"
+      fi
+      wait "$pkg_worker" 2>/dev/null || :
+    fi
+    [ -z "$pkg_dir" ] || rm -rf "$pkg_dir"
+  }
+  trap _pkg_cleanup EXIT
+  trap 'pkg_status=${pkg_status:-129}' HUP
+  trap 'pkg_status=${pkg_status:-130}' INT
+  trap 'pkg_status=${pkg_status:-143}' TERM
+  pkg_dir=$(mktemp -d "${TMPDIR:-/tmp}/package-deadline.XXXXXX") || exit 125
+  [ -z "$pkg_status" ] || exit "$pkg_status"
+
+  # setsid stays in the launcher's PID when the caller has disabled job
+  # control. Keep that process in the group through teardown, even when
+  # the package exits on TERM but its descendants keep running.
+  set +m
+  exec 5<&0
+  # shellcheck disable=SC2016 # The session shell expands its own arguments.
+  _pkg_session sh -c '
+    state_dir=$1
+    shift
+    stopping=false
+    trap "stopping=true" HUP INT TERM
+    "$@" <&5 5<&- &
+    child=$!
+    status=0
+    wait "$child" || status=$?
+    if [ "$stopping" = true ]; then
+      # A trapped signal can interrupt wait before the child is reaped.
+      wait "$child" || :
+    else
+      printf "%s\n" "$status" >"$state_dir/command" &&
+        { ln "$state_dir/command" "$state_dir/result" 2>/dev/null ||
+          [ -f "$state_dir/result" ]; } || exit 125
+    fi
+    kill -s STOP "$$"
+  ' package-worker "$pkg_dir" "$@" 3>&- &
+  pkg_worker=$!
+  exec 5<&-
+  _pkg_timer 3>&- &
+  pkg_timer=$!
+
+  while [ -z "$pkg_status" ]; do
+    if ! kill -0 "$pkg_worker" 2>/dev/null; then
+      # A failed launcher is a normal error, even if the timer also fired.
+      pkg_status=0
+      wait "$pkg_worker" || pkg_status=$?
+      pkg_worker=
+      exit "$pkg_status"
+    fi
+    # The timer and command publish their fully written results with the
+    # same exclusive link. A delayed observer cannot reorder those events.
+    if [ -f "$pkg_dir/result" ]; then
+      read -r pkg_result <"$pkg_dir/result" || exit 125
+      if [ "$pkg_result" = deadline ]; then
+        # The timer reached its terminal state. Reap its handle before
+        # waiting out the package group's TERM grace.
+        if [ -n "$pkg_timer" ]; then
+          wait "$pkg_timer" || exit 125
+          pkg_timer=
+        fi
+        pkg_status=124
+        printf 'deadline\n' >&3
+        break
+      fi
+      pkg_finished=true
+      exit "$pkg_result"
+    fi
+    if [ -n "$pkg_timer" ] && ! kill -0 "$pkg_timer" 2>/dev/null; then
+      wait "$pkg_timer" || exit 125
+      pkg_timer=
+      continue
+    fi
+    command sleep 0.05
+  done
+
+  trap '' HUP INT TERM
+  _pkg_signal_group TERM "$pkg_worker"
+  command sleep "$PKG_COMMAND_KILL_AFTER" || :
+  exit "$pkg_status"
+)
+
+bounded() {
+  # Capture only the supervisor event. Preserve the command's stdin,
+  # streaming stdout and stderr, and native exit status.
+  { _pkg_deadline=$(_pkg_bounded "$@" 3>&1 1>&4 4>&-); } 4>&1
 }
 
 # Whether the requested command is an `apt-get update`: the one
@@ -167,16 +295,16 @@ retry_pkg() {
   fi
   _attempt=1
   while :; do
+    _pkg_deadline=
     if bounded "$@"; then
       return 0
     else
       _rc=$?
     fi
     if [ "$_attempt" -ge "$PKG_RETRIES" ]; then
-      # Exit 124 is the owned supervisor deadline. Package-manager semantic
-      # failures keep their native status and must not opt a workflow into an
-      # infrastructure rerun.
-      if [ "$_rc" -eq 124 ]; then
+      # Only a deadline observed by this supervisor opts the workflow into
+      # an infrastructure rerun.
+      if [ "$_pkg_deadline" = deadline ]; then
         echo "$PKG_STALL_MARKER" >&2
       fi
       if apt_get_update_command "$@"; then

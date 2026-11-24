@@ -566,7 +566,12 @@ export command_log
 for command in apt-get dnf apk brew pacman-key; do
   cat >"$mock_bin/$command" <<'MOCK'
 #!/bin/sh
-printf '%s %s\n' "${0##*/}" "$*" >>"$command_log"
+{
+  if [ "${0##*/}" = apt-get ] && [ "${DEBIAN_FRONTEND:-}" = noninteractive ]; then
+    printf 'env DEBIAN_FRONTEND=noninteractive '
+  fi
+  printf '%s %s\n' "${0##*/}" "$*"
+} >>"$command_log"
 MOCK
   chmod +x "$mock_bin/$command"
 done
@@ -610,17 +615,6 @@ chmod +x "$mock_bin/sudo"
 PATH="$mock_bin:$PATH"
 export PATH
 
-cat >"$mock_bin/timeout" <<'MOCK'
-#!/bin/sh
-printf 'timeout %s\n' "$*" >>"$command_log"
-MOCK
-chmod +x "$mock_bin/timeout"
-
-: >"$command_log"
-bounded true
-assert_eq 'timeout -k 5 120 true' "$(cat "$command_log")" \
-  'bounded package command uses portable forced-kill syntax'
-
 python_bin=$mock_bin/python-modern
 python_marker=$python_bin/linked
 mkdir -p "$python_bin"
@@ -635,6 +629,7 @@ MOCK
 chmod +x "$python_bin/python3" "$python_bin/python3.11"
 : >"$command_log"
 (
+  # shellcheck disable=SC2030 # Runtime lookup is deliberately isolated.
   PATH=$python_bin
   export PATH python_marker
   # shellcheck disable=SC2329 # The sourced helper invokes this fixture seam.
@@ -651,25 +646,7 @@ assert_eq \
 
 printf 'ok - modern Python fallback selects the versioned runtime\n'
 
-# Hosted macOS has no GNU/BusyBox timeout command. Its fallback must still
-# enter a real supervisor rather than executing Homebrew unsupervised.
-fallback_bin=$mock_bin/python-fallback
-mkdir -p "$fallback_bin"
-cat >"$fallback_bin/python3" <<'MOCK'
-#!/bin/sh
-printf 'python3 %s\n' "$*" >>"$command_log"
-MOCK
-chmod +x "$fallback_bin/python3"
 : >"$command_log"
-(
-  # shellcheck disable=SC2030 # The fallback's PATH is intentionally isolated.
-  PATH=$fallback_bin
-  export PATH
-  bounded true
-)
-assert_eq 'python3 - 120 5 true' "$(cat "$command_log")" \
-  'bounded package command uses the macOS Python supervisor'
-
 export MATRIX_NAME=Debian
 install_dotfiles_bootstrap_prereqs
 assert_contains \
