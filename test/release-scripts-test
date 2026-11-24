@@ -844,6 +844,19 @@ rc=0
 (cd "$fx" && scripts/release.sh --bogus) >/dev/null 2>&1 || rc=$?
 _assert_exit "cut: an unknown flag is a usage error" 2 "$rc"
 
+# A submodule's local display preferences cannot hide checkout changes.
+submodule_fx=$(_release_repo cut-submodule) || exit "$?"
+git -C "$submodule_fx" -c protocol.file.allow=always submodule add --quiet "$fx" nested ||
+  exit "$?"
+git -C "$submodule_fx" commit --quiet -m 'Add nested project' || exit "$?"
+git -C "$submodule_fx" push --quiet origin main || exit "$?"
+git -C "$submodule_fx" config submodule.nested.ignore all || exit "$?"
+printf '# nested change\n' >>"$submodule_fx/nested/scripts/release.conf" || exit "$?"
+rc=0
+out=$(cd "$submodule_fx" && scripts/release.sh --dry-run 2>&1) || rc=$?
+_assert_exit "cut: rejects submodule changes hidden by Git config" 1 "$rc"
+_assert_contains "cut: hidden submodule change gets the dirty diagnostic" "worktree must be clean" "$out"
+
 # Releasing from a dirty or diverged worktree would publish a tag that does not
 # match what CI will build.
 printf 'dirty\n' >"$fx/untracked-change"
@@ -854,6 +867,35 @@ _assert_exit "cut: refuses a dirty worktree" 1 "$rc"
 _assert_contains "cut: dirty worktree error is specific" "worktree must be clean" "$out"
 git -C "$fx" reset --quiet --hard HEAD >/dev/null
 rm -f "$fx/untracked-change"
+
+# The release guard must see untracked files even when Git status normally
+# hides them for the maintainer.
+printf 'dirty\n' >"$fx/untracked-change"
+git -C "$fx" config status.showUntrackedFiles no
+rc=0
+out=$(cd "$fx" && scripts/release.sh --dry-run 2>&1) || rc=$?
+_assert_exit "cut: rejects untracked files hidden by Git config" 1 "$rc"
+_assert_contains "cut: hidden untracked file gets the dirty diagnostic" "worktree must be clean" "$out"
+git -C "$fx" config --unset status.showUntrackedFiles
+rm -f "$fx/untracked-change"
+
+# A failed status command with empty stdout cannot establish cleanliness.
+real_status_git=$(PATH=/usr/bin:/bin command -v git)
+mkdir -p "$tmp/status-failure-bin"
+cat >"$tmp/status-failure-bin/git" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == status ]]; then
+  printf 'fixture git status failed\n' >&2
+  exit 128
+fi
+exec "$RELEASE_TEST_STATUS_GIT" "$@"
+EOF
+chmod 0755 "$tmp/status-failure-bin/git"
+rc=0
+out=$(cd "$fx" && env PATH="$tmp/status-failure-bin:$PATH" \
+  RELEASE_TEST_STATUS_GIT="$real_status_git" scripts/release.sh --dry-run 2>&1) || rc=$?
+_assert_exit "cut: rejects a failed worktree status" 1 "$rc"
+_assert_contains "cut: status failure gets a distinct diagnostic" "cannot check worktree status" "$out"
 
 git -C "$fx" checkout --quiet -b side
 rc=0
