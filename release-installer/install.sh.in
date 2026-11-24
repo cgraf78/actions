@@ -798,14 +798,19 @@ if [[ -e "$release_dir" || -L "$release_dir" ]]; then
   # a directory name alone is not an integrity receipt.
   validate_metadata_identity "$existing_metadata"
   archive_sorted=$scratch/archive.sorted
+  existing_list=$scratch/existing.list
   existing_normalized=$scratch/existing.normalized
   existing_sorted=$scratch/existing.sorted
   sort "$archive_normalized" >"$archive_sorted"
+  # A failed traversal may still report every expected path while hiding
+  # extra entries. Require a complete listing before comparing inventories.
+  (cd "$release_dir" && find . -mindepth 1 -print) >"$existing_list" ||
+    die "cannot enumerate existing release tree: $release_dir"
   : >"$existing_normalized"
   while IFS= read -r entry || [[ -n "$entry" ]]; do
     relative=${entry#./}
     printf '%s\n' "$relative" >>"$existing_normalized"
-  done < <(cd "$release_dir" && find . -mindepth 1 -print)
+  done <"$existing_list"
   sort "$existing_normalized" >"$existing_sorted"
   archive_digest=$(sha256_file "$archive_sorted")
   existing_digest=$(sha256_file "$existing_sorted")
