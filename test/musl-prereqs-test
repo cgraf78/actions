@@ -16,6 +16,8 @@ trap 'rm -rf "$tmp"' EXIT
 # shellcheck source=test/fixture-env.sh
 . "$root/test/fixture-env.sh"
 actions_fixture_path "$tmp" || exit "$?"
+# shellcheck source=.github/actions/shared/infra-stall-markers.sh
+. "$root/.github/actions/shared/infra-stall-markers.sh"
 
 echo "=== musl build prerequisites ==="
 
@@ -50,45 +52,35 @@ _assert_missing() {
   fi
 }
 
-# Build a PATH of stubs that record their invocations instead of running.
-# `with_sudo=0` drops the sudo stub so the container case (root, no sudo) is
-# exercised rather than assumed.
-_stub_bin() {
-  local dir=$1 with_sudo=$2 cmd
-  mkdir -p "$dir"
-  # The stub dir is the entire PATH, so the no-sudo case really has no sudo
-  # rather than falling through to the host's. Only `sh` has to be real.
-  ln -sf "$(command -v sh)" "$dir/sh"
-  for cmd in apt-get rustup sudo timeout sleep; do
-    [[ "$cmd" == sudo && "$with_sudo" == 0 ]] && continue
-    # Absolute shebang: the stub PATH deliberately has no `env`.
-    cat >"$dir/$cmd" <<STUB
-#!/bin/sh
-printf '%s %s\n' "$cmd" "\$*" >>"\$STUB_LOG"
-STUB
-    chmod +x "$dir/$cmd"
-  done
-}
-
 _run() {
-  # usage: _run <log> <with_sudo> [env assignments...]
-  local log=$1 with_sudo=$2
-  shift 2
-  local bin
+  # usage: _run <log> <with_sudo> <expected_status> [env assignments...]
+  local log=$1 with_sudo=$2 expected=$3 status=0 bin
+  shift 3
   bin="$tmp/bin-$(basename "$log")"
-  _stub_bin "$bin" "$with_sudo"
+  actions_fixture_apt_tools "$bin" "$with_sudo" || exit
+  cat >"$bin/rustup" <<'EOF' || exit
+#!/bin/sh
+printf 'rustup %s\n' "$*" >>"$STUB_LOG"
+EOF
+  chmod 0755 "$bin/rustup" || exit
   : >"$log"
-  env -i PATH="$bin" STUB_LOG="$log" "$@" sh "$install_sh" >>"$log" 2>&1
+  env -i PATH="$bin" TMPDIR="$tmp" APT_MIRROR_LIST="$tmp/no-mirrorlist" \
+    STUB_LOG="$log" "$@" sh "$install_sh" >>"$log" 2>&1 || status=$?
+  if [[ "$status" -eq "$expected" ]]; then
+    _pass "${log##*/}: exits $expected"
+  else
+    _fail "${log##*/}: expected exit $expected, got $status"
+    cat "$log" >&2
+  fi
 }
 
 # --- Linux, no explicit target ----------------------------------------------
 
 log="$tmp/linux.log"
-_run "$log" 1 RUNNER_OS=Linux
+_run "$log" 1 0 RUNNER_OS=Linux
 out=$(<"$log")
 _assert_contains "linux: refreshes the package index" "Acquire::Retries=3 update" "$out"
 _assert_contains "linux: bounds apt transport" "Acquire::http::Timeout=30" "$out"
-_assert_contains "linux: supervises apt" "timeout -k 5 120" "$out"
 _assert_contains "linux: installs musl-tools" "musl-tools" "$out"
 _assert_contains "linux: installs without recommends" "--no-install-recommends" "$out"
 # The release matrix already installs its target through the toolchain action,
@@ -100,7 +92,7 @@ _assert_contains "linux: escalates with sudo on hosted runners" \
 # --- Linux with an explicit target ------------------------------------------
 
 log="$tmp/target.log"
-_run "$log" 1 RUNNER_OS=Linux RUST_TARGET=x86_64-unknown-linux-musl
+_run "$log" 1 0 RUNNER_OS=Linux RUST_TARGET=x86_64-unknown-linux-musl
 out=$(<"$log")
 _assert_contains "target: adds the requested rust target" \
   "rustup target add x86_64-unknown-linux-musl" "$out"
@@ -109,19 +101,30 @@ _assert_contains "target: still installs musl-tools" "musl-tools" "$out"
 # --- Container runners have no sudo -----------------------------------------
 
 log="$tmp/nosudo.log"
-_run "$log" 0 RUNNER_OS=Linux
+_run "$log" 0 0 RUNNER_OS=Linux
 out=$(<"$log")
-_assert_contains "no sudo: still installs musl-tools" "apt-get -o" "$out"
+_assert_contains "no sudo: still installs musl-tools" "--no-install-recommends musl-tools" "$out"
 _assert_contains "no sudo: keeps debconf noninteractive" \
-  "env DEBIAN_FRONTEND=noninteractive apt-get" "$out"
+  "apt-get noninteractive -o" "$out"
 _assert_missing "no sudo: does not invoke sudo" "sudo " "$out"
+
+# A hung update must exercise the action's actual supervisor and stop setup
+# before it tries the linker install or rustup.
+log="$tmp/deadline.log"
+_run "$log" 1 124 RUNNER_OS=Linux RUST_TARGET=x86_64-unknown-linux-musl \
+  STUB_APT_HANG=1 PKG_RETRIES=1 PKG_COMMAND_TIMEOUT=1 PKG_COMMAND_KILL_AFTER=0.1
+out=$(<"$log")
+_assert_contains "deadline: starts apt update" "apt-get noninteractive -o" "$out"
+_assert_contains "deadline: emits the package stall marker" "$PACKAGE_COMMAND_STALL_MARKER" "$out"
+_assert_missing "deadline: skips linker installation" "musl-tools" "$out"
+_assert_missing "deadline: skips rustup" "rustup" "$out"
 
 # --- Non-Linux is a no-op ---------------------------------------------------
 
 # musl targets only exist on Linux. The action stays safe to call from a matrix
 # row that also covers macOS.
 log="$tmp/macos.log"
-_run "$log" 1 RUNNER_OS=macOS
+_run "$log" 1 0 RUNNER_OS=macOS
 out=$(<"$log")
 _assert_missing "macos: installs nothing" "apt-get" "$out"
 _assert_contains "macos: says why it skipped" "skipping on macOS" "$out"

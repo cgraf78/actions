@@ -563,6 +563,9 @@ trap 'rm -rf "$mock_bin"' EXIT HUP INT TERM
 actions_fixture_path "$mock_bin" || exit "$?"
 command_log=$mock_bin/commands.log
 export command_log
+# Package fixtures must not rewrite the host's apt mirror list.
+# shellcheck disable=SC2034 # Read by package-manager/lib.sh.
+APT_MIRROR_LIST=$mock_bin/no-mirrorlist
 for command in apt-get dnf apk brew pacman-key; do
   cat >"$mock_bin/$command" <<'MOCK'
 #!/bin/sh
