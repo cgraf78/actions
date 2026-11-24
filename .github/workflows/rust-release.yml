@@ -114,7 +114,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust
-        uses: cgraf78/actions/.github/actions/rust-toolchain@60e4ab12c982840a06fa3cf3aaa876a08cd0aa21
+        uses: cgraf78/actions/.github/actions/rust-toolchain@a503c9da701df189052e33b041057e910bcda5ff
         with:
           toolchain: ${{ inputs.rust-toolchain }}
 
@@ -281,7 +281,7 @@ jobs:
 
       - name: Install Rust
         if: matrix.enabled
-        uses: cgraf78/actions/.github/actions/rust-toolchain@60e4ab12c982840a06fa3cf3aaa876a08cd0aa21
+        uses: cgraf78/actions/.github/actions/rust-toolchain@a503c9da701df189052e33b041057e910bcda5ff
         with:
           toolchain: ${{ inputs.rust-toolchain }}
           targets: ${{ matrix.rust-target }}
@@ -291,7 +291,7 @@ jobs:
           matrix.enabled &&
           (matrix.rust-target == 'aarch64-linux-android' ||
           matrix.rust-target == 'x86_64-linux-android')
-        uses: cgraf78/actions/.github/actions/android-rust-toolchain@60e4ab12c982840a06fa3cf3aaa876a08cd0aa21
+        uses: cgraf78/actions/.github/actions/android-rust-toolchain@a503c9da701df189052e33b041057e910bcda5ff
         with:
           rust-target: ${{ matrix.rust-target }}
 
@@ -303,7 +303,7 @@ jobs:
         if: >-
           matrix.enabled && inputs.install-musl-tools &&
           endsWith(matrix.rust-target, '-musl')
-        uses: cgraf78/actions/.github/actions/musl-build-prereqs@60e4ab12c982840a06fa3cf3aaa876a08cd0aa21
+        uses: cgraf78/actions/.github/actions/musl-build-prereqs@a503c9da701df189052e33b041057e910bcda5ff
 
       - name: Run repo setup
         if: matrix.enabled && inputs.setup-command != ''
@@ -411,7 +411,7 @@ jobs:
 
       - name: Upload release assets
         if: matrix.enabled
-        uses: cgraf78/actions/.github/actions/upload-release-assets@60e4ab12c982840a06fa3cf3aaa876a08cd0aa21
+        uses: cgraf78/actions/.github/actions/upload-release-assets@a503c9da701df189052e33b041057e910bcda5ff
         with:
           asset-paths: ${{ steps.release-assets.outputs.asset-paths }}
           github-token: ${{ github.token }}

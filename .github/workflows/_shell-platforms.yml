@@ -69,7 +69,7 @@ jobs:
         # This neutral action is the OS-matrix source of truth. Future Rust,
         # C++, or other reusable workflows should call the same action, then
         # run language-specific setup/tests against the returned matrix.
-        uses: cgraf78/actions/.github/actions/platform-matrix@60e4ab12c982840a06fa3cf3aaa876a08cd0aa21
+        uses: cgraf78/actions/.github/actions/platform-matrix@a503c9da701df189052e33b041057e910bcda5ff
         with:
           matrix-set: ${{ inputs.matrix-set }}
 
@@ -127,7 +127,7 @@ jobs:
         # Healthy runs finish in ~90s; a wedged apt mirror has been seen to hang
         # here for tens of minutes with no output.
         timeout-minutes: 20
-        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@60e4ab12c982840a06fa3cf3aaa876a08cd0aa21
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@a503c9da701df189052e33b041057e910bcda5ff
         with:
           matrix-name: ${{ matrix.name }}
           profiles: ${{ inputs.profiles }}
@@ -245,7 +245,7 @@ jobs:
       - name: Install pinned Rustup
         if: inputs.setup == 'checkrun' && matrix.name != 'Alpine'
         timeout-minutes: 10
-        uses: cgraf78/actions/.github/actions/rust-toolchain@60e4ab12c982840a06fa3cf3aaa876a08cd0aa21
+        uses: cgraf78/actions/.github/actions/rust-toolchain@a503c9da701df189052e33b041057e910bcda5ff
         with:
           mode: checkrun
 
@@ -299,7 +299,7 @@ jobs:
         # keeping Git and Mise retries short; 25m honestly contains the full
         # 21m55s inner budget plus local setup and teardown.
         timeout-minutes: 25
-        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@60e4ab12c982840a06fa3cf3aaa876a08cd0aa21
+        uses: cgraf78/actions/.github/actions/dotfiles-bootstrap@a503c9da701df189052e33b041057e910bcda5ff
         env:
           # The explicit cross-repository token wins for private dependencies.
           # Full-provider public CI still needs authenticated release metadata:
