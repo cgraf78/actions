@@ -25,6 +25,40 @@ actions_fixture_path() {
   esac
 }
 
+# Keep package fixtures on the real watchdog path with a PATH that cannot
+# reach host package managers or escalate privileges.
+actions_fixture_apt_tools() (
+  bin=$1
+  with_sudo=$2
+  mkdir -p "$bin" || exit
+  launcher=setsid
+  command -v "$launcher" >/dev/null 2>&1 || launcher=python3
+  for tool in env ln mktemp rm sh sleep "$launcher"; do
+    executable=$(command -v "$tool") || {
+      printf 'actions test: package fixtures require %s\n' "$tool" >&2
+      exit 1
+    }
+    ln -s "$executable" "$bin/$tool" || exit
+  done
+
+  cat >"$bin/apt-get" <<'EOF' || exit
+#!/bin/sh
+printf 'apt-get %s %s\n' "${DEBIAN_FRONTEND:-unset}" "$*" >>"$STUB_LOG"
+if [ "${STUB_APT_HANG:-0}" = 1 ]; then
+  exec sleep 5
+fi
+EOF
+  chmod 0755 "$bin/apt-get" || exit
+  if [ "$with_sudo" = 1 ]; then
+    cat >"$bin/sudo" <<'EOF' || exit
+#!/bin/sh
+printf 'sudo %s\n' "$*" >>"$STUB_LOG"
+exec "$@"
+EOF
+    chmod 0755 "$bin/sudo"
+  fi
+)
+
 actions_fixture_nonexclusive_mkdir() (
   bin=$1
   mkdir -p "$bin" || exit
