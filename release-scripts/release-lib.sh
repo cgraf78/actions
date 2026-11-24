@@ -18,8 +18,8 @@
 # than the caller's working directory. Release commands run from CI job steps,
 # `cargo` wrappers, and interactive shells, and the crate layout is the fixed
 # reference point in all three.
-RELEASE_SCRIPTS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-RELEASE_REPO_ROOT=$(cd "$RELEASE_SCRIPTS_DIR/.." && pwd)
+RELEASE_SCRIPTS_DIR=$(CDPATH='' cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+RELEASE_REPO_ROOT=$(CDPATH='' cd -- "$RELEASE_SCRIPTS_DIR/.." && pwd)
 
 # The config contract, in one place. release_load_config fills these in from
 # scripts/release.conf and rejects the ones that are still empty but required.

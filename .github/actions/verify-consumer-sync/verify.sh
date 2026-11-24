@@ -117,7 +117,7 @@ printf 'verify-consumer-sync: %d reference(s) match %s\n' \
   "$checked" "$actions_sha"
 
 export GITHUB_ACTION_PATH
-GITHUB_ACTION_PATH=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+GITHUB_ACTION_PATH=$(CDPATH='' cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$repo_root"
 # The Shdeps hook and its generated lock travel together. Verify all platform
 # hashes here, including architectures that the current job does not run.

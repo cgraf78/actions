@@ -37,7 +37,12 @@ fi
 
 dest=$2
 manifest_name=$3
-source_dir=$(cd "$1" && pwd) || {
+source_dir=$1
+case "$source_dir" in
+  /*) ;;
+  *) source_dir=./$source_dir ;;
+esac
+source_dir=$(CDPATH='' cd -- "$source_dir" && pwd) || {
   printf 'sync: provider family directory is missing: %s\n' "$1" >&2
   exit 1
 }

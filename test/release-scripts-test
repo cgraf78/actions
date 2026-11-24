@@ -7,7 +7,7 @@
 
 set -uo pipefail
 
-root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+root=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 shared="$root/release-scripts"
 verify="$root/.github/actions/verify-release-scripts/verify.sh"
 
@@ -272,6 +272,26 @@ _assert_exit "cut: interruption during launch preserves signal status" 143 "$sta
 startup_signals=$(cat "$tmp/network-signal.log" 2>/dev/null) || startup_signals=''
 _assert_eq "cut: the original handler receives only the first signal" TERM "$startup_signals"
 _assert_network_children_stopped 'cut: interruption during launch' "$tmp/network-startup.pid" 1
+
+relative_roots=$(cd "$root" && CDPATH=. bash -ec '
+  . "$1"
+  printf "%s\n%s" "$RELEASE_SCRIPTS_DIR" "$RELEASE_REPO_ROOT"
+' bash release-scripts/release-lib.sh)
+_assert_eq "release library: caller CDPATH does not change sourced paths" \
+  "$shared"$'\n'"$root" "$relative_roots"
+
+mkdir "$tmp/cdpath-sync"
+sync_status=0
+(cd "$root" && CDPATH=. bash release-scripts/sync.sh "$tmp/cdpath-sync" >/dev/null) ||
+  sync_status=$?
+_assert_exit "vendor sync: a relative invocation works with caller CDPATH" 0 "$sync_status"
+
+mkdir "$tmp/cdpath-vendor"
+vendor_status=0
+(cd "$root" && CDPATH=. bash consumer-ci/vendor-scripts.sh \
+  release-scripts "$tmp/cdpath-vendor" .release-scripts.manifest >/dev/null) ||
+  vendor_status=$?
+_assert_exit "vendor sync: a relative source works with caller CDPATH" 0 "$vendor_status"
 
 # Build a consumer-shaped fixture repo: vendored scripts, a release.conf, the
 # declared payload, and a git history so commit-derived versions resolve.

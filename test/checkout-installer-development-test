@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+root=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d)
 tmp=$(cd -P -- "$tmp" && pwd -P)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
@@ -37,7 +37,7 @@ write_delegate() {
 
 set -euo pipefail
 
-checkout_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+checkout_root=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 {
   printf 'root=%s\n' "$checkout_root"
   if [[ -n ${CHECKOUT_DEVELOPMENT_TEST_LOCK:-} ]]; then
@@ -72,7 +72,7 @@ write_post_install() {
 
 set -euo pipefail
 
-checkout_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+checkout_root=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 {
   printf 'root=%s\n' "$checkout_root"
   if [[ -n ${CHECKOUT_DEVELOPMENT_TEST_LOCK:-} ]]; then

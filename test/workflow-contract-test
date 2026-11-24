@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+root=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 actions_lock=$(<"$root/.github/cgraf78-actions.lock")
 [[ $actions_lock =~ ^[0-9a-f]{40}$ ]] || {
   printf 'workflow contract failed: invalid internal actions lock\n' >&2

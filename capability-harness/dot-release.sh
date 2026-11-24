@@ -75,8 +75,8 @@ _capability_dot_release_destination() {
     echo "Dot release $operation is missing the destination" >&2
     return 1
   }
-  mkdir -p "$dest" || return
-  entries=$(ls -A "$dest") || return
+  mkdir -p -- "$dest" || return
+  entries=$(ls -A -- "$dest") || return
   [[ -z $entries ]] || {
     echo "refusing to $operation into a nonempty directory: $dest" >&2
     return 1
@@ -188,6 +188,8 @@ capability_dot_release_stage() (
   }
   platform=$(_capability_dot_release_platform) || return 1
   _capability_dot_release_destination "$dest" stage || return
+  # Keep relative destinations anchored here, including a literal "-".
+  [[ $dest == /* ]] || dest="./$dest"
   dest=$(cd -P -- "$dest" && pwd -P) || return
   scratch=$(mktemp -d "$dest/.dot-release.XXXXXX") || return
   trap 'rm -rf -- "$scratch"' EXIT

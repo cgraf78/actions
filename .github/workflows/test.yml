@@ -102,7 +102,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Install pinned WezTerm
-        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@c83390f34ec6fa43a9ae21dcdaad6167b838b86d
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@124dd3381769ff51293df7e658d57a67d61d3e7d
         with:
           matrix-name: ${{ matrix.name }}
           profiles: wezterm-pinned
@@ -212,7 +212,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust
-        uses: cgraf78/actions/.github/actions/rust-toolchain@c83390f34ec6fa43a9ae21dcdaad6167b838b86d
+        uses: cgraf78/actions/.github/actions/rust-toolchain@124dd3381769ff51293df7e658d57a67d61d3e7d
         with:
           toolchain: stable
           targets: ${{ matrix.rust-target }}
@@ -290,7 +290,7 @@ jobs:
           persist-credentials: false
 
       - name: Verify internal Actions sync
-        uses: cgraf78/actions/.github/actions/verify-consumer-sync@c83390f34ec6fa43a9ae21dcdaad6167b838b86d
+        uses: cgraf78/actions/.github/actions/verify-consumer-sync@124dd3381769ff51293df7e658d57a67d61d3e7d
 
       - name: Verify internal action implementations
         shell: bash
@@ -380,7 +380,8 @@ jobs:
 
       - name: Test dotfiles bootstrap command bounds
         shell: bash
-        run: test/dotfiles-bootstrap-bounds-test
+        # Exercise relative fixture entry points with a caller's CDPATH set.
+        run: CDPATH=. test/dotfiles-bootstrap-bounds-test
 
       - name: Test infrastructure retry classification
         shell: bash

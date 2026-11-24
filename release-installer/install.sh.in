@@ -440,7 +440,11 @@ if [[ -z "$archive" ]]; then
 fi
 [[ -f "$archive" && ! -L "$archive" ]] ||
   die "archive must be a regular non-symlink file: $archive"
-archive_dir=$(cd "$(dirname "$archive")" && pwd)
+case "$archive" in
+  /*) ;;
+  *) archive=./$archive ;;
+esac
+archive_dir=$(CDPATH='' cd -- "$(dirname -- "$archive")" && pwd)
 archive=$archive_dir/$(basename "$archive")
 
 archive_name=$(basename "$archive")

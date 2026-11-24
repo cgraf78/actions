@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+root=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 install_sh="$root/.github/actions/rust-ci-prereqs/install.sh"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT

@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+root=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 validator="$root/.github/actions/shellcheck-inventory/run.sh"
 action="$root/.github/actions/shellcheck-inventory/action.yml"
 
