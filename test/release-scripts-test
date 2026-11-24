@@ -84,28 +84,61 @@ _assert_contains() {
   fi
 }
 
+_assert_network_children_stopped() {
+  local name=$1 list=$2 expected_count=$3 child group count deadline info observed_group state
+  count=$(wc -l <"$list")
+  _assert_eq "$name: recorded workers" "$expected_count" "$((count))"
+  deadline=$((SECONDS + 2))
+  while read -r group child; do
+    # Only the process's new parent can reap an orphaned worker. A positive
+    # zombie state confirms it stopped even if kill -0 still sees its PID.
+    while kill -0 "$child" 2>/dev/null; do
+      info=$(ps -o pgid=,stat= -p "$child" 2>/dev/null) || info=''
+      read -r observed_group state <<<"$info"
+      [[ $state != Z* ]] || break
+      if ((SECONDS >= deadline)); then
+        _fail "$name: left child $child running (group=$observed_group, state=$state)"
+        if [[ $observed_group == "$group" ]]; then
+          kill -s KILL "$child" 2>/dev/null || true
+        fi
+        continue 2
+      fi
+      sleep 0.01
+    done
+    _pass "$name: stopped child $child"
+  done <"$list"
+}
+
 # Successful commands must not inherit the watchdog's sleep through a command
 # substitution, and timed-out commands must not leave transport descendants.
 cat >"$tmp/hanging-network-command" <<'EOF'
 #!/usr/bin/env bash
+group=$BASHPID
 spawn_child() {
   (
     trap '' TERM
-    printf '%s\n' "$BASHPID" >>"$RELEASE_TEST_NETWORK_CHILD_PID"
-    while :; do sleep 1; done
+    printf '%s %s\n' "$group" "$BASHPID" >>"$RELEASE_TEST_NETWORK_CHILD_PID"
+    exec sleep 300
   ) &
 }
-trap 'spawn_child; wait' TERM
-(
-  trap '' TERM
-  printf '%s\n' "$BASHPID" >>"$RELEASE_TEST_NETWORK_CHILD_PID"
-  while :; do sleep 1; done
-) &
+on_term() {
+  if [[ -n ${RELEASE_TEST_LATE_CHILD_GATE:-} ]]; then
+    for _ in {1..100}; do
+      [[ -e "$RELEASE_TEST_LATE_CHILD_GATE" ]] && break
+      sleep 0.01
+    done
+  fi
+  spawn_child
+  wait
+}
+trap on_term TERM
+spawn_child
 wait
 EOF
 chmod 0755 "$tmp/hanging-network-command"
+: >"$tmp/network-child.pid"
 # shellcheck disable=SC2016 # Positional parameters belong to the child Bash.
-if env RELEASE_TEST_NETWORK_CHILD_PID="$tmp/network-child.pid" \
+if env RELEASE_TEST_NETWORK_CHILD_PID="$tmp/network-child.pid" RELEASE_TEST_LATE_CHILD_GATE= \
   RELEASE_NETWORK_TIMEOUT_SECONDS=1 RELEASE_NETWORK_KILL_AFTER_SECONDS=1 \
   bash -c '
     set -uo pipefail
@@ -118,27 +151,63 @@ if env RELEASE_TEST_NETWORK_CHILD_PID="$tmp/network-child.pid" \
     [[ $(trap -p TERM) == "$expected_term_trap" ]] || exit 1
     release_bounded_command "$2" 2>/dev/null
     [[ $? -eq 124 ]] || exit 1
-    [[ $(wc -l <"$RELEASE_TEST_NETWORK_CHILD_PID") -eq 2 ]] || exit 1
-    while IFS= read -r child; do
-      for _ in {1..100}; do
-        kill -0 "$child" 2>/dev/null || break
-        sleep 0.01
-      done
-      kill -0 "$child" 2>/dev/null && exit 1
-    done <"$RELEASE_TEST_NETWORK_CHILD_PID"
-    exit 0
   ' _ "$shared/release-lib.sh" "$tmp/hanging-network-command"; then
-  _pass "cut: network watchdog returns promptly and reaps descendants"
+  _pass "cut: network watchdog returns promptly and preserves the caller's shell"
 else
-  _fail "cut: network watchdog returns promptly and reaps descendants"
+  _fail "cut: network watchdog returns promptly and preserves the caller's shell"
+fi
+_assert_network_children_stopped 'cut: network watchdog' "$tmp/network-child.pid" 2
+
+# shellcheck disable=SC2016 # Positional parameters belong to the child Bash.
+if RELEASE_NETWORK_TIMEOUT_SECONDS=5 bash -c '
+  source "$1"
+  timer_ready=$2
+  sleep() {
+    : >"$timer_ready"
+    command sleep "$@"
+  }
+  report_ready() {
+    for _ in {1..100}; do
+      if [[ -f "$timer_ready" ]]; then
+        printf ready
+        return 0
+      fi
+      command sleep 0.01
+    done
+    return 1
+  }
+  set -m
+  SECONDS=0
+  output=$(release_bounded_command report_ready 2>&1) || exit 1
+  [[ $output == ready && $- == *m* && $SECONDS -lt 3 ]]
+' _ "$shared/release-lib.sh" "$tmp/watchdog.ready"; then
+  _pass "cut: command substitution cancels its timer with caller job control enabled"
+else
+  _fail "cut: command substitution could not stop its timer or preserve job control"
 fi
 
 : >"$tmp/network-child.pid"
 SECONDS=0
 # shellcheck disable=SC2016 # Positional parameters belong to the child Bash.
 env RELEASE_TEST_NETWORK_CHILD_PID="$tmp/network-child.pid" \
+  RELEASE_TEST_LATE_CHILD_GATE="$tmp/network-child.start" \
   RELEASE_NETWORK_TIMEOUT_SECONDS=30 RELEASE_NETWORK_KILL_AFTER_SECONDS=1 \
-  bash -c 'source "$1"; release_bounded_command "$2"' \
+  bash -c '
+    source "$1"
+    kill() {
+      # Start a late worker at the first hard signal, after any process
+      # snapshot would already have been taken. Use the real signal afterward.
+      if [[ ${1:-} == -s && ${2:-} == KILL && ! -e "$RELEASE_TEST_LATE_CHILD_GATE" ]]; then
+        : >"$RELEASE_TEST_LATE_CHILD_GATE"
+        for _ in {1..100}; do
+          [[ $(wc -l <"$RELEASE_TEST_NETWORK_CHILD_PID") -eq 2 ]] && break
+          sleep 0.01
+        done
+      fi
+      builtin kill "$@"
+    }
+    release_bounded_command "$2"
+  ' \
   _ "$shared/release-lib.sh" "$tmp/hanging-network-command" \
   >/dev/null 2>&1 &
 bounded_shell=$!
@@ -146,18 +215,63 @@ for _ in {1..100}; do
   [[ -s "$tmp/network-child.pid" ]] && break
   sleep 0.01
 done
-kill -s TERM "$bounded_shell"
+if [[ -s "$tmp/network-child.pid" ]] && kill -s TERM "$bounded_shell"; then
+  _pass "cut: interrupt an active bounded command"
+else
+  _fail "cut: bounded command failed to start before cancellation"
+  kill -s TERM "$bounded_shell" 2>/dev/null || true
+fi
 bounded_status=0
 wait "$bounded_shell" || bounded_status=$?
-bounded_children_gone=1
-while IFS= read -r child; do
-  kill -0 "$child" 2>/dev/null && bounded_children_gone=0
-done <"$tmp/network-child.pid"
-if [[ "$bounded_status" -eq 143 && "$bounded_children_gone" -eq 1 && $SECONDS -lt 5 ]]; then
-  _pass "cut: caller termination cleans up the bounded command tree"
+_assert_exit "cut: caller termination preserves its signal status" 143 "$bounded_status"
+_assert_network_children_stopped 'cut: caller termination includes the late worker' \
+  "$tmp/network-child.pid" 2
+if ((SECONDS < 5)); then
+  _pass "cut: caller termination stays bounded"
 else
-  _fail "cut: caller termination cleans up the bounded command tree"
+  _fail "cut: caller termination took ${SECONDS}s"
 fi
+
+: >"$tmp/network-startup.pid"
+startup_status=0
+# shellcheck disable=SC2016 # Positional parameters belong to the child Bash.
+(
+  env RELEASE_TEST_NETWORK_CHILD_PID="$tmp/network-startup.pid" \
+    RELEASE_TEST_SIGNAL_LOG="$tmp/network-signal.log" \
+    RELEASE_NETWORK_TIMEOUT_SECONDS=3 RELEASE_NETWORK_KILL_AFTER_SECONDS=1 \
+    bash -c '
+    source "$1"
+    trap '\''printf "%s\n" TERM >>"$RELEASE_TEST_SIGNAL_LOG"'\'' TERM
+    trap '\''printf "%s\n" HUP >>"$RELEASE_TEST_SIGNAL_LOG"'\'' HUP
+    set -T
+    interrupt_startup() {
+      case $BASH_COMMAND in
+        "pid=\$!")
+          for _ in {1..100}; do
+            [[ -s $RELEASE_TEST_NETWORK_CHILD_PID ]] && break
+            sleep 0.01
+          done
+          builtin kill -s TERM "$BASHPID"
+          ;;
+        "watchdog=\$!")
+          trap - DEBUG
+          builtin kill -s HUP "$BASHPID"
+          ;;
+      esac
+    }
+    # Interrupt both publication boundaries using the real child processes.
+    # Replay only the first signal to the original traps.
+  trap interrupt_startup DEBUG
+  release_bounded_command bash -c '\''
+      printf "%s %s\n" "$BASHPID" "$BASHPID" >"$RELEASE_TEST_NETWORK_CHILD_PID"
+      exec sleep 300
+    '\''
+  ' _ "$shared/release-lib.sh"
+) >"$tmp/network-startup.log" 2>&1 || startup_status=$?
+_assert_exit "cut: interruption during launch preserves signal status" 143 "$startup_status"
+startup_signals=$(cat "$tmp/network-signal.log" 2>/dev/null) || startup_signals=''
+_assert_eq "cut: the original handler receives only the first signal" TERM "$startup_signals"
+_assert_network_children_stopped 'cut: interruption during launch' "$tmp/network-startup.pid" 1
 
 # Build a consumer-shaped fixture repo: vendored scripts, a release.conf, the
 # declared payload, and a git history so commit-derived versions resolve.
