@@ -2534,7 +2534,17 @@ lock_race_bin="$tmp/lock-race-bin"
 lock_race_sync="$tmp/lock-race-sync"
 lock_race_timeout="$lock_race_sync/timeout"
 lock_race_real_mv=$(PATH="$platform_tool_path" command -v mv)
+lock_race_real_mkdir=$(PATH="$platform_tool_path" command -v mkdir)
 mkdir -p "$lock_race_bin" "$lock_race_sync"
+cat >"$lock_race_bin/mkdir" <<'EOF'
+#!/usr/bin/env bash
+# Model the Ubuntu 26.04 uutils mkdir race only at the fixture's role marker.
+# The installer's real state directories still use the platform mkdir.
+if [[ $# -eq 1 && $1 == "${CHECKOUT_TEST_RACE_SYNC:?}/first" ]]; then
+  exec "${CHECKOUT_TEST_REAL_MKDIR:?}" -p "$@"
+fi
+exec "${CHECKOUT_TEST_REAL_MKDIR:?}" "$@"
+EOF
 cat >"$lock_race_bin/mv" <<'EOF'
 #!/usr/bin/env bash
 
@@ -2594,8 +2604,9 @@ case ${1:-}:$2 in
     if [[ -e "$CHECKOUT_TEST_RACE_SYNC/winner-moved" ]]; then
       exec "${CHECKOUT_TEST_REAL_MV:?}" "$@"
     fi
-    if mkdir "${CHECKOUT_TEST_RACE_SYNC:?}/first" 2>/dev/null; then
-      : >"$CHECKOUT_TEST_RACE_SYNC/first-ready"
+    # Assign fixture roles in the parent. Some mkdir implementations report
+    # success to both contenders, leaving both waiting for the second marker.
+    if [[ ${CHECKOUT_TEST_RACE_ROLE:?} == first ]]; then
       wait_for_path "$CHECKOUT_TEST_RACE_SYNC/second-ready" \
         'the second stale-lock reclaimer'
       "${CHECKOUT_TEST_REAL_MV:?}" "$@"
@@ -2627,10 +2638,12 @@ esac
 
 exec "${CHECKOUT_TEST_REAL_MV:?}" "$@"
 EOF
-chmod 0755 "$lock_race_bin/mv"
+chmod 0755 "$lock_race_bin/mkdir" "$lock_race_bin/mv"
 CHECKOUT_TEST_LOG="$tmp/lock-race-one.log" \
   PATH="$lock_race_bin:$platform_tool_path" \
   CHECKOUT_TEST_REAL_MV="$lock_race_real_mv" \
+  CHECKOUT_TEST_REAL_MKDIR="$lock_race_real_mkdir" \
+  CHECKOUT_TEST_RACE_ROLE=first \
   CHECKOUT_TEST_RACE_SYNC="$lock_race_sync" \
   CHECKOUT_TEST_RACE_TIMEOUT="$lock_race_timeout" \
   CHECKOUT_TEST_LOCK_CANONICAL="$lock_race_path" \
@@ -2646,6 +2659,8 @@ blocking_pid=$!
 CHECKOUT_TEST_LOG="$tmp/lock-race-two.log" \
   PATH="$lock_race_bin:$platform_tool_path" \
   CHECKOUT_TEST_REAL_MV="$lock_race_real_mv" \
+  CHECKOUT_TEST_REAL_MKDIR="$lock_race_real_mkdir" \
+  CHECKOUT_TEST_RACE_ROLE=second \
   CHECKOUT_TEST_RACE_SYNC="$lock_race_sync" \
   CHECKOUT_TEST_RACE_TIMEOUT="$lock_race_timeout" \
   CHECKOUT_TEST_LOCK_CANONICAL="$lock_race_path" \
