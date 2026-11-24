@@ -36,6 +36,7 @@ make_provider() {
   # Self-sync needs the same capability layout rules as the consumer verifier.
   mkdir -p "$work/.github/actions/verify-consumer-sync"
   cp "$root/.github/actions/verify-consumer-sync/capability-layouts.sh" \
+    "$root/.github/actions/verify-consumer-sync/references.sh" \
     "$root/.github/actions/verify-consumer-sync/tracked-paths.sh" \
     "$work/.github/actions/verify-consumer-sync/"
   cat >"$work/.github/actions/example/action.yml" <<'EOF'

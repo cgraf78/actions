@@ -14,12 +14,12 @@ GITHUB_ACTION_PATH=$(CDPATH='' cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 # shellcheck source=capability-layouts.sh
 . "$GITHUB_ACTION_PATH/capability-layouts.sh"
+# shellcheck source=references.sh
+. "$GITHUB_ACTION_PATH/references.sh"
 # shellcheck source=tracked-paths.sh
 . "$GITHUB_ACTION_PATH/tracked-paths.sh"
 
 lock_file=.github/cgraf78-actions.lock
-reference_regex="uses:[[:space:]]*(\"cgraf78/actions/[^@\"]+@([^\"]+)\"|'cgraf78/actions/[^@']+@([^']+)'|cgraf78/actions/[^@[:space:]]+@([^][[:space:],}]+))"
-
 release_config=scripts/release.conf
 release_manifest=scripts/.release-scripts.manifest
 checkout_config=scripts/checkout-installer.conf
@@ -69,20 +69,43 @@ elif [[ "$ACTION_REF" != "$actions_sha" ]]; then
   status=1
 fi
 
-candidate_list=$(mktemp)
-trap 'rm -f "$candidate_list"' EXIT
+scratch=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/verify-consumer-sync.XXXXXX")
+trap 'rm -rf -- "$scratch"' EXIT
+if ! actions_yq_available; then
+  if [[ ${GITHUB_ACTIONS:-} != true ]]; then
+    printf 'verify-consumer-sync: Mike Farah yq v4 is required to read workflow YAML\n' >&2
+    exit 1
+  fi
+  # Hosted workers supply yq. Use the existing checksum-pinned prerequisite
+  # installer for minimal workers, confined to this invocation's scratch.
+  actions_yq="$scratch/actions-yq"
+  (
+    export RUNNER_TEMP="$scratch"
+    # shellcheck source=../../../capability-harness/github-release.sh
+    . "$GITHUB_ACTION_PATH/../../../capability-harness/github-release.sh"
+    # shellcheck source=../shell-ci-prereqs/lib.sh
+    . "$GITHUB_ACTION_PATH/../shell-ci-prereqs/lib.sh"
+    install_yq_v4 "$actions_yq"
+  )
+  actions_yq_available || {
+    printf 'verify-consumer-sync: installed yq cannot read Actions reference positions\n' >&2
+    exit 1
+  }
+fi
+
+candidate_list="$scratch/definitions"
 # Workflows have one GitHub-defined home; composite actions may live anywhere
 # but have one of two GitHub-defined filenames. Enumerating those tracked files
 # covers runtime configuration without mistaking a documentation example for a
 # dependency that needs rewriting.
-git -C "$repo_root" ls-files -- \
+git -C "$repo_root" ls-files -z -- \
   ':(glob).github/workflows/*.yml' \
   ':(glob).github/workflows/*.yaml' \
   action.yml action.yaml \
   ':(glob)**/action.yml' \
   ':(glob)**/action.yaml' >"$candidate_list"
 checked=0
-while IFS= read -r relative; do
+while IFS= read -r -d '' relative; do
   [[ -n "$relative" ]] || continue
   definition="$repo_root/$relative"
   if [[ ! -f "$definition" || -L "$definition" ]]; then
@@ -90,35 +113,18 @@ while IFS= read -r relative; do
       "$relative" >&2
     exit 1
   fi
-  line_number=0
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    line_number=$((line_number + 1))
-    consumed=
-    remaining=$line
-    while [[ "$remaining" =~ $reference_regex ]]; do
-      match=${BASH_REMATCH[0]}
-      ref=${BASH_REMATCH[2]}
-      [[ -n "$ref" ]] || ref=${BASH_REMATCH[3]}
-      [[ -n "$ref" ]] || ref=${BASH_REMATCH[4]}
-      prefix=${remaining%%"$match"*}
-      after_match=${remaining#*"$match"}
-      context=${consumed}${prefix}
-      checked=$((checked + 1))
-      if [[ -n ${BASH_REMATCH[4]} && "$after_match" == ,* &&
-        "$context" != *'{'* ]]; then
-        printf 'verify-consumer-sync: ambiguous unquoted comma in actions ref: %s:%d\n' \
-          "$relative" "$line_number" >&2
-        status=1
-      fi
-      if [[ "$ref" != "$actions_sha" ]]; then
-        printf 'verify-consumer-sync: reference differs from lock: %s:%d:%s\n' \
-          "$relative" "$line_number" "$match" >&2
-        status=1
-      fi
-      consumed+="${prefix}${match}"
-      remaining=$after_match
-    done
-  done <"$definition"
+  references=$(read_actions_references "$definition" "$relative")
+  while IFS=$'\t' read -r row _ style controls value; do
+    [[ -n "$row" ]] || continue
+    checked=$((checked + 1))
+    if ! valid_actions_ref "$value" "$controls" "$style" "$relative" "$row"; then
+      status=1
+    elif [[ "${value#*@}" != "$actions_sha" ]]; then
+      printf 'verify-consumer-sync: reference differs from lock: %s:%s:%s\n' \
+        "$relative" "$row" "$value" >&2
+      status=1
+    fi
+  done <<<"$references"
 done <"$candidate_list"
 
 if [[ "$checked" -eq 0 ]]; then

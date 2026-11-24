@@ -152,7 +152,7 @@ install_yq_v4() {
   # Some distro package managers ship old or incompatible yq variants. checkrun
   # expects mikefarah/yq v4 behavior, so install the upstream binary whenever a
   # suitable v4 command is not already present.
-  if command -v yq >/dev/null 2>&1 &&
+  if [ "$#" -eq 0 ] && command -v yq >/dev/null 2>&1 &&
     yq --version 2>/dev/null | grep -q 'version v4'; then
     return
   fi
@@ -191,12 +191,18 @@ install_yq_v4() {
     rm -f "$tmp"
     return 1
   fi
-  chmod +x "$tmp"
+  chmod +x "$tmp" || return
   if ! "$tmp" --version | grep -Fq "version v${version}"; then
     rm -f "$tmp"
     return 1
   fi
-  sudo_if_available mv "$tmp" /usr/local/bin/yq
+  # A caller that needs a specific executable can use a private destination
+  # instead of changing PATH contents or requesting elevation.
+  if [ "$#" -eq 1 ]; then
+    mv "$tmp" "$1"
+  else
+    sudo_if_available mv "$tmp" /usr/local/bin/yq
+  fi
 }
 
 # The oldest tmux the repositories that opt into the `tmux-floor` profile

@@ -106,6 +106,7 @@ cp -R "$root/capability-harness" "$actions_source/capability-harness"
 cp -R "$root/.github/actions/shared" "$actions_source/.github/actions/shared"
 mkdir -p "$actions_source/.github/actions/shell-ci-prereqs"
 cp "$root/.github/actions/shell-ci-prereqs/"*-build.lock \
+  "$root/.github/actions/shell-ci-prereqs/lib.sh" \
   "$actions_source/.github/actions/shell-ci-prereqs/"
 cp -R "$root/.github/actions/verify-consumer-sync" \
   "$actions_source/.github/actions/verify-consumer-sync"
@@ -271,6 +272,132 @@ for release_marker in release-markers scripts/release.conf scripts/.release-scri
     fail "unreadable release markers omitted their diagnostic: $out"
 done
 "$sync" "$consumer" >/dev/null || fail "could not restore the release fixture"
+
+# Use the same YAML spellings GitHub accepts for mapping keys and values.
+# Leave a matching ordinary reference in the other files to ensure each
+# missed use can make a broken verifier succeed.
+syntax_workflow="$consumer/.github/workflows/syntax.yaml"
+for spelling in double single continued flow continued-flow folded alias-steps; do
+  case "$spelling" in
+    double)
+      printf '%s\n' '    "uses": cgraf78/actions/.github/workflows/shell-ci.yml@main'
+      ;;
+    single)
+      printf '%s\n' "    'uses': 'cgraf78/actions/.github/workflows/shell-ci.yml@main'"
+      ;;
+    continued)
+      printf '%s\n' '    uses: # keep the value on the following line' \
+        '      "cgraf78/actions/.github/workflows/shell-ci.yml@main"'
+      ;;
+    flow)
+      printf '%s\n' '    runs-on: ubuntu-24.04' \
+        '    steps: [{name: "café", "uses": cgraf78/actions/.github/actions/shell-ci-prereqs@main}]'
+      ;;
+    continued-flow)
+      printf '%s\n' '    runs-on: ubuntu-24.04' '    steps: [{uses:' \
+        '       cgraf78/actions/.github/actions/shell-ci-prereqs@main}]'
+      ;;
+    folded)
+      printf '%s\n' '    uses: >-' \
+        '      cgraf78/actions/.github/workflows/shell-ci.yml@main'
+      ;;
+    alias-steps)
+      printf '%s\n' '    runs-on: ubuntu-24.04' '    steps:' \
+        '      - &managed' \
+        '        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@main' \
+        '      - *managed'
+      ;;
+  esac >"$tmp/syntax-body" || exit "$?"
+  printf '%s\n' 'on: [push]' 'jobs:' '  example:' >"$syntax_workflow" || exit "$?"
+  cat "$tmp/syntax-body" >>"$syntax_workflow" || exit "$?"
+  sed "s|@main|@$want|" "$syntax_workflow" >"$tmp/syntax-expected" || exit "$?"
+  # An example in a shell step or comment is data. In addition to the
+  # spelling under test, preserve the literal example, mode and EOF bytes.
+  for file in "$syntax_workflow" "$tmp/syntax-expected"; do
+    cat >>"$file" <<'YAML' || exit "$?"
+  docs:
+    runs-on: ubuntu-24.04 # {uses: cgraf78/actions/example@main}
+    steps:
+      - run: 'echo "{uses: cgraf78/actions/example@main}"'
+      - run: |
+          '"uses": cgraf78/actions/.github/workflows/shell-ci.yml@main'
+# {"uses": cgraf78/actions/.github/workflows/shell-ci.yml@main}
+YAML
+    printf '%s' '# Expected comment and end-of-file bytes.' >>"$file" || exit "$?"
+  done
+  chmod u+x "$syntax_workflow" || exit "$?"
+  git -C "$consumer" add .github/workflows/syntax.yaml || exit "$?"
+  out=$(GITHUB_WORKSPACE="$consumer" ACTION_REF="$want" "$verify" 2>&1) &&
+    fail "$spelling spelling with a stale actions pin unexpectedly verified"
+  [[ "$out" == *"reference differs from lock: .github/workflows/syntax.yaml:"* ]] ||
+    fail "$spelling spelling did not identify the stale pin: $out"
+  "$sync" "$consumer" >/dev/null || fail "sync did not repair the $spelling actions pin"
+  cmp -s "$syntax_workflow" "$tmp/syntax-expected" ||
+    fail "sync of $spelling spelling did not preserve YAML bytes outside the ref"
+  [[ -x "$syntax_workflow" ]] || fail "sync changed the workflow's mode"
+  GITHUB_WORKSPACE="$consumer" ACTION_REF="$want" "$verify" >/dev/null ||
+    fail "updated $spelling pin did not verify"
+done
+
+# A parsed alias is a real use, but changing its anchor can alter unrelated
+# YAML. Reject a stale alias before publishing any of the staged changes.
+alias_workflow="$consumer/.github/workflows/alias.yml"
+cat >"$alias_workflow" <<'YAML' || exit "$?"
+on: [push]
+jobs:
+  example:
+    uses: &shared cgraf78/actions/.github/workflows/shell-ci.yml@main
+  alias:
+    uses: *shared
+YAML
+git -C "$consumer" add .github/workflows/alias.yml || exit "$?"
+out=$(GITHUB_WORKSPACE="$consumer" ACTION_REF="$want" "$verify" 2>&1) &&
+  fail "stale alias unexpectedly verified"
+[[ "$out" == *'reference differs from lock: .github/workflows/alias.yml:6:'* ]] ||
+  fail "stale alias did not identify its use site: $out"
+before_alias=$(cksum <"$alias_workflow")
+before_lock=$(cksum <"$consumer/.github/cgraf78-actions.lock")
+before_other=$(cksum <"$consumer/.github/workflows/test.yml")
+out=$("$sync" "$consumer" 2>&1) && fail "unrepresentable alias unexpectedly synchronized"
+[[ "$out" == *'cannot rewrite Actions reference in .github/workflows/alias.yml:'* ]] ||
+  fail "unrepresentable alias did not explain the preflight failure: $out"
+[[ $(cksum <"$alias_workflow") == "$before_alias" &&
+$(cksum <"$consumer/.github/cgraf78-actions.lock") == "$before_lock" &&
+$(cksum <"$consumer/.github/workflows/test.yml") == "$before_other" ]] ||
+  fail "unrepresentable alias rewrote a dependency file"
+git -C "$consumer" rm -f -- .github/workflows/alias.yml >/dev/null || exit "$?"
+
+# Move the source after the parser has received its snapshot. The pending
+# generation must leave this maintainer edit and the old version lock intact.
+edit_bin="$tmp/workflow-edit-bin"
+mkdir "$edit_bin" || exit "$?"
+real_yq=$(command -v yq) || exit "$?"
+cat >"$edit_bin/yq" <<'EOF'
+#!/usr/bin/env bash
+for source do :; done
+if [[ -f "$source" ]] && grep -Fq '  flow-with:' "$source"; then
+  printf '# editor update\n' >>"$ACTIONS_TEST_EDIT_WORKFLOW" || exit
+fi
+exec "$ACTIONS_TEST_REAL_YQ" "$@"
+EOF
+chmod 0755 "$edit_bin/yq" || exit "$?"
+edited_workflow="$consumer/.github/workflows/test.yml"
+cp -p "$edited_workflow" "$tmp/original-workflow" || exit "$?"
+cp -p "$edited_workflow" "$tmp/expected-workflow" || exit "$?"
+printf '# editor update\n' >>"$tmp/expected-workflow" || exit "$?"
+printf '%040d\n' 0 >"$consumer/.github/cgraf78-actions.lock" || exit "$?"
+before_lock=$(cksum <"$consumer/.github/cgraf78-actions.lock")
+out=$(env PATH="$edit_bin:$PATH" ACTIONS_TEST_REAL_YQ="$real_yq" \
+  ACTIONS_TEST_EDIT_WORKFLOW="$edited_workflow" "$sync" "$consumer" 2>&1) &&
+  fail "sync accepted an intervening workflow edit"
+[[ "$out" == *'workflow/action changed during preparation: .github/workflows/test.yml'* ]] ||
+  fail "intervening edit did not explain the preflight failure: $out"
+cmp -s "$edited_workflow" "$tmp/expected-workflow" ||
+  fail "sync overwrote a maintainer workflow edit"
+[[ $(cksum <"$consumer/.github/cgraf78-actions.lock") == "$before_lock" ]] ||
+  fail "sync published its lock despite a changed workflow"
+mv "$tmp/original-workflow" "$edited_workflow" || exit "$?"
+printf '%s\n' "$want" >"$consumer/.github/cgraf78-actions.lock" || exit "$?"
 
 printf '\n# consumer drift\n' >>"$consumer/install.sh"
 out=$(GITHUB_ACTION_PATH="$actions_source/.github/actions/verify-consumer-sync" \

@@ -887,6 +887,20 @@ MOCK
     'sudo_if_available mv' "$log" 'verified yq install'
 
   : >"$yq_log"
+  private_yq="$yq_tmp/private-yq"
+  install_yq_v4 "$private_yq"
+  [ -x "$private_yq" ] || {
+    printf 'not ok - private installed yq is not executable\n' >&2
+    exit 1
+  }
+  case "$(cat "$yq_log")" in
+    *'sudo_if_available'*)
+      printf 'not ok - private yq installation requested elevation\n' >&2
+      exit 1
+      ;;
+  esac
+
+  : >"$yq_log"
   export MOCK_UNAME_S=Darwin MOCK_UNAME_M=arm64
   install_yq_v4
   unset MOCK_UNAME_S MOCK_UNAME_M
