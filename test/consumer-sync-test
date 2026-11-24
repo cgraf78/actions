@@ -979,9 +979,9 @@ fi
   fail "late publication failure was not reached: $out"
 new_paths=$(git -C "$bad_transition" ls-files --others --exclude-standard)
 [[ -z "$new_paths" ]] ||
-  fail "failed publication left temporary or generated paths: $new_paths"
+  fail "failed publication left temporary or generated paths: $new_paths"$'\n'"$out"
 git -C "$bad_transition" diff --exit-code --quiet ||
-  fail "failed publication did not restore original files"
+  fail "failed publication did not restore original files: $out"
 
 ownership_lock="$bad_transition/.git/cgraf78-consumer-sync.lock"
 ln -s 'another-sync-owner' "$ownership_lock"

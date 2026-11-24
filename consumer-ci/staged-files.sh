@@ -67,11 +67,13 @@ stage_error() {
 stage_parent() {
   local directory=$1 create=$2
   if [[ "$directory" == "$stage_consumer" ]]; then
-    [[ $(directory_identity "$directory") == "$stage_identity" ]] ||
-      stage_error "consumer directory changed during synchronization: $directory"
-    return
+    # Older Bash versions can inherit the triggering failure from an EXIT
+    # trap on a bare return, even after a successful identity check.
+    [[ $(directory_identity "$directory") == "$stage_identity" ]] && return 0
+    stage_error "consumer directory changed during synchronization: $directory"
+    return 1
   fi
-  stage_parent "${directory%/*}" "$create" || return
+  stage_parent "${directory%/*}" "$create" || return 1
   if [[ -L "$directory" || (-e "$directory" && ! -d "$directory") ]]; then
     stage_error "destination parent must be a regular directory: $directory"
   elif [[ "$create" == true && ! -d "$directory" ]]; then
