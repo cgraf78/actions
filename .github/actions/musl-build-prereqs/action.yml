@@ -14,4 +14,4 @@ runs:
       shell: sh
       env:
         RUST_TARGET: ${{ inputs.rust-target }}
-      run: "$GITHUB_ACTION_PATH/install.sh"
+      run: exec sh "$GITHUB_ACTION_PATH/../package-manager/run.sh" "$GITHUB_ACTION_PATH/install.sh"

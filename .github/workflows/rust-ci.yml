@@ -172,7 +172,7 @@ jobs:
 
       - name: Install Rust
         timeout-minutes: 10
-        uses: cgraf78/actions/.github/actions/rust-toolchain@b2b0fe777ed725717b1848cad141138d6d1bb430
+        uses: cgraf78/actions/.github/actions/rust-toolchain@bf2c11dc3f2e3e1a2e77bb2be6a538c4f06830a3
         with:
           toolchain: ${{ inputs.rust-toolchain }}
           components: clippy, rustfmt
@@ -254,7 +254,7 @@ jobs:
       - name: Install package smoke musl linker
         if: inputs.package-smoke-command != '' && inputs.package-smoke-musl-target != '' && inputs.package-smoke-install-musl-tools
         timeout-minutes: 10
-        uses: cgraf78/actions/.github/actions/musl-build-prereqs@b2b0fe777ed725717b1848cad141138d6d1bb430
+        uses: cgraf78/actions/.github/actions/musl-build-prereqs@bf2c11dc3f2e3e1a2e77bb2be6a538c4f06830a3
 
       - name: Prepare package smoke
         if: inputs.package-smoke-command != '' && inputs.package-smoke-setup-command != ''
@@ -309,7 +309,7 @@ jobs:
       - name: Install minimum supported Rust
         if: inputs.msrv-toolchain != '' && inputs.msrv-command != ''
         timeout-minutes: 10
-        uses: cgraf78/actions/.github/actions/rust-toolchain@b2b0fe777ed725717b1848cad141138d6d1bb430
+        uses: cgraf78/actions/.github/actions/rust-toolchain@bf2c11dc3f2e3e1a2e77bb2be6a538c4f06830a3
         with:
           toolchain: ${{ inputs.msrv-toolchain }}
 
@@ -349,7 +349,7 @@ jobs:
 
       - name: Install Rust
         timeout-minutes: 10
-        uses: cgraf78/actions/.github/actions/rust-toolchain@b2b0fe777ed725717b1848cad141138d6d1bb430
+        uses: cgraf78/actions/.github/actions/rust-toolchain@bf2c11dc3f2e3e1a2e77bb2be6a538c4f06830a3
         with:
           toolchain: ${{ inputs.rust-toolchain }}
 
@@ -451,13 +451,13 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust
-        uses: cgraf78/actions/.github/actions/rust-toolchain@b2b0fe777ed725717b1848cad141138d6d1bb430
+        uses: cgraf78/actions/.github/actions/rust-toolchain@bf2c11dc3f2e3e1a2e77bb2be6a538c4f06830a3
         with:
           toolchain: ${{ inputs.rust-toolchain }}
           targets: aarch64-linux-android
 
       - name: Configure Android NDK toolchain
-        uses: cgraf78/actions/.github/actions/android-rust-toolchain@b2b0fe777ed725717b1848cad141138d6d1bb430
+        uses: cgraf78/actions/.github/actions/android-rust-toolchain@bf2c11dc3f2e3e1a2e77bb2be6a538c4f06830a3
 
       - name: Build and smoke Android package
         shell: bash

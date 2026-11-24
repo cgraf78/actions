@@ -7,6 +7,7 @@ program	.github/actions/download-release-asset/run.sh
 program	.github/actions/infra-retry/retry.sh
 program	.github/actions/musl-build-prereqs/install.sh
 program	.github/actions/package-manager/lib.sh
+program	.github/actions/package-manager/run.sh
 program	.github/actions/rust-ci-prereqs/install.sh
 program	.github/actions/rust-toolchain/bootstrap.sh
 program	.github/actions/shell-ci-prereqs/checkrun.sh

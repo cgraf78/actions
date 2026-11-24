@@ -178,6 +178,8 @@ done
 check_deadline python late-success 124 || deadline_failures=1
 [[ $deadline_failures -eq 0 ]]
 
+python3 "$root/test/package-step-test.py" "$root" "$tmp"
+
 sleep() { :; }
 
 # Log invocations so retry-path behavior (including dpkg recovery) can be

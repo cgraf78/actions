@@ -7,6 +7,8 @@ PKG_NETWORK_TIMEOUT=${PKG_NETWORK_TIMEOUT:-30}
 PKG_COMMAND_TIMEOUT=${PKG_COMMAND_TIMEOUT:-120}
 PKG_COMMAND_KILL_AFTER=${PKG_COMMAND_KILL_AFTER:-5}
 PKG_RETRIES=${PKG_RETRIES:-3}
+_PKG_DEADLINE_PREFIX=package-deadline.
+_PKG_DEADLINE_ACTIVE=active
 
 # Provider-owned stall token. This POSIX library cannot locate the shared
 # marker file, so the literal is defined once here; keep it identical to
@@ -118,6 +120,10 @@ pacman_install() {
   retry_pkg pacman -Syu $PACMAN_SYNC_OPTS $(pacman_missing "$@")
 }
 
+_pkg_can_start_session() {
+  command -v setsid >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1
+}
+
 _pkg_session() {
   if command -v setsid >/dev/null 2>&1; then
     exec setsid "$@"
@@ -169,8 +175,19 @@ _pkg_timer() {
     { ln "$pkg_dir/timeout" "$pkg_dir/result" 2>/dev/null || [ -f "$pkg_dir/result" ]; }
 }
 
+# The optional file belongs to the step launcher and travels through nested
+# installer subshells. Direct callers of the sourced library need no launcher.
+_pkg_read_cancellation() {
+  [ -n "${_PKG_STEP_CANCEL_FILE:-}" ] && [ -f "$_PKG_STEP_CANCEL_FILE" ] || return 1
+  IFS= read -r pkg_cancel_status <"$_PKG_STEP_CANCEL_FILE" || return 1
+  case "$pkg_cancel_status" in
+    129 | 130 | 143) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 _pkg_bounded() (
-  if ! command -v setsid >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
+  if ! _pkg_can_start_session; then
     echo 'bounded package command requires setsid or python3' >&2
     exit 127
   fi
@@ -199,8 +216,18 @@ _pkg_bounded() (
   trap 'pkg_status=${pkg_status:-129}' HUP
   trap 'pkg_status=${pkg_status:-130}' INT
   trap 'pkg_status=${pkg_status:-143}' TERM
-  pkg_dir=$(mktemp -d "${TMPDIR:-/tmp}/package-deadline.XXXXXX") || exit 125
+  pkg_parent=${TMPDIR:-/tmp}
+  if [ -n "${_PKG_STEP_CANCEL_FILE:-}" ]; then
+    pkg_parent=${_PKG_STEP_CANCEL_FILE%/*}
+  fi
+  pkg_dir=$(mktemp -d "$pkg_parent/${_PKG_DEADLINE_PREFIX}XXXXXX") || exit 125
   [ -z "$pkg_status" ] || exit "$pkg_status"
+  # The directory alone is not proof that mktemp returned. Publish ownership
+  # before checking the request, and check the request before starting a group.
+  if [ -n "${_PKG_STEP_CANCEL_FILE:-}" ]; then
+    : >"$pkg_dir/$_PKG_DEADLINE_ACTIVE" || exit 125
+  fi
+  if _pkg_read_cancellation; then exit "$pkg_cancel_status"; fi
 
   # setsid stays in the launcher's PID when the caller has disabled job
   # control. Keep that process in the group through teardown, even when
@@ -233,6 +260,10 @@ _pkg_bounded() (
   pkg_timer=$!
 
   while [ -z "$pkg_status" ]; do
+    if _pkg_read_cancellation; then
+      pkg_status=$pkg_cancel_status
+      break
+    fi
     if ! kill -0 "$pkg_worker" 2>/dev/null; then
       # A failed launcher is a normal error, even if the timer also fired.
       pkg_status=0
@@ -290,17 +321,18 @@ apt_get_update_command() {
 }
 
 retry_pkg() {
+  if _pkg_read_cancellation; then return "$pkg_cancel_status"; fi
   if apt_get_update_command "$@"; then
     configure_ubuntu_archive_mirror
   fi
   _attempt=1
   while :; do
+    if _pkg_read_cancellation; then return "$pkg_cancel_status"; fi
     _pkg_deadline=
-    if bounded "$@"; then
-      return 0
-    else
-      _rc=$?
-    fi
+    _rc=0
+    bounded "$@" || _rc=$?
+    if _pkg_read_cancellation; then return "$pkg_cancel_status"; fi
+    [ "$_rc" -ne 0 ] || return 0
     if [ "$_attempt" -ge "$PKG_RETRIES" ]; then
       # Only a deadline observed by this supervisor opts the workflow into
       # an infrastructure rerun.
@@ -330,6 +362,7 @@ retry_pkg() {
     _delay=$((_attempt * 5))
     echo "package command failed (attempt $_attempt/$PKG_RETRIES, exit $_rc); retrying in ${_delay}s..." >&2
     sleep "$_delay"
+    if _pkg_read_cancellation; then return "$pkg_cancel_status"; fi
     # A bounded-timeout kill can interrupt dpkg mid-unpack. Without recovery
     # the next install attempt then fails with exit 100 ("dpkg was
     # interrupted") even though the package set is fine, turning a transient
