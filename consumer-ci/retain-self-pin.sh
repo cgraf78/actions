@@ -36,11 +36,9 @@ if [[ ! "$actions_sha" =~ ^[0-9a-f]{40}$ ]]; then
     "$actions_sha" >&2
   exit 1
 fi
-if [[ -n $(git -C "$root" status --porcelain --untracked-files=normal) ]]; then
-  printf '%s\n' \
-    'retain-self-pin: provider checkout is dirty; commit or discard changes before retaining a self-pin' >&2
-  exit 1
-fi
+# shellcheck source=provider-status.sh
+. "$root/consumer-ci/provider-status.sh"
+require_clean_provider "$root" retain-self-pin
 if ! git -C "$root" cat-file -e "$actions_sha^{commit}" 2>/dev/null; then
   printf 'retain-self-pin: provider lock commit is not available locally: %s\n' \
     "$actions_sha" >&2

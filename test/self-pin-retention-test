@@ -25,6 +25,8 @@ make_provider() {
     "$work/consumer-ci/verify-self-pin.sh"
   cp "$root/consumer-ci/retain-self-pin.sh" \
     "$work/consumer-ci/retain-self-pin.sh"
+  cp "$root/consumer-ci/provider-status.sh" \
+    "$work/consumer-ci/provider-status.sh"
   cp "$root/consumer-ci/vendor-scripts.sh" \
     "$work/consumer-ci/vendor-scripts.sh"
   cp -R "$root/release-scripts" "$work/release-scripts"
@@ -34,6 +36,7 @@ make_provider() {
   # Self-sync needs the same capability layout rules as the consumer verifier.
   mkdir -p "$work/.github/actions/verify-consumer-sync"
   cp "$root/.github/actions/verify-consumer-sync/capability-layouts.sh" \
+    "$root/.github/actions/verify-consumer-sync/tracked-paths.sh" \
     "$work/.github/actions/verify-consumer-sync/"
   cat >"$work/.github/actions/example/action.yml" <<'EOF'
 name: example

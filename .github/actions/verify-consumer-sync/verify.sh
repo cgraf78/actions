@@ -9,10 +9,32 @@ set -euo pipefail
 
 repo_root=${GITHUB_WORKSPACE:-$PWD}
 repo_root=$(git -C "$repo_root" rev-parse --show-toplevel)
+export GITHUB_ACTION_PATH
+GITHUB_ACTION_PATH=$(CDPATH='' cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+
+# shellcheck source=capability-layouts.sh
+. "$GITHUB_ACTION_PATH/capability-layouts.sh"
+# shellcheck source=tracked-paths.sh
+. "$GITHUB_ACTION_PATH/tracked-paths.sh"
+
 lock_file=.github/cgraf78-actions.lock
 reference_regex="uses:[[:space:]]*(\"cgraf78/actions/[^@\"]+@([^\"]+)\"|'cgraf78/actions/[^@']+@([^']+)'|cgraf78/actions/[^@[:space:]]+@([^][[:space:],}]+))"
 
-if ! git -C "$repo_root" ls-files --error-unmatch "$lock_file" >/dev/null 2>&1; then
+release_config=scripts/release.conf
+release_manifest=scripts/.release-scripts.manifest
+checkout_config=scripts/checkout-installer.conf
+shdeps_hooks=.config/shdeps/hooks.d
+harness_layouts=$(capability_harness_layouts)
+markers=("$lock_file" "$release_config" "$release_manifest" "$checkout_config")
+for tool in tmux wezterm; do
+  markers+=("$shdeps_hooks/$tool.sh" "$shdeps_hooks/$tool-build.lock")
+done
+while IFS= read -r harness_dir; do
+  markers+=("$harness_dir/capability-harness.conf" "$harness_dir/.capability-harness.manifest")
+done <<<"$harness_layouts"
+tracked_paths=$(consumer_index_paths "$repo_root" "${markers[@]}")
+
+if ! consumer_tracks "$tracked_paths" "$lock_file"; then
   printf 'verify-consumer-sync: lock file is not tracked: %s\n' "$lock_file" >&2
   exit 1
 fi
@@ -116,20 +138,18 @@ fi
 printf 'verify-consumer-sync: %d reference(s) match %s\n' \
   "$checked" "$actions_sha"
 
-export GITHUB_ACTION_PATH
-GITHUB_ACTION_PATH=$(CDPATH='' cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$repo_root"
 # The Shdeps hook and its generated lock travel together. Verify all platform
 # hashes here, including architectures that the current job does not run.
-shdeps_hooks=.config/shdeps/hooks.d
 for tool in tmux wezterm; do
   hook="$shdeps_hooks/$tool.sh"
   build_lock="$shdeps_hooks/$tool-build.lock"
-  if git -C "$repo_root" ls-files --error-unmatch -- "$hook" >/dev/null 2>&1 ||
-    git -C "$repo_root" ls-files --error-unmatch -- "$build_lock" >/dev/null 2>&1; then
+  if consumer_tracks "$tracked_paths" "$hook" ||
+    consumer_tracks "$tracked_paths" "$build_lock"; then
     if [[ ! -f "$hook" || -L "$hook" || -L .config || -L .config/shdeps || -L "$shdeps_hooks" ||
       ! -f "$build_lock" || -L "$build_lock" || -x "$build_lock" ]] ||
-      ! git -C "$repo_root" ls-files --error-unmatch -- "$hook" "$build_lock" >/dev/null 2>&1 ||
+      ! consumer_tracks "$tracked_paths" "$hook" ||
+      ! consumer_tracks "$tracked_paths" "$build_lock" ||
       ! cmp -s "$GITHUB_ACTION_PATH/../shell-ci-prereqs/$tool-build.lock" "$build_lock"; then
       printf 'verify-consumer-sync: Shdeps %s lock differs from the Actions pin. Run consumer-ci/sync.sh.\n' "$tool" >&2
       exit 1
@@ -143,12 +163,10 @@ done
 # silently placing the remaining vendored bytes outside future drift checks.
 release_config_tracked=false
 release_manifest_tracked=false
-if git -C "$repo_root" ls-files --error-unmatch \
-  scripts/release.conf >/dev/null 2>&1; then
+if consumer_tracks "$tracked_paths" "$release_config"; then
   release_config_tracked=true
 fi
-if git -C "$repo_root" ls-files --error-unmatch \
-  scripts/.release-scripts.manifest >/dev/null 2>&1; then
+if consumer_tracks "$tracked_paths" "$release_manifest"; then
   release_manifest_tracked=true
 fi
 if [[ "$release_config_tracked" != "$release_manifest_tracked" ]]; then
@@ -168,18 +186,16 @@ fi
 # Dotfiles repositories vendor the shared capability test harness from the
 # same locked commit. As with release scripts, the marker config and generated
 # manifest must be tracked together so neither can be dropped alone.
-# shellcheck source=capability-layouts.sh
-. "$GITHUB_ACTION_PATH/capability-layouts.sh"
 harness_verified=false
 while IFS= read -r harness_dir; do
   harness_config="$harness_dir/capability-harness.conf"
   harness_manifest="$harness_dir/.capability-harness.manifest"
   harness_config_tracked=false
   harness_manifest_tracked=false
-  if git -C "$repo_root" ls-files --error-unmatch -- "$harness_config" >/dev/null 2>&1; then
+  if consumer_tracks "$tracked_paths" "$harness_config"; then
     harness_config_tracked=true
   fi
-  if git -C "$repo_root" ls-files --error-unmatch -- "$harness_manifest" >/dev/null 2>&1; then
+  if consumer_tracks "$tracked_paths" "$harness_manifest"; then
     harness_manifest_tracked=true
   fi
   if [[ "$harness_config_tracked" != "$harness_manifest_tracked" ]]; then
@@ -197,7 +213,7 @@ while IFS= read -r harness_dir; do
     "$actions_root/capability-harness" "$harness_dir" .capability-harness.manifest \
     verify-capability-harness 'capability-harness scripts'
   harness_verified=true
-done < <(capability_harness_layouts)
+done <<<"$harness_layouts"
 if [[ "$harness_verified" == false ]]; then
   printf 'verify-consumer-sync: no tracked capability harness config\n'
 fi
@@ -205,15 +221,9 @@ fi
 # Source-distributed consumers use the same lock for their generated checkout
 # bootstrap. Presence of the tracked config is the opt-in marker; the renderer
 # owns enabled/disabled policy and the exact committed bytes.
-checkout_config=scripts/checkout-installer.conf
-checkout_config_tracked=false
-if git -C "$repo_root" ls-files --error-unmatch \
-  "$checkout_config" >/dev/null 2>&1; then
-  checkout_config_tracked=true
-fi
 checkout_generated_header='# Generated by cgraf78/actions checkout-installer. Do not edit.'
 checkout_bash_generated_header='# Generated by cgraf78/actions checkout Bash resolver. Do not edit.'
-if [[ "$checkout_config_tracked" == true ]]; then
+if consumer_tracks "$tracked_paths" "$checkout_config"; then
   actions_root=$(cd "$GITHUB_ACTION_PATH/../../.." && pwd)
   "$actions_root/checkout-installer/render.sh" --check "$repo_root"
 elif [[ -f "$repo_root/install.sh" && ! -L "$repo_root/install.sh" &&
