@@ -77,3 +77,55 @@ exec "$ACTIONS_TEST_REAL_MKDIR" "$@"
 EOF
   chmod 0755 "$bin/mkdir" "$bin/gnumkdir"
 )
+
+# Interrupt the installer immediately after the real filesystem operation,
+# before its shell can act on the command's status. The PID exported by the
+# launcher stays valid even if the installer isolates mkdir in a subshell.
+actions_fixture_signal_mkdir() (
+  mkdir -p "$1" || exit
+  cat >"$1/mkdir" <<'EOF'
+#!/bin/sh
+for last do :; done
+if [ "$last" = "$ACTIONS_TEST_DIRECTORY" ] && [ "${ACTIONS_TEST_CONTENDER:-}" = yes ]; then
+  "$ACTIONS_TEST_REAL_MKDIR" "$last" || exit
+fi
+status=0
+"$ACTIONS_TEST_REAL_MKDIR" "$@" || status=$?
+if [ "$last" = "$ACTIONS_TEST_DIRECTORY" ]; then
+  printf '%s\n' "$status" >"$ACTIONS_TEST_MKDIR_LOG" || exit
+  kill -s "$ACTIONS_TEST_SIGNAL" "$ACTIONS_TEST_INSTALLER_PID" || exit
+fi
+exit "$status"
+EOF
+  chmod 0755 "$1/mkdir" || exit
+  ln -s mkdir "$1/gnumkdir"
+)
+
+# Assert both the injection point and the exit status. In the contender case
+# the competing mkdir wins just before our command gets EEXIST.
+actions_fixture_cancel_mkdir() (
+  bin=$1
+  ACTIONS_TEST_DIRECTORY=$2
+  ACTIONS_TEST_SIGNAL=$3
+  expected=$4
+  ACTIONS_TEST_CONTENDER=$5
+  shift 5
+  ACTIONS_TEST_REAL_MKDIR=$(command -v gnumkdir || command -v mkdir) || exit
+  ACTIONS_TEST_MKDIR_LOG=$bin/status
+  export ACTIONS_TEST_DIRECTORY ACTIONS_TEST_SIGNAL ACTIONS_TEST_CONTENDER
+  export ACTIONS_TEST_REAL_MKDIR ACTIONS_TEST_MKDIR_LOG
+  rm -f "$ACTIONS_TEST_MKDIR_LOG" || exit
+  status=0
+  PATH="$bin:$PATH" sh -c 'ACTIONS_TEST_INSTALLER_PID=$$; export ACTIONS_TEST_INSTALLER_PID; exec "$@"' \
+    sh "$@" >/dev/null || status=$?
+  mkdir_status=$(cat "$ACTIONS_TEST_MKDIR_LOG") || exit
+  [ "$status" = "$expected" ] || {
+    printf '%s at %s returned %s (expected %s)\n' "$ACTIONS_TEST_SIGNAL" "$ACTIONS_TEST_DIRECTORY" "$status" "$expected" >&2
+    exit 1
+  }
+  if [ "$ACTIONS_TEST_CONTENDER" = yes ]; then
+    [ "$mkdir_status" -ne 0 ]
+  else
+    [ "$mkdir_status" -eq 0 ]
+  fi
+)

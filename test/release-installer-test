@@ -185,6 +185,38 @@ export PATH
 version1=20260810-120000-1234abcd
 archive1=$(make_archive "$version1" linux-x86_64-musl first)
 
+signal_bin=$tmp/signal-mkdir-bin
+actions_fixture_signal_mkdir "$signal_bin"
+assert_release_mkdir_cancel() {
+  local phase=$1 signal=$2 expected=$3 contender=$4
+  local signal_root=$tmp/cancel-$phase-$signal-$contender signal_control signal_dir
+  signal_control=$signal_root/data/cgraf78/.example-tool-standalone
+  signal_dir=$signal_control
+  [[ $phase == control ]] || signal_dir=$signal_control/lock
+  mkdir -p "$signal_root/home"
+  HOME="$signal_root/home" XDG_DATA_HOME="$signal_root/data" \
+    actions_fixture_cancel_mkdir "$signal_bin" "$signal_dir" "$signal" "$expected" "$contender" \
+    "$BASH" "$consumer/install.sh" --archive "$archive1" || fail "$phase mkdir cancellation failed"
+  [[ ! -e "$signal_control/current" && ! -L "$signal_control/current" ]] ||
+    fail "$signal at $phase mkdir activated a release"
+  if [[ $contender == yes ]]; then
+    [[ -d "$signal_dir" && ! -L "$signal_dir" && ! -e "$signal_dir/owner" ]] ||
+      fail "$signal at failed $phase mkdir removed or adopted a competing directory"
+    return
+  fi
+  [[ ! -e "$signal_control/lock" && ! -L "$signal_control/lock" ]] ||
+    fail "$signal at $phase mkdir left its lock"
+  HOME="$signal_root/home" XDG_DATA_HOME="$signal_root/data" \
+    "$BASH" "$consumer/install.sh" --archive "$archive1" >/dev/null ||
+    fail "retry after $signal at $phase mkdir failed"
+}
+for phase in control lock; do
+  assert_release_mkdir_cancel "$phase" HUP 129 no
+  assert_release_mkdir_cancel "$phase" INT 130 no
+  assert_release_mkdir_cancel "$phase" TERM 143 no
+  assert_release_mkdir_cancel "$phase" TERM 143 yes
+done
+
 keyed_version=20260810-120001-beef1234
 keyed_commit_prefix=beef12341111
 keyed_impl=$(
