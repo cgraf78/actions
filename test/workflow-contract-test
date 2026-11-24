@@ -61,6 +61,86 @@ check_no_unsupervised_adb() {
   fi
 }
 
+check_mise_refresh_scope() {
+  local refresh
+  refresh=$(yq -r '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").run' \
+    "$root/.github/workflows/mise-lock-refresh.yml")
+  python3 - "$refresh" <<'PY'
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+
+def check_case(label, verify, succeeds, *, lock_file="mise.lock"):
+    with tempfile.TemporaryDirectory() as scratch:
+        root = Path(scratch)
+        repo = root / "repo"
+        repo.mkdir()
+        fake_mise = root / "mise"
+        fake_mise.write_text('#!/bin/sh\nprintf "new lock\\n" >"$MISE_LOCK_FILE"\n')
+        fake_mise.chmod(0o700)
+        env = {
+            "PATH": f"{scratch}:{os.environ['PATH']}",
+            "HOME": scratch,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "RUNNER_TEMP": scratch,
+            "GITHUB_WORKSPACE": str(repo),
+            "GITHUB_OUTPUT": str(root / "outputs"),
+            "MISE_CONFIG_FILE": "mise.toml",
+            "MISE_LOCK_FILE": lock_file,
+            "VERIFY_COMMAND": verify,
+        }
+        (repo / "mise.toml").write_text("[tools]\n")
+        (repo / "mise.lock").write_text("old lock\n")
+        (repo / "other.txt").write_text("keep\n")
+        for args in (
+            ["init", "-q", "--template="],
+            ["add", "--", "."],
+            ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "seed"],
+        ):
+            subprocess.run(["git", "-C", repo, *args], env=env, check=True)
+        if lock_file != "mise.lock":
+            (repo / lock_file).write_text("untracked lock\n")
+        result = subprocess.run(
+            ["bash", "-c", sys.argv[1]], cwd=repo, env=env, capture_output=True, text=True
+        )
+        if (result.returncode == 0) != succeeds:
+            raise SystemExit(f"{label}: unexpected refresh status {result.returncode}: {result.stderr}")
+        patch = root / "mise-lock.patch"
+        if succeeds:
+            changed = subprocess.check_output(
+                ["git", "apply", "--numstat", str(patch)], cwd=repo, env=env, text=True
+            )
+            if changed.splitlines() != ["1\t1\tmise.lock"]:
+                raise SystemExit(f"{label}: unexpected lock patch: {changed!r}")
+        elif patch.exists():
+            raise SystemExit(f"{label}: failed refresh produced a patch")
+        if lock_file != "mise.lock" and (repo / lock_file).read_text() != "untracked lock\n":
+            raise SystemExit(f"{label}: untracked lock was modified")
+
+
+check_case("lock refresh", "", True)
+check_case(
+    "an unrelated change remains in the index",
+    "printf 'index only\\n' > other.txt; git add other.txt; printf 'keep\\n' > other.txt",
+    False,
+)
+check_case("an untracked file", "touch 'untracked fixture'", False)
+check_case(
+    "Git cannot enumerate paths",
+    """git() {
+       if [[ $1 == status || $* == 'diff --name-only -z HEAD' ]]; then return 73; fi
+       command git "$@"
+     }""",
+    False,
+)
+check_case("literal lock preflight", "", False, lock_file="mise[.]lock")
+PY
+}
+
 # Run the workflow's actual retry helper without downloading tools or waiting
 # for backoff. An exhausted retry must stop setup before tests can skip tools.
 check_checkrun_mise_retry() {
@@ -652,9 +732,7 @@ contracts() {
   check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").env.MISE_LOCK_FILE == "${{ inputs.mise_lock_file }}"' mise-lock-refresh.yml
   check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").run | contains("mise lock --global")' mise-lock-refresh.yml
   check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").run | contains("unexpected path changed during Mise lock refresh")' mise-lock-refresh.yml
-  check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").run | contains("git diff --name-only -z HEAD")' mise-lock-refresh.yml
   check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").run | contains("verification changed repository history during Mise lock refresh")' mise-lock-refresh.yml
-  check '.jobs.resolve.steps[] | select(.name == "Refresh and validate lockfile").run | contains("git diff --cached --binary --full-index")' mise-lock-refresh.yml
   check '.jobs.resolve.steps[] | select(.name == "Upload validated lock patch").uses | test("^actions/upload-artifact@[0-9a-f]{40}$")' mise-lock-refresh.yml
   check '.jobs.publish.needs == "resolve"' mise-lock-refresh.yml
   check '.jobs.publish.if == "needs.resolve.outputs.changed == '\''true'\''"' mise-lock-refresh.yml
@@ -1254,6 +1332,7 @@ contracts
 check_termux_cores
 check_android_sdk_packages
 check_no_literal_infra_markers
+check_mise_refresh_scope
 check_checkrun_mise_retry
 check_platform_matrices
 check_linux_runner_routing

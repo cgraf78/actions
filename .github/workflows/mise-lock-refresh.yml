@@ -93,8 +93,8 @@ jobs:
                   raise SystemExit(f"{label} must be a regular nonsymlink file: {value}")
           PY
 
-          git ls-files --error-unmatch -- "$MISE_CONFIG_FILE" >/dev/null
-          git ls-files --error-unmatch -- "$MISE_LOCK_FILE" >/dev/null
+          git --literal-pathspecs ls-files --error-unmatch -- "$MISE_CONFIG_FILE" >/dev/null
+          git --literal-pathspecs ls-files --error-unmatch -- "$MISE_LOCK_FILE" >/dev/null
           base_sha=$(git rev-parse HEAD)
 
           mise_config_root=$(dirname "$MISE_CONFIG_FILE")
@@ -111,17 +111,20 @@ jobs:
             eval "$VERIFY_COMMAND"
           fi
 
+          # Compare both the index and the worktree. A direct diff against
+          # HEAD can hide a staged change that the worktree then reverses.
+          # Check Git's exit before accepting any of its NUL-delimited output.
+          entries=$(mktemp "$RUNNER_TEMP/mise-paths.XXXXXX")
+          trap 'rm -f -- "$entries"' EXIT
+          git status --porcelain=v1 -z --untracked-files=all --no-renames >"$entries"
           unexpected=false
-          while IFS= read -r -d '' path; do
+          while IFS= read -r -d '' entry; do
+            path=${entry:3}
             if [[ "$path" != "$MISE_LOCK_FILE" ]]; then
-              printf 'unexpected path changed during Mise lock refresh: %s\n' "$path" >&2
+              printf 'unexpected path changed during Mise lock refresh: %q\n' "$path" >&2
               unexpected=true
             fi
-          done < <(git diff --name-only -z HEAD)
-          while IFS= read -r -d '' path; do
-            printf 'unexpected path changed during Mise lock refresh: %s\n' "$path" >&2
-            unexpected=true
-          done < <(git ls-files --others --exclude-standard -z)
+          done <"$entries"
           if [[ "$unexpected" == true ]]; then
             exit 1
           fi
@@ -131,14 +134,18 @@ jobs:
           fi
 
           echo "base_sha=$base_sha" >>"$GITHUB_OUTPUT"
-          if git diff --quiet HEAD -- "$MISE_LOCK_FILE"; then
-            echo "changed=false" >>"$GITHUB_OUTPUT"
-            exit 0
-          fi
+          diff_status=0
+          git --literal-pathspecs diff --quiet "$base_sha" -- "$MISE_LOCK_FILE" || diff_status=$?
+          case "$diff_status" in
+            0) echo "changed=false" >>"$GITHUB_OUTPUT"; exit 0 ;;
+            1) ;;
+            *) exit "$diff_status" ;;
+          esac
 
-          git add -- "$MISE_LOCK_FILE"
+          git --literal-pathspecs add -- "$MISE_LOCK_FILE"
           git diff --cached --check
-          git diff --cached --binary --full-index >"$RUNNER_TEMP/mise-lock.patch"
+          git --literal-pathspecs diff --cached --binary --full-index -- "$MISE_LOCK_FILE" \
+            >"$RUNNER_TEMP/mise-lock.patch"
           echo "changed=true" >>"$GITHUB_OUTPUT"
 
       - name: Upload validated lock patch
