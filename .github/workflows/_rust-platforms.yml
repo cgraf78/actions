@@ -65,7 +65,7 @@ jobs:
         # This action is the shared OS policy used by shell, Rust, and future
         # language-specific CI workflows. Rust owns only the language setup and
         # commands below.
-        uses: cgraf78/actions/.github/actions/platform-matrix@b2b0fe777ed725717b1848cad141138d6d1bb430
+        uses: cgraf78/actions/.github/actions/platform-matrix@bf2c11dc3f2e3e1a2e77bb2be6a538c4f06830a3
         with:
           matrix-set: ${{ inputs.matrix-set }}
 
@@ -119,7 +119,7 @@ jobs:
     name: ${{ matrix.shard && format('{0} / {1}', matrix.name, matrix.shard) || matrix.name }}
     steps:
       - name: Install OS prerequisites
-        uses: cgraf78/actions/.github/actions/rust-ci-prereqs@b2b0fe777ed725717b1848cad141138d6d1bb430
+        uses: cgraf78/actions/.github/actions/rust-ci-prereqs@bf2c11dc3f2e3e1a2e77bb2be6a538c4f06830a3
         with:
           matrix-name: ${{ matrix.name }}
 
@@ -128,7 +128,7 @@ jobs:
       # shell-ci instead of making each consumer duplicate an OS matrix.
       - name: Install test prerequisites
         if: inputs.profiles != ''
-        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@b2b0fe777ed725717b1848cad141138d6d1bb430
+        uses: cgraf78/actions/.github/actions/shell-ci-prereqs@bf2c11dc3f2e3e1a2e77bb2be6a538c4f06830a3
         with:
           matrix-name: ${{ matrix.name }}
           profiles: ${{ inputs.profiles }}
@@ -154,7 +154,7 @@ jobs:
         run: git config --global --add safe.directory "$(pwd)"
 
       - name: Install Rust
-        uses: cgraf78/actions/.github/actions/rust-toolchain@b2b0fe777ed725717b1848cad141138d6d1bb430
+        uses: cgraf78/actions/.github/actions/rust-toolchain@bf2c11dc3f2e3e1a2e77bb2be6a538c4f06830a3
         with:
           toolchain: ${{ inputs.rust-toolchain }}
 
