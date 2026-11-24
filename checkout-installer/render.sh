@@ -251,12 +251,14 @@ emit_bash_invocation() {
         printf '%sexec "$BASH" "$checkout_root/$checkout_delegate" "$@"\n' "$indent"
         ;;
       CHECKOUT_BASH_RUN_ROOT_DELEGATE)
+        printf '%schild_launching=true\n' "$indent"
         printf '%s"$BASH" "$checkout_root/$checkout_delegate" "$@" <&0 &\n' "$indent"
         ;;
       CHECKOUT_BASH_EXEC_ROOT_POST)
         printf '%sexec "$BASH" "$checkout_root/$checkout_post_install_delegate" "$@"\n' "$indent"
         ;;
       CHECKOUT_BASH_RUN_DIR_DELEGATE)
+        printf '%schild_launching=true\n' "$indent"
         printf '%s"$BASH" "%s/$checkout_delegate" "$@" <&0 &\n' \
           "$indent" "$managed_root"
         ;;
@@ -278,6 +280,7 @@ emit_bash_invocation() {
     CHECKOUT_BASH_RUN_ROOT_DELEGATE)
       printf '%scheckout_bash_v1_bind "$checkout_root/$checkout_delegate" ||\n' "$indent"
       printf '%s  die "cannot bind checkout runtime: $checkout_root/$checkout_delegate"\n' "$indent"
+      printf '%schild_launching=true\n' "$indent"
       printf '%s"$CHECKOUT_BASH_V1_INTERPRETER" "$CHECKOUT_BASH_V1_RUNTIME" "$@" <&0 &\n' "$indent"
       ;;
     CHECKOUT_BASH_EXEC_ROOT_POST)
@@ -290,6 +293,7 @@ emit_bash_invocation() {
         "$indent" "$managed_root"
       printf '%s  die "cannot bind checkout runtime: %s/$checkout_delegate"\n' \
         "$indent" "$managed_root"
+      printf '%schild_launching=true\n' "$indent"
       printf '%s"$CHECKOUT_BASH_V1_INTERPRETER" "$CHECKOUT_BASH_V1_RUNTIME" "$@" <&0 &\n' "$indent"
       ;;
     CHECKOUT_BASH_EXEC_DIR_POST)
