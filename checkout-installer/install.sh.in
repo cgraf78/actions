@@ -65,6 +65,10 @@
     fi
   }
 
+  # @CHECKOUT_LEGACY_LOCK_BEGIN@
+  # @INSTALLER_EXCLUSIVE_MKDIR@
+
+  # @CHECKOUT_LEGACY_LOCK_END@
   checkout_installer_git=
   select_bootstrap_git() {
     local home_physical directory physical_directory candidate
@@ -1740,7 +1744,7 @@
     die "cannot acquire managed checkout lock: $lock_dir"
   # @CHECKOUT_LOCK_V1_END@
   # @CHECKOUT_LEGACY_LOCK_BEGIN@
-  if ! mkdir "$lock_dir" 2>/dev/null; then
+  if ! installer_exclusive_mkdir "$lock_dir" 2>/dev/null; then
     die "another install may be using the managed checkout lock: $lock_dir; if no install is running, remove that exact empty directory with rmdir and retry"
   fi
   lock_held=1

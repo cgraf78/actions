@@ -32,6 +32,7 @@ esac
 
 source_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 template="$source_dir/install.sh.in"
+exclusive_mkdir_fragment="$source_dir/../installer-common/exclusive-mkdir.sh"
 consumer=$1
 config="$consumer/scripts/release.conf"
 output="$consumer/install.sh"
@@ -119,6 +120,12 @@ tmp=$(mktemp "$consumer/.install.sh.XXXXXX")
 trap 'rm -f "$tmp"' EXIT
 
 while IFS= read -r line || [[ -n "$line" ]]; do
+  if [[ "$line" == '# @INSTALLER_EXCLUSIVE_MKDIR@' ]]; then
+    [[ -f "$exclusive_mkdir_fragment" && ! -L "$exclusive_mkdir_fragment" ]] ||
+      die "exclusive mkdir fragment must be a regular file: $exclusive_mkdir_fragment"
+    cat "$exclusive_mkdir_fragment" >>"$tmp"
+    continue
+  fi
   line=${line//@RELEASE_SLUG@/$RELEASE_SLUG}
   line=${line//@RELEASE_REPO@/$RELEASE_REPO}
   line=${line//@RELEASE_ASSET_NAME@/$RELEASE_ASSET_NAME}
