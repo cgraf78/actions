@@ -37,10 +37,12 @@ if [[ $1 == --self ]]; then
 else
   consumer=$1
 fi
-# Parse quoted scalars through their matching quote, while an unquoted scalar
-# ends at whitespace or a closing flow delimiter. The loop below consumes one
-# match at a time so two step mappings on one line cannot hide a second ref.
-reference_regex="uses:[[:space:]]*(\"cgraf78/actions/[^@\"]+@([^\"]+)\"|'cgraf78/actions/[^@']+@([^']+)'|cgraf78/actions/[^@[:space:]]+@([^][[:space:],}]+))"
+# shellcheck source=../.github/actions/verify-consumer-sync/references.sh
+. "$source_root/.github/actions/verify-consumer-sync/references.sh"
+if ! actions_yq_available; then
+  printf 'consumer-sync: Mike Farah yq v4 is required to read workflow YAML\n' >&2
+  exit 1
+fi
 
 if [[ ! "$actions_sha" =~ ^[0-9a-f]{40}$ ]]; then
   printf 'consumer-sync: actions HEAD is not a full commit SHA: %s\n' \
@@ -168,50 +170,45 @@ fi
 candidate_list=$(mktemp)
 reference_list=$(mktemp)
 build_lock_tmp=''
-trap 'rm -f "$candidate_list" "$reference_list" "$build_lock_tmp"' EXIT
+reference_stages=()
+# shellcheck disable=SC2329  # Invoked on exit.
+cleanup() {
+  rm -f -- "$candidate_list" "$reference_list" "$build_lock_tmp" \
+    ${reference_stages[@]+"${reference_stages[@]}"}
+}
+trap cleanup EXIT
 # GitHub executes workflows only from .github/workflows, while composite
 # actions may live anywhere but must be named action.yml or action.yaml. Scan
 # exactly those tracked definitions: this covers every runtime use without
 # rewriting documentation or unrelated YAML that happens to contain an example.
-git -C "$consumer" ls-files -- \
+git -C "$consumer" ls-files -z -- \
   ':(glob).github/workflows/*.yml' \
   ':(glob).github/workflows/*.yaml' \
   action.yml action.yaml \
   ':(glob)**/action.yml' \
   ':(glob)**/action.yaml' >"$candidate_list"
-while IFS= read -r relative; do
+while IFS= read -r -d '' relative; do
   [[ -n "$relative" ]] || continue
   if [[ ! -f "$consumer/$relative" || -L "$consumer/$relative" ]]; then
     printf 'consumer-sync: workflow/action definition must be a regular file: %s\n' \
       "$relative" >&2
     exit 1
   fi
-  file_has_reference=false
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    consumed=
-    remaining=$line
-    while [[ "$remaining" =~ $reference_regex ]]; do
-      match=${BASH_REMATCH[0]}
-      prefix=${remaining%%"$match"*}
-      after_match=${remaining#*"$match"}
-      context=${consumed}${prefix}
-      # A comma is a delimiter inside a flow mapping, but part of a block-style
-      # unquoted scalar. Refuse the ambiguous block spelling instead of
-      # accepting a matching SHA prefix and leaving hidden suffix text behind.
-      if [[ -n ${BASH_REMATCH[4]} && "$after_match" == ,* &&
-        "$context" != *'{'* ]]; then
-        printf 'consumer-sync: quote an actions ref containing a comma: %s\n' \
-          "$line" >&2
-        exit 1
-      fi
-      file_has_reference=true
-      consumed+="${prefix}${match}"
-      remaining=$after_match
-    done
-  done <"$consumer/$relative"
-  if [[ "$file_has_reference" == true ]]; then
-    printf '%s\n' "$relative" >>"$reference_list"
-  fi
+  file="$consumer/$relative"
+  source_snapshot=$(mktemp)
+  reference_stages+=("$source_snapshot")
+  cp -p "$file" "$source_snapshot"
+  references=$(read_actions_references "$source_snapshot" "$relative")
+  [[ -n "$references" ]] || continue
+  # Expanding a whole-step alias can point to the same unchanged scalar span.
+  references=$(LC_ALL=C sort -t $'\t' -k1,1n -k2,2n <<<"$references" | uniq)
+  # Stage all YAML edits before publishing the new lock. A missing literal
+  # span or parse error must leave every dependency file as it was.
+  reference_tmp=$(mktemp "$file.XXXXXX")
+  reference_stages+=("$reference_tmp")
+  cp -p "$source_snapshot" "$reference_tmp"
+  render_actions_references "$source_snapshot" "$relative" "$actions_sha" "$references" >"$reference_tmp"
+  printf '%s\0%s\0%s\0' "$relative" "$reference_tmp" "$source_snapshot" >>"$reference_list"
 done <"$candidate_list"
 if [[ ! -s "$reference_list" ]]; then
   printf 'consumer-sync: no tracked cgraf78/actions workflow/action references found\n' >&2
@@ -287,50 +284,26 @@ if [[ "$checkout_installer_enabled" == true &&
   exit 1
 fi
 
+# Do not replace a definition edited while the other inputs were being read.
+while IFS= read -r -d '' relative && IFS= read -r -d '' _ &&
+  IFS= read -r -d '' source_snapshot; do
+  file="$consumer/$relative"
+  if [[ ! -f "$file" || -L "$file" ]] || ! cmp -s "$source_snapshot" "$file"; then
+    printf 'consumer-sync: workflow/action changed during preparation: %s\n' "$relative" >&2
+    exit 1
+  fi
+done <"$reference_list"
+
 mkdir -p "$consumer/.github"
 lock_tmp=$(mktemp "$consumer/.github/cgraf78-actions.lock.XXXXXX")
 printf '%s\n' "$actions_sha" >"$lock_tmp"
 chmod 0644 "$lock_tmp"
 mv "$lock_tmp" "$consumer/.github/cgraf78-actions.lock"
 
-rewrite_reference_file() {
-  local file=$1 line match old_ref prefix remaining rewritten suffix tmp
-
-  if [[ ! -f "$file" || -L "$file" ]]; then
-    printf 'consumer-sync: workflow reference file must be a regular file: %s\n' \
-      "$file" >&2
-    return 1
-  fi
-
-  # Rewrite through a same-directory temporary file. `cp -p` preserves the
-  # mode on both GNU and BSD userlands; `sed -i` has incompatible Linux/macOS
-  # syntax and would make this maintainer command less portable.
-  tmp=$(mktemp "$file.XXXXXX")
-  cp -p "$file" "$tmp"
-  : >"$tmp"
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    remaining=$line
-    rewritten=
-    while [[ "$remaining" =~ $reference_regex ]]; do
-      match=${BASH_REMATCH[0]}
-      old_ref=${BASH_REMATCH[2]}
-      [[ -n "$old_ref" ]] || old_ref=${BASH_REMATCH[3]}
-      [[ -n "$old_ref" ]] || old_ref=${BASH_REMATCH[4]}
-      prefix=${remaining%%"$match"*}
-      suffix=${match#*@"$old_ref"}
-      rewritten+="${prefix}${match%%@*}@${actions_sha}${suffix}"
-      remaining=${remaining#*"$match"}
-    done
-    line=${rewritten}${remaining}
-    printf '%s\n' "$line" >>"$tmp"
-  done <"$file"
-  mv "$tmp" "$file"
-}
-
 updated=0
-while IFS= read -r relative; do
-  [[ -n "$relative" ]] || continue
-  rewrite_reference_file "$consumer/$relative"
+while IFS= read -r -d '' relative && IFS= read -r -d '' reference_tmp &&
+  IFS= read -r -d '' _; do
+  mv "$reference_tmp" "$consumer/$relative"
   printf 'consumer-sync: %s\n' "$relative"
   updated=$((updated + 1))
 done <"$reference_list"

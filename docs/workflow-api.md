@@ -36,6 +36,10 @@ From a clean `actions` checkout at the reviewed commit, run:
 consumer-ci/sync.sh <consumer-repository>
 ```
 
+The maintainer command uses Mike Farah's `yq` v4 to read actual workflow and
+composite-action mappings. The CI action uses the runner's compatible `yq` or
+installs a checksum-pinned copy in its own temporary directory.
+
 Consumers run the zero-input `verify-consumer-sync` action after checking out
 their repository in normal CI. It verifies its own ref and every tracked
 `cgraf78/actions` use in a workflow or composite action. When the repository
