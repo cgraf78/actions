@@ -390,7 +390,7 @@ before_lock=$(cksum <"$consumer/.github/cgraf78-actions.lock")
 out=$(env PATH="$edit_bin:$PATH" ACTIONS_TEST_REAL_YQ="$real_yq" \
   ACTIONS_TEST_EDIT_WORKFLOW="$edited_workflow" "$sync" "$consumer" 2>&1) &&
   fail "sync accepted an intervening workflow edit"
-[[ "$out" == *'workflow/action changed during preparation: .github/workflows/test.yml'* ]] ||
+[[ "$out" == *'destination changed during preparation: .github/workflows/test.yml'* ]] ||
   fail "intervening edit did not explain the preflight failure: $out"
 cmp -s "$edited_workflow" "$tmp/expected-workflow" ||
   fail "sync overwrote a maintainer workflow edit"
@@ -928,6 +928,94 @@ sed 's/RELEASE_STANDALONE_INSTALLER=false/RELEASE_STANDALONE_INSTALLER=true/' \
 mv "$transition_consumer/scripts/release.conf.tmp" \
   "$transition_consumer/scripts/release.conf"
 git -C "$transition_consumer" add .
+
+# A later renderer can reject a policy after an earlier renderer retires the
+# old installer. The live sync inputs and outputs must survive that failure.
+bad_transition="$tmp/invalid-installer-transition"
+cp -R "$transition_consumer" "$bad_transition"
+sed '/^RELEASE_SLUG=/d' "$transition_consumer/scripts/release.conf" \
+  >"$bad_transition/scripts/release.conf"
+printf '%s\n' '0000000000000000000000000000000000000000' \
+  >"$bad_transition/.github/cgraf78-actions.lock"
+sed "s/@$want/@main/" "$transition_consumer/.github/workflows/test.yml" \
+  >"$bad_transition/.github/workflows/test.yml"
+printf '%s\n' retired.sh >>"$bad_transition/scripts/.release-scripts.manifest"
+printf '%s\n' '# installed by the previous provider' >"$bad_transition/scripts/retired.sh"
+git -C "$bad_transition" add .
+if out=$("$sync" "$bad_transition" 2>&1); then
+  fail "sync accepted an invalid replacement installer policy"
+fi
+[[ "$out" == *'RELEASE_SLUG must be a safe non-empty name'* ]] ||
+  fail "replacement installer failure had an unexpected cause: $out"
+new_paths=$(git -C "$bad_transition" ls-files --others --exclude-standard)
+[[ -z "$new_paths" ]] ||
+  fail "failed replacement installer created paths: $new_paths"
+git -C "$bad_transition" diff --exit-code --quiet ||
+  fail "failed replacement installer changed generated worktree bytes"
+
+# An ordinary last-step publication error must restore the original workflow,
+# installer and vendored files as well as leave the old lock intact.
+cp "$transition_consumer/scripts/release.conf" "$bad_transition/scripts/release.conf"
+git -C "$bad_transition" add .
+publication_bin="$tmp/consumer-publication-bin"
+mkdir "$publication_bin"
+real_mv=$(command -v mv)
+cat >"$publication_bin/mv" <<'EOF'
+#!/usr/bin/env bash
+for destination; do :; done
+if [[ "$destination" == "$ACTIONS_TEST_PUBLICATION_TARGET" ]]; then
+  printf 'fixture: final consumer lock rename failed\n' >&2
+  exit 73
+fi
+exec "$ACTIONS_TEST_REAL_MV" "$@"
+EOF
+chmod 0755 "$publication_bin/mv"
+if out=$(env PATH="$publication_bin:$PATH" ACTIONS_TEST_REAL_MV="$real_mv" \
+  ACTIONS_TEST_PUBLICATION_TARGET="$bad_transition/.github/cgraf78-actions.lock" \
+  "$sync" "$bad_transition" 2>&1); then
+  fail "sync accepted a failed final lock publication"
+fi
+[[ "$out" == *'fixture: final consumer lock rename failed'* ]] ||
+  fail "late publication failure was not reached: $out"
+new_paths=$(git -C "$bad_transition" ls-files --others --exclude-standard)
+[[ -z "$new_paths" ]] ||
+  fail "failed publication left temporary or generated paths: $new_paths"$'\n'"$out"
+git -C "$bad_transition" diff --exit-code --quiet ||
+  fail "failed publication did not restore original files: $out"
+
+ownership_lock="$bad_transition/.git/cgraf78-consumer-sync.lock"
+ln -s 'another-sync-owner' "$ownership_lock"
+if out=$("$sync" "$bad_transition" 2>&1); then
+  fail "sync did not yield to a concurrent worktree owner"
+fi
+[[ "$out" == *'another sync owns'* && "$(readlink "$ownership_lock")" == another-sync-owner ]] ||
+  fail "sync did not preserve the other invocation's lock: $out"
+rm "$ownership_lock"
+git -C "$bad_transition" diff --exit-code --quiet ||
+  fail "refused concurrent synchronization changed the worktree"
+
+foreign_dir="$tmp/sync-foreign-directory"
+mkdir "$foreign_dir"
+ln -s "$foreign_dir" "$ownership_lock"
+if out=$("$sync" "$bad_transition" 2>&1); then
+  fail "sync accepted a redirecting ownership lock"
+fi
+[[ "$out" == *'another sync owns'* && -z "$(ls -A "$foreign_dir")" ]] ||
+  fail "rejected ownership lock modified its symlink target: $out"
+rm "$ownership_lock"
+
+rm "$bad_transition/scripts/release-lib.sh"
+ln -s "$foreign_dir" "$bad_transition/scripts/release-lib.sh"
+git -C "$bad_transition" add .
+if out=$("$sync" "$bad_transition" 2>&1); then
+  fail "sync accepted a redirecting vendored file"
+fi
+[[ "$out" == *'refusing to replace a symlink to a directory'* &&
+  -z "$(ls -A "$foreign_dir")" ]] ||
+  fail "rejected vendored file modified its symlink target: $out"
+git -C "$bad_transition" diff --exit-code --quiet ||
+  fail "rejected vendored file changed the worktree"
+
 "$sync" "$transition_consumer" >/dev/null ||
   fail "sync could not migrate a checkout installer to a release installer"
 grep -Fqx '# Generated by cgraf78/actions release-installer. Do not edit.' \

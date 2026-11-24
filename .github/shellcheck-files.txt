@@ -26,6 +26,7 @@ program	.github/actions/termux-adb/bin/adb
 program	.github/actions/shared/infra-stall-markers.sh
 program	.github/actions/shared/verify-vendored-scripts.sh
 program	consumer-ci/sync.sh
+program	consumer-ci/staged-files.sh
 program	consumer-ci/provider-status.sh
 program	consumer-ci/retain-self-pin.sh
 program	consumer-ci/verify-self-pin.sh

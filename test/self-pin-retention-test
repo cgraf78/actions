@@ -21,6 +21,7 @@ make_provider() {
   mkdir -p "$work/.github/actions/example" "$work/.github/workflows" \
     "$work/consumer-ci"
   cp "$root/consumer-ci/sync.sh" "$work/consumer-ci/sync.sh"
+  cp "$root/consumer-ci/staged-files.sh" "$work/consumer-ci/staged-files.sh"
   cp "$root/consumer-ci/verify-self-pin.sh" \
     "$work/consumer-ci/verify-self-pin.sh"
   cp "$root/consumer-ci/retain-self-pin.sh" \
